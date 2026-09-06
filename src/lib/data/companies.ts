@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db } from "@/lib/db";
+import { contains, db } from "@/lib/db";
 import { tagsForEntities } from "@/lib/actions/tags";
 
 const PAGE_SIZE = 50;
@@ -14,10 +14,10 @@ export async function listCompanies(
 
   if (filters.q) {
     where.OR = [
-      { name: { contains: filters.q } },
-      { domain: { contains: filters.q } },
-      { industry: { contains: filters.q } },
-      { location: { contains: filters.q } },
+      { name: contains(filters.q) },
+      { domain: contains(filters.q) },
+      { industry: contains(filters.q) },
+      { location: contains(filters.q) },
     ];
   }
   if (filters.type) where.type = filters.type;

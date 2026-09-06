@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db } from "@/lib/db";
+import { contains, db } from "@/lib/db";
 import { getProvider, isModelBacked } from "@/lib/ai/provider";
 import { SYSTEM_PROMPTS } from "@/lib/ai/prompts";
 import { parseJson } from "@/lib/json";
@@ -64,7 +64,7 @@ export async function classifyText(
   // "create a duplicate".
   for (const c of raw.companies ?? []) {
     const existing = await db.company.findFirst({
-      where: { workspaceId: { in: workspaceIds }, name: { contains: c.name } },
+      where: { workspaceId: { in: workspaceIds }, name: contains(c.name) },
       select: { id: true, name: true },
     });
     proposals.push({
@@ -80,12 +80,12 @@ export async function classifyText(
 
   for (const c of raw.contacts ?? []) {
     const existing = await db.contact.findFirst({
-      where: { workspaceId: { in: workspaceIds }, fullName: { contains: c.name } },
+      where: { workspaceId: { in: workspaceIds }, fullName: contains(c.name) },
       select: { id: true, fullName: true, company: { select: { name: true } } },
     });
     const company = c.company
       ? await db.company.findFirst({
-          where: { workspaceId: { in: workspaceIds }, name: { contains: c.company } },
+          where: { workspaceId: { in: workspaceIds }, name: contains(c.company) },
           select: { id: true, name: true },
         })
       : null;

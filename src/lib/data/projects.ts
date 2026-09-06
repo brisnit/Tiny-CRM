@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db } from "@/lib/db";
+import { contains, db } from "@/lib/db";
 import { scoreProjectHealth } from "@/lib/scoring";
 import { tagsForEntities } from "@/lib/actions/tags";
 
@@ -16,9 +16,9 @@ export async function listProjects(
 
   if (filters.q) {
     where.OR = [
-      { name: { contains: filters.q } },
-      { description: { contains: filters.q } },
-      { company: { name: { contains: filters.q } } },
+      { name: contains(filters.q) },
+      { description: contains(filters.q) },
+      { company: { name: contains(filters.q) } },
     ];
   }
   if (filters.statusId) where.statusId = filters.statusId;

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db } from "@/lib/db";
+import { contains, db } from "@/lib/db";
 import type { EntityType } from "@/lib/enums";
 
 export type SearchHit = {
@@ -34,7 +34,7 @@ export async function searchEverything(
   if (q.length < 1 || workspaceIds.length === 0) return [];
 
   const scope = { workspaceId: { in: workspaceIds } };
-  const like = { contains: q };
+  const like = contains(q);
 
   const [contacts, companies, deals, projects, opportunities, tasks, notes] = await Promise.all([
     db.contact.findMany({

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db } from "@/lib/db";
+import { contains, db } from "@/lib/db";
 import { tagsForEntities } from "@/lib/actions/tags";
 
 /**
@@ -154,9 +154,9 @@ export async function listOpportunities(
 
   if (filters.q) {
     where.OR = [
-      { name: { contains: filters.q } },
-      { solicitationNumber: { contains: filters.q } },
-      { requirements: { contains: filters.q } },
+      { name: contains(filters.q) },
+      { solicitationNumber: contains(filters.q) },
+      { requirements: contains(filters.q) },
     ];
   }
   if (filters.type) where.type = filters.type;

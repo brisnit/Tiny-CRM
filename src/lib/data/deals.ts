@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db } from "@/lib/db";
+import { contains, db } from "@/lib/db";
 import { scoreDeal } from "@/lib/scoring";
 import { tagsForEntities } from "@/lib/actions/tags";
 
@@ -43,7 +43,7 @@ export async function getPipelineBoard(
     archivedAt: null,
     pipelineId: active.id,
   };
-  if (options.q) where.name = { contains: options.q };
+  if (options.q) where.name = contains(options.q);
   if (options.projectId) where.projectId = options.projectId;
 
   const deals = await db.deal.findMany({

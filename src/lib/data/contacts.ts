@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db } from "@/lib/db";
+import { contains, db } from "@/lib/db";
 import { scoreRelationship } from "@/lib/scoring";
 import { tagsForEntities } from "@/lib/actions/tags";
 
@@ -35,10 +35,10 @@ export async function listContacts(workspaceIds: string[], filters: ContactFilte
 
   if (filters.q) {
     where.OR = [
-      { fullName: { contains: filters.q } },
-      { email: { contains: filters.q } },
-      { jobTitle: { contains: filters.q } },
-      { company: { name: { contains: filters.q } } },
+      { fullName: contains(filters.q) },
+      { email: contains(filters.q) },
+      { jobTitle: contains(filters.q) },
+      { company: { name: contains(filters.q) } },
     ];
   }
   if (filters.relationshipType) where.relationshipType = filters.relationshipType;
