@@ -39,6 +39,10 @@ export function proxy(request: NextRequest) {
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
+  // The route group's layout needs to know which path is being rendered, so it
+  // can avoid redirecting /welcome to itself. A layout has no access to the
+  // pathname otherwise.
+  requestHeaders.set("x-pathname", pathname);
   // Next extracts the nonce by parsing the CSP on the *request*, and stamps it
   // onto every script it renders. Setting it only on the response is not
   // enough — the scripts are generated before the response header exists.

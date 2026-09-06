@@ -1,8 +1,22 @@
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+
 import { AppShell } from "@/components/app/shell";
 import { getShellData } from "@/lib/data/shell";
 import { getActor, resolveReadScope } from "@/lib/auth/access";
 import { readProjectFocus, readScope } from "@/lib/scope";
-import { redirect } from "next/navigation";
+
+/**
+ * Onboarding lives inside this route group but must not be wrapped in the shell
+ * — the shell needs a workspace, and the whole point of /welcome is that there
+ * is not one yet. Without this exclusion the layout redirects /welcome to
+ * /welcome forever, and a brand-new account can never get past sign-up.
+ *
+ * This was invisible locally: the seeded demo account already has a workspace
+ * and `onboardedAt` set, so every local run entered at /home and never rendered
+ * /welcome at all. It took a real sign-up on the deployed build to surface it.
+ */
+const WITHOUT_SHELL = new Set(["/welcome"]);
 
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   // A signed-out visitor is redirected rather than shown an error. src/proxy.ts
@@ -11,6 +25,9 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
   // account (expired, deactivated, deleted).
   const actor = await getActor();
   if (!actor) redirect("/login");
+
+  const pathname = (await headers()).get("x-pathname") ?? "";
+  if (WITHOUT_SHELL.has(pathname)) return <>{children}</>;
 
   const workspaces = actor.memberships;
 
