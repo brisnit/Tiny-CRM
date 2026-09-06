@@ -1,26 +1,204 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+  Tiny CRM design system.
+
+  The palette comes from the brand sheet: #068C28 (primary), #3DBE46 (accent),
+  #034A20 (deep), #1B1B1B (ink), #D9D9D9 (line). Everything else is a neutral
+  ramp tuned warm, so the app reads like paper rather than a control panel.
+
+  Surfaces are deliberately flat. There are three depths — canvas, panel, raised
+  — and borders do the separating work instead of shadows and cards.
+*/
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-mono-stack), ui-monospace, "SF Mono", Menlo, monospace;
+
+  --color-brand-50: #ecfaf0;
+  --color-brand-100: #d3f4dd;
+  --color-brand-200: #a9e8bd;
+  --color-brand-300: #74d693;
+  --color-brand-400: #3dbe46;
+  --color-brand-500: #068c28;
+  --color-brand-600: #057523;
+  --color-brand-700: #045c1f;
+  --color-brand-800: #034a20;
+  --color-brand-900: #023a1a;
+  --color-brand-950: #012310;
+
+  --color-ink: #1b1b1b;
+  --color-line: #d9d9d9;
+
+  /* Semantic surfaces, resolved per theme below. */
+  --color-canvas: var(--surface-canvas);
+  --color-panel: var(--surface-panel);
+  --color-raised: var(--surface-raised);
+  --color-sunken: var(--surface-sunken);
+  --color-hairline: var(--surface-hairline);
+  --color-hairline-strong: var(--surface-hairline-strong);
+  --color-body: var(--text-body);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+
+  --radius-pill: 999px;
+
+  --shadow-panel: 0 1px 2px rgb(16 24 32 / 0.04), 0 1px 1px rgb(16 24 32 / 0.03);
+  --shadow-pop: 0 12px 32px -8px rgb(16 24 32 / 0.14), 0 2px 8px -2px rgb(16 24 32 / 0.08);
+
+  --animate-in-fast: fade-slide 140ms cubic-bezier(0.16, 1, 0.3, 1);
+}
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+
+  --surface-canvas: #fbfbfa;
+  --surface-panel: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f4f4f2;
+  --surface-hairline: #eaeae7;
+  --surface-hairline-strong: #dcdcd8;
+
+  --text-body: #1b1b1b;
+  --text-muted: #6b6b66;
+  --text-faint: #9a9a94;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+.dark {
+  color-scheme: dark;
+
+  --surface-canvas: #101110;
+  --surface-panel: #171917;
+  --surface-raised: #1d201d;
+  --surface-sunken: #0b0c0b;
+  --surface-hairline: #262926;
+  --surface-hairline-strong: #333733;
+
+  --text-body: #eef0ed;
+  --text-muted: #9ca39a;
+  --text-faint: #6e746c;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  * {
+    border-color: var(--surface-hairline);
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background-color: var(--surface-canvas);
+    color: var(--text-body);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Numbers line up in tables and money columns. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-brand-400) 28%, transparent);
+  }
+
+  /* One focus treatment everywhere, keyboard-only. */
+  :focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Quiet scrollbars — the app has a lot of scrollable panes. */
+  @supports selector(::-webkit-scrollbar) {
+    ::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: color-mix(in oklab, var(--text-faint) 35%, transparent);
+      border-radius: 999px;
+      border: 3px solid transparent;
+      background-clip: content-box;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: color-mix(in oklab, var(--text-faint) 60%, transparent);
+      background-clip: content-box;
+      border: 3px solid transparent;
+    }
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer utilities {
+  .hairline {
+    border-color: var(--surface-hairline);
+  }
+
+  /* Fades the bottom of a scroll area so cut-off content reads as scrollable. */
+  .fade-bottom {
+    mask-image: linear-gradient(to bottom, black calc(100% - 24px), transparent 100%);
+  }
+
+  .grid-lines {
+    background-image:
+      linear-gradient(to right, color-mix(in oklab, var(--surface-hairline) 70%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--surface-hairline) 70%, transparent) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+}
+
+@keyframes fade-slide {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-sunken);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--surface-hairline) 60%, transparent),
+    transparent
+  );
+  animation: shimmer 1.6s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

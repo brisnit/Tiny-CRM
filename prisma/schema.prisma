@@ -1,0 +1,1030 @@
+// Tiny CRM — relational core
+//
+// PORTABILITY CONTRACT
+// This schema is written to run unchanged on SQLite (local dev) and PostgreSQL
+// (production). To switch, change `provider` below and point DATABASE_URL at
+// Postgres — `npm run db:use-postgres` does both. To keep that true we avoid
+// every provider-specific feature:
+//   * no native enums          -> String columns, validated in src/lib/enums.ts
+//   * no scalar lists          -> real join tables
+//   * no Json columns          -> String columns holding JSON (src/lib/json.ts)
+//   * no Decimal               -> money is Int minor units (cents), src/lib/money.ts
+// Indexes are declared for the access patterns in src/lib/data/*, sized for
+// workspaces holding thousands of contacts and hundreds of projects.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ---------------------------------------------------------------------------
+// Identity, tenancy & billing
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String?
+  avatarUrl    String?
+  jobTitle     String?
+  timezone     String    @default("America/Los_Angeles")
+
+  // Billing. plan: free | pro | lifetime  (src/lib/plans.ts owns the limits)
+  plan               String    @default("free")
+  planStatus         String    @default("active")
+  planRenewsAt       DateTime?
+  billingCustomerId  String?
+
+  onboardedAt DateTime?
+  lastSeenAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  ownedWorkspaces Workspace[]       @relation("WorkspaceOwner")
+  memberships     WorkspaceMember[]
+  companies       Company[]         @relation("CompanyOwner")
+  contacts        Contact[]         @relation("ContactOwner")
+  projects        Project[]         @relation("ProjectOwner")
+  deals           Deal[]            @relation("DealOwner")
+  opportunities   Opportunity[]     @relation("OpportunityOwner")
+  tasks           Task[]            @relation("TaskOwner")
+  notes           Note[]            @relation("NoteAuthor")
+  activities      Activity[]        @relation("ActivityActor")
+  files           FileAsset[]       @relation("FileUploader")
+  events          CalendarEvent[]   @relation("EventOrganizer")
+  notifications   Notification[]
+  savedViews      SavedView[]
+  integrations    Integration[]
+  aiMessages      AiMessage[]
+  usage           UsageCounter[]
+
+  @@index([plan])
+}
+
+model Workspace {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String
+  color       String    @default("#068C28")
+  description String?
+  ownerId     String
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  owner User @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  members        WorkspaceMember[]
+  companies      Company[]
+  contacts       Contact[]
+  projects       Project[]
+  projectStatuses ProjectStatus[]
+  deals          Deal[]
+  opportunities  Opportunity[]
+  pipelines      Pipeline[]
+  tasks          Task[]
+  notes          Note[]
+  activities     Activity[]
+  files          FileAsset[]
+  tags           Tag[]
+  tagLinks       TagLink[]
+  customFields   CustomFieldDef[]
+  customValues   CustomFieldValue[]
+  savedViews     SavedView[]
+  automations    Automation[]
+  insights       AiInsight[]
+  notifications  Notification[]
+  emails         EmailMessage[]
+  events         CalendarEvent[]
+  integrations   Integration[]
+  aiThreads      AiThread[]
+
+  @@unique([ownerId, slug])
+  @@index([ownerId, archivedAt])
+}
+
+model WorkspaceMember {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  // owner | admin | manager | member | viewer
+  role        String   @default("member")
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+/// Rolling per-period counters that back plan limits (AI calls, etc.)
+model UsageCounter {
+  id      String   @id @default(cuid())
+  userId  String
+  metric  String
+  period  String // e.g. "2026-09" for monthly metrics
+  count   Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, metric, period])
+}
+
+// ---------------------------------------------------------------------------
+// Accounts & people
+// ---------------------------------------------------------------------------
+
+model Company {
+  id                 String    @id @default(cuid())
+  workspaceId        String
+  name               String
+  domain             String?
+  logoUrl            String?
+  industry           String?
+  website            String?
+  size               String? // 1-10 | 11-50 | 51-200 | 201-1000 | 1000+
+  location           String?
+  revenueRange       String?
+  type               String? // client | prospect | partner | vendor | investor | other
+  leadSource         String?
+  relationshipStatus String    @default("prospect")
+  description        String?
+  ownerId            String?
+  primaryContactId   String?   @unique
+  lastActivityAt     DateTime?
+  archivedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  owner          User?     @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  primaryContact Contact?  @relation("CompanyPrimaryContact", fields: [primaryContactId], references: [id], onDelete: SetNull)
+
+  contacts      Contact[]       @relation("ContactCompany")
+  projects      Project[]
+  deals         Deal[]
+  opportunities Opportunity[]
+  tasks         Task[]
+  notes         Note[]
+  activities    Activity[]
+  files         FileAsset[]
+  emails        EmailMessage[]
+  events        CalendarEvent[]
+
+  @@index([workspaceId, name])
+  @@index([workspaceId, archivedAt, lastActivityAt])
+  @@index([workspaceId, relationshipStatus])
+  @@index([ownerId])
+}
+
+model Contact {
+  id          String  @id @default(cuid())
+  workspaceId String
+  firstName   String
+  lastName    String
+  /// Denormalised "First Last" so search and sorting stay index-friendly at scale.
+  fullName    String
+  jobTitle    String?
+  companyId   String?
+  email       String?
+  phone       String?
+  website     String?
+  linkedin    String?
+  location    String?
+  // client | prospect | partner | vendor | investor | colleague | other
+  relationshipType String  @default("prospect")
+  leadSource       String?
+  ownerId          String?
+  /// Optional manual override for the computed relationship score (0-100).
+  importance       Int?
+  description      String?
+
+  lastContactedAt DateTime?
+  nextFollowUpAt  DateTime?
+  archivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  company   Company?  @relation("ContactCompany", fields: [companyId], references: [id], onDelete: SetNull)
+  owner     User?     @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  primaryOf     Company?             @relation("CompanyPrimaryContact")
+  projects      ProjectContact[]
+  deals         DealContact[]
+  opportunities OpportunityContact[]
+  primaryDeals  Deal[]               @relation("DealPrimaryContact")
+  tasks         Task[]
+  notes         Note[]
+  activities    Activity[]
+  files         FileAsset[]
+  emails        EmailMessage[]
+  events        CalendarEvent[]
+  attendance    EventAttendee[]
+
+  @@index([workspaceId, fullName])
+  @@index([workspaceId, archivedAt, lastContactedAt])
+  @@index([workspaceId, nextFollowUpAt])
+  @@index([companyId])
+  @@index([ownerId])
+  @@index([workspaceId, email])
+}
+
+// ---------------------------------------------------------------------------
+// Projects
+// ---------------------------------------------------------------------------
+
+/// User-definable project stages, per workspace.
+model ProjectStatus {
+  id          String  @id @default(cuid())
+  workspaceId String
+  name        String
+  key         String
+  color       String  @default("#94a3b8")
+  order       Int     @default(0)
+  /// Terminal statuses (Completed/Archived) are excluded from "active" rollups.
+  isTerminal  Boolean @default(false)
+  isDefault   Boolean @default(false)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  projects  Project[]
+
+  @@unique([workspaceId, key])
+  @@index([workspaceId, order])
+}
+
+model Project {
+  id          String  @id @default(cuid())
+  workspaceId String
+  name        String
+  companyId   String?
+  statusId    String?
+  type        String? // consulting | website | software | retainer | internal | partnership | other
+  description String?
+  priority    String  @default("medium") // low | medium | high | urgent
+  /// on_track | at_risk | off_track | on_hold — recomputed by lib/health.ts
+  health      String  @default("on_track")
+  ownerId     String?
+
+  startDate    DateTime?
+  targetDate   DateTime?
+  completedAt  DateTime?
+  budgetCents  Int?
+  revenueCents Int?
+
+  nextAction      String?
+  nextActionDueAt DateTime?
+
+  lastActivityAt DateTime?
+  archivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  company   Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  owner     User?          @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  status    ProjectStatus? @relation(fields: [statusId], references: [id], onDelete: SetNull)
+
+  contacts      ProjectContact[]
+  deals         Deal[]
+  opportunities Opportunity[]
+  tasks         Task[]
+  notes         Note[]
+  activities    Activity[]
+  files         FileAsset[]
+  milestones    Milestone[]
+  emails        EmailMessage[]
+  events        CalendarEvent[]
+
+  @@index([workspaceId, archivedAt, statusId])
+  @@index([workspaceId, health])
+  @@index([workspaceId, targetDate])
+  @@index([companyId])
+  @@index([ownerId])
+}
+
+model ProjectContact {
+  projectId String
+  contactId String
+  role      String?
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, contactId])
+  @@index([contactId])
+}
+
+model Milestone {
+  id          String    @id @default(cuid())
+  projectId   String
+  name        String
+  dueDate     DateTime?
+  completedAt DateTime?
+  order       Int       @default(0)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, order])
+}
+
+// ---------------------------------------------------------------------------
+// Pipelines, deals & opportunities
+// ---------------------------------------------------------------------------
+
+model Pipeline {
+  id          String  @id @default(cuid())
+  workspaceId String
+  name        String
+  /// deal | opportunity — decides which record type this pipeline holds.
+  kind        String  @default("deal")
+  description String?
+  isDefault   Boolean @default(false)
+  order       Int     @default(0)
+  createdAt   DateTime @default(now())
+
+  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  stages        PipelineStage[]
+  deals         Deal[]
+  opportunities Opportunity[]
+
+  @@index([workspaceId, kind, order])
+}
+
+model PipelineStage {
+  id          String @id @default(cuid())
+  pipelineId  String
+  name        String
+  order       Int    @default(0)
+  /// Default win likelihood for deals sitting in this stage (0-100).
+  probability Int    @default(50)
+  color       String @default("#94a3b8")
+  /// open | won | lost — drives pipeline value and win-rate maths.
+  kind        String @default("open")
+
+  pipeline      Pipeline      @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  deals         Deal[]
+  opportunities Opportunity[]
+
+  @@index([pipelineId, order])
+}
+
+model Deal {
+  id               String @id @default(cuid())
+  workspaceId      String
+  name             String
+  companyId        String?
+  primaryContactId String?
+  projectId        String?
+  pipelineId       String
+  stageId          String
+
+  valueCents      Int       @default(0)
+  probability     Int?
+  expectedCloseAt DateTime?
+  ownerId         String?
+  source          String?
+  nextStep        String?
+
+  /// When the deal entered its current stage — powers momentum & stale detection.
+  stageEnteredAt DateTime  @default(now())
+  lastActivityAt DateTime?
+  closedAt       DateTime?
+  lostReason     String?
+
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  workspace      Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  company        Company?      @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  primaryContact Contact?      @relation("DealPrimaryContact", fields: [primaryContactId], references: [id], onDelete: SetNull)
+  project        Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  pipeline       Pipeline      @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stage          PipelineStage @relation(fields: [stageId], references: [id])
+  owner          User?         @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  contacts   DealContact[]
+  tasks      Task[]
+  notes      Note[]
+  activities Activity[]
+  files      FileAsset[]
+  emails     EmailMessage[]
+  events     CalendarEvent[]
+
+  @@index([workspaceId, archivedAt, stageId])
+  @@index([pipelineId, stageId])
+  @@index([workspaceId, expectedCloseAt])
+  @@index([workspaceId, lastActivityAt])
+  @@index([companyId])
+  @@index([projectId])
+  @@index([ownerId])
+}
+
+model DealContact {
+  dealId    String
+  contactId String
+  role      String?
+  createdAt DateTime @default(now())
+
+  deal    Deal    @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([dealId, contactId])
+  @@index([contactId])
+}
+
+model Opportunity {
+  id          String  @id @default(cuid())
+  workspaceId String
+  name        String
+  companyId   String?
+  projectId   String?
+  pipelineId  String?
+  stageId     String?
+
+  /// rfp | rfi | grant | partnership | sole_source | idiq | other
+  type              String  @default("rfp")
+  source            String?
+  solicitationNumber String?
+
+  postedAt           DateTime?
+  questionsDeadlineAt DateTime?
+  proposalDeadlineAt  DateTime?
+  deadlineAt          DateTime?
+
+  estimatedValueCents Int?
+  /// 0-100 how well this fits what we do.
+  fitScore            Int?
+  strategicValue      String? // low | medium | high
+  competitionLevel    String? // low | medium | high | unknown
+  requirements        String?
+  /// not_started | drafting | internal_review | submitted | won | lost | no_bid
+  submissionStatus    String  @default("not_started")
+  proposalUrl         String?
+  ownerId             String?
+
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  company   Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  project   Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  pipeline  Pipeline?      @relation(fields: [pipelineId], references: [id], onDelete: SetNull)
+  stage     PipelineStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  owner     User?          @relation("OpportunityOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  contacts   OpportunityContact[]
+  tasks      Task[]
+  notes      Note[]
+  activities Activity[]
+  files      FileAsset[]
+
+  @@index([workspaceId, archivedAt, deadlineAt])
+  @@index([workspaceId, submissionStatus])
+  @@index([pipelineId, stageId])
+  @@index([companyId])
+  @@index([ownerId])
+}
+
+model OpportunityContact {
+  opportunityId String
+  contactId     String
+  role          String?
+  createdAt     DateTime @default(now())
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  contact     Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([opportunityId, contactId])
+  @@index([contactId])
+}
+
+// ---------------------------------------------------------------------------
+// Work: tasks, notes, activity, files
+// ---------------------------------------------------------------------------
+
+model Task {
+  id          String  @id @default(cuid())
+  workspaceId String
+  title       String
+  description String?
+  ownerId     String?
+
+  dueAt      DateTime?
+  priority   String    @default("medium") // low | medium | high | urgent
+  status     String    @default("open")   // open | in_progress | done | cancelled
+  completedAt DateTime?
+  /// none | daily | weekly | biweekly | monthly | quarterly
+  recurrence String    @default("none")
+  reminderAt DateTime?
+  sortOrder  Int       @default(0)
+
+  contactId     String?
+  companyId     String?
+  dealId        String?
+  projectId     String?
+  opportunityId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  owner       User?        @relation("TaskOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  activities Activity[]
+
+  @@index([workspaceId, status, dueAt])
+  @@index([ownerId, status, dueAt])
+  @@index([projectId, status])
+  @@index([dealId, status])
+  @@index([contactId, status])
+  @@index([companyId, status])
+  @@index([opportunityId, status])
+}
+
+model Note {
+  id          String  @id @default(cuid())
+  workspaceId String
+  title       String?
+  /// Rich text stored as HTML produced by the in-app editor.
+  body        String  @default("")
+  /// Plain-text projection of `body`, kept in sync for search + AI context.
+  plainText   String  @default("")
+  authorId    String?
+  pinned      Boolean @default(false)
+
+  contactId     String?
+  companyId     String?
+  dealId        String?
+  projectId     String?
+  opportunityId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  author      User?        @relation("NoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  activities Activity[]
+
+  @@index([workspaceId, updatedAt])
+  @@index([projectId])
+  @@index([contactId])
+  @@index([companyId])
+  @@index([dealId])
+  @@index([opportunityId])
+}
+
+/// One append-only stream powering every record timeline and the activity feed.
+model Activity {
+  id          String @id @default(cuid())
+  workspaceId String
+  /// note | call | meeting | email | task | file | stage_change | project_update
+  /// | comment | ai_insight | created | field_change
+  type        String
+  title       String
+  body        String?
+  /// inbound | outbound | internal
+  direction   String?
+  durationMin Int?
+  /// JSON blob for type-specific payloads (old/new stage, file meta, …)
+  meta        String?
+  occurredAt  DateTime @default(now())
+  actorId     String?
+
+  contactId     String?
+  companyId     String?
+  dealId        String?
+  projectId     String?
+  opportunityId String?
+  taskId        String?
+  noteId        String?
+
+  createdAt DateTime @default(now())
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor       User?        @relation("ActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  task        Task?        @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  note        Note?        @relation(fields: [noteId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, occurredAt])
+  @@index([contactId, occurredAt])
+  @@index([companyId, occurredAt])
+  @@index([dealId, occurredAt])
+  @@index([projectId, occurredAt])
+  @@index([opportunityId, occurredAt])
+  @@index([workspaceId, type, occurredAt])
+}
+
+model FileAsset {
+  id          String @id @default(cuid())
+  workspaceId String
+  name        String
+  mimeType    String @default("application/octet-stream")
+  sizeBytes   Int    @default(0)
+  /// Storage pointer. Local dev writes to ./storage; production swaps in S3/R2
+  /// behind src/lib/storage.ts without touching this column.
+  storageKey  String
+  uploaderId  String?
+
+  contactId     String?
+  companyId     String?
+  dealId        String?
+  projectId     String?
+  opportunityId String?
+
+  createdAt DateTime @default(now())
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  uploader    User?        @relation("FileUploader", fields: [uploaderId], references: [id], onDelete: SetNull)
+  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([projectId])
+  @@index([dealId])
+  @@index([companyId])
+  @@index([contactId])
+  @@index([opportunityId])
+}
+
+// ---------------------------------------------------------------------------
+// Cross-cutting: tags, custom fields, saved views
+// ---------------------------------------------------------------------------
+
+model Tag {
+  id          String @id @default(cuid())
+  workspaceId String
+  name        String
+  color       String @default("#068C28")
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  links     TagLink[]
+
+  @@unique([workspaceId, name])
+}
+
+/// Polymorphic tag attachment. Kept polymorphic (rather than five join tables)
+/// so a tag can reach any record type; integrity is enforced in src/lib/tags.ts
+/// and the composite index keeps lookups cheap in both directions.
+model TagLink {
+  id          String @id @default(cuid())
+  workspaceId String
+  tagId       String
+  /// contact | company | deal | project | opportunity | note | task
+  entityType  String
+  entityId    String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tag       Tag       @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([tagId, entityType, entityId])
+  @@index([entityType, entityId])
+  @@index([workspaceId, entityType])
+}
+
+model CustomFieldDef {
+  id          String  @id @default(cuid())
+  workspaceId String
+  entityType  String
+  key         String
+  label       String
+  /// text | number | currency | date | dropdown | multiselect | checkbox | url | email | user
+  type        String
+  /// JSON array of options for dropdown/multiselect.
+  options     String?
+  helpText    String?
+  required    Boolean @default(false)
+  order       Int     @default(0)
+  createdAt   DateTime @default(now())
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  values    CustomFieldValue[]
+
+  @@unique([workspaceId, entityType, key])
+  @@index([workspaceId, entityType, order])
+}
+
+model CustomFieldValue {
+  id          String @id @default(cuid())
+  workspaceId String
+  fieldId     String
+  entityType  String
+  entityId    String
+  /// Canonical string form; the typed columns below are written in parallel so
+  /// numeric and date custom fields stay filterable and sortable in SQL.
+  value       String?
+  numberValue Float?
+  dateValue   DateTime?
+  boolValue   Boolean?
+
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  field     CustomFieldDef @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  @@unique([fieldId, entityId])
+  @@index([entityType, entityId])
+  @@index([workspaceId, fieldId, numberValue])
+  @@index([workspaceId, fieldId, dateValue])
+}
+
+model SavedView {
+  id          String  @id @default(cuid())
+  workspaceId String?
+  userId      String
+  name        String
+  icon        String?
+  /// contact | company | deal | project | opportunity | task | note
+  entityType  String
+  /// JSON: { rules: [...], match: "all" | "any" }
+  filters     String  @default("{\"match\":\"all\",\"rules\":[]}")
+  sort        String?
+  columns     String?
+  isShared    Boolean @default(false)
+  order       Int     @default(0)
+  createdAt   DateTime @default(now())
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, entityType, order])
+  @@index([workspaceId, entityType])
+}
+
+// ---------------------------------------------------------------------------
+// Automations, AI, notifications
+// ---------------------------------------------------------------------------
+
+model Automation {
+  id          String  @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?
+  enabled     Boolean @default(true)
+  /// deal_stage_changed | project_status_changed | opportunity_deadline_near
+  /// | deal_inactive | contact_created | task_overdue
+  trigger     String
+  /// JSON array of { field, op, value }
+  conditions  String  @default("[]")
+  /// JSON array of { type, ... }
+  actions     String  @default("[]")
+  lastRunAt   DateTime?
+  runCount    Int     @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  runs      AutomationRun[]
+
+  @@index([workspaceId, enabled, trigger])
+}
+
+model AutomationRun {
+  id           String   @id @default(cuid())
+  automationId String
+  entityType   String
+  entityId     String
+  status       String // success | skipped | error
+  message      String?
+  createdAt    DateTime @default(now())
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId, createdAt])
+}
+
+/// Cached AI output. Every insight records the model and an input fingerprint so
+/// it can be invalidated when the underlying record changes, instead of paying
+/// for a model call on every page view.
+model AiInsight {
+  id          String @id @default(cuid())
+  workspaceId String
+  /// summary | risk | recommendation | duplicate | cleanup | brief | deal_score
+  kind        String
+  entityType  String
+  entityId    String
+  title       String
+  body        String
+  /// JSON payload (scores, factors, proposed changes)
+  data        String?
+  confidence  Float?
+  /// new | accepted | dismissed | applied
+  status      String @default("new")
+  model       String?
+  /// Hash of the context used to produce this insight.
+  fingerprint String?
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, kind, status])
+  @@index([entityType, entityId, kind])
+  @@index([workspaceId, createdAt])
+}
+
+model AiThread {
+  id          String @id @default(cuid())
+  workspaceId String?
+  userId      String
+  title       String @default("New conversation")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace?  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  messages  AiMessage[]
+
+  @@index([userId, updatedAt])
+}
+
+model AiMessage {
+  id        String   @id @default(cuid())
+  threadId  String
+  userId    String?
+  role      String // user | assistant | system
+  content   String
+  /// JSON: tool calls, cited record ids, token usage
+  meta      String?
+  createdAt DateTime @default(now())
+
+  thread AiThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  user   User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([threadId, createdAt])
+}
+
+model Notification {
+  id          String @id @default(cuid())
+  workspaceId String?
+  userId      String
+  /// task_due | task_overdue | deal_inactive | project_risk | deadline
+  /// | contact_followup | opportunity_deadline | ai_recommendation
+  type        String
+  title       String
+  body        String?
+  entityType  String?
+  entityId    String?
+  readAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Communications & calendar
+//
+// Shaped after the Gmail/Outlook and Google/Outlook Calendar payloads so the
+// sync workers in src/lib/integrations can upsert on (provider, externalId)
+// without a schema change. Seeded with realistic mock data today.
+// ---------------------------------------------------------------------------
+
+model Integration {
+  id          String @id @default(cuid())
+  workspaceId String
+  userId      String
+  /// gmail | outlook | google_calendar | outlook_calendar
+  provider    String
+  /// connected | disconnected | error | mock
+  status      String @default("disconnected")
+  accountEmail String?
+  scopes      String?
+  /// Encrypted at rest by src/lib/crypto.ts before it ever reaches this column.
+  credentials String?
+  connectedAt DateTime?
+  lastSyncAt  DateTime?
+  syncCursor  String?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId, provider])
+}
+
+model EmailMessage {
+  id          String @id @default(cuid())
+  workspaceId String
+  provider    String @default("mock")
+  externalId  String?
+  threadId    String
+  subject     String
+  snippet     String
+  body        String?
+  fromEmail   String
+  fromName    String?
+  /// JSON array of { email, name }
+  toJson      String  @default("[]")
+  direction   String  @default("inbound") // inbound | outbound
+  sentAt      DateTime
+  isRead      Boolean @default(false)
+  /// Set by the AI unanswered-thread detector.
+  needsReply  Boolean @default(false)
+
+  contactId String?
+  companyId String?
+  dealId    String?
+  projectId String?
+
+  createdAt DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contact   Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  company   Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal      Deal?     @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, externalId])
+  @@index([workspaceId, sentAt])
+  @@index([threadId, sentAt])
+  @@index([contactId, sentAt])
+  @@index([workspaceId, needsReply])
+}
+
+model CalendarEvent {
+  id          String @id @default(cuid())
+  workspaceId String
+  provider    String @default("mock")
+  externalId  String?
+  title       String
+  description String?
+  location    String?
+  meetingUrl  String?
+  startAt     DateTime
+  endAt       DateTime
+  allDay      Boolean @default(false)
+  organizerId String?
+
+  /// AI-generated prep brief, filled lazily before the meeting.
+  prepBrief   String?
+  /// AI-generated recap, filled after notes are attached.
+  recap       String?
+
+  contactId String?
+  companyId String?
+  dealId    String?
+  projectId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  organizer User?           @relation("EventOrganizer", fields: [organizerId], references: [id], onDelete: SetNull)
+  contact   Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  company   Company?        @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal      Deal?           @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  project   Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  attendees EventAttendee[]
+
+  @@unique([provider, externalId])
+  @@index([workspaceId, startAt])
+  @@index([projectId, startAt])
+  @@index([contactId, startAt])
+}
+
+model EventAttendee {
+  id        String @id @default(cuid())
+  eventId   String
+  contactId String?
+  email     String
+  name      String?
+  status    String @default("needs_action") // accepted | declined | tentative | needs_action
+
+  event   CalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  contact Contact?      @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@unique([eventId, email])
+  @@index([contactId])
+}

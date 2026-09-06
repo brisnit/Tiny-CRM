@@ -5,13 +5,20 @@ import nextTs from "eslint-config-next/typescript";
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
-  // Override default ignores of eslint-config-next.
   globalIgnores([
-    // Default ignores of eslint-config-next:
+    // Defaults from eslint-config-next.
     ".next/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Prisma's generated client.
+    "src/generated/**",
+    // Node preload shim — necessarily CommonJS.
+    "scripts/*.cjs",
+    // Verification harness, not shipped application code.
+    "e2e-verify.mjs",
+    "diag.mjs",
+    "shot.mjs",
   ]),
 ]);
 
