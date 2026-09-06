@@ -9,9 +9,35 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const target = process.argv[2];
+let target = process.argv[2];
+
+/**
+ * `auto` resolves the provider from DATABASE_URL.
+ *
+ * The committed schema says "sqlite", because that is what local development
+ * uses. A deployment to PostgreSQL therefore starts from a checkout whose
+ * datasource provider contradicts its own DATABASE_URL, and Prisma refuses:
+ *
+ *   The Driver Adapter `@prisma/adapter-pg` is not compatible with the
+ *   provider `sqlite` specified in the Prisma schema.
+ *
+ * That failed the build on Vercel before a single page rendered. The build
+ * command runs this with `auto` so the checkout is made self-consistent from
+ * the connection string it was actually given, on any host, with no
+ * platform-specific configuration.
+ */
+if (target === "auto") {
+  const url = process.env.DATABASE_URL ?? "";
+  if (!url) {
+    console.error("DATABASE_URL is not set, so the provider cannot be resolved automatically.");
+    process.exit(1);
+  }
+  target = /^postgres(ql)?:\/\//.test(url) ? "postgresql" : "sqlite";
+  console.log(`Resolved provider "${target}" from DATABASE_URL.`);
+}
+
 if (!["sqlite", "postgresql"].includes(target)) {
-  console.error("Usage: node scripts/use-provider.mjs <sqlite|postgresql>");
+  console.error("Usage: node scripts/use-provider.mjs <sqlite|postgresql|auto>");
   process.exit(1);
 }
 
