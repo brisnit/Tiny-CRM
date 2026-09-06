@@ -2,7 +2,6 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { db } from "@/lib/db";
 import { withTenantContext } from "@/lib/tenant-db";
 import { slugify } from "@/lib/utils";
 import {

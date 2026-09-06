@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 
-import { db } from "@/lib/db";
+import { db, rootDb } from "@/lib/db";
 import { log, newRequestId, runWithContext } from "@/lib/logger";
 import { raiseAlert } from "@/lib/security/alerts";
 import type { DomainEventName } from "@/lib/events";
@@ -97,29 +97,13 @@ export async function claimJobs(limit = 10): Promise<ClaimedJob[]> {
   const { isPostgres } = await import("@/lib/env");
 
   if (isPostgres) {
-    return db.$queryRaw<ClaimedJob[]>`
-      UPDATE "DomainEvent" SET
-        status = 'processing',
-        "claimedBy" = ${WORKER_ID},
-        "claimedUntil" = ${claimedUntil},
-        attempts = attempts + 1
-      WHERE id IN (
-        SELECT id FROM "DomainEvent"
-        WHERE "deadAt" IS NULL
-          AND "processedAt" IS NULL
-          AND "availableAt" <= ${now}
-          AND (
-            status = 'pending'
-            OR status = 'failed'
-            -- A claim whose worker died. Reclaimable rather than stranded.
-            OR (status = 'processing' AND ("claimedUntil" IS NULL OR "claimedUntil" <= ${now}))
-          )
-        ORDER BY "availableAt" ASC
-        LIMIT ${limit}
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING id, name, "workspaceId", "entityType", "entityId", "actorId",
-                payload, attempts, "maxAttempts"
+    // The claim runs through a narrowly-scoped SECURITY DEFINER function rather
+    // than as a direct statement, because the worker has no workspace context
+    // and RLS would therefore show it an empty queue. See
+    // prisma/postgres/006_job_claim.sql for why this is the claim step only,
+    // and rootDb because the claim must not join a caller's transaction.
+    return rootDb.$queryRaw<ClaimedJob[]>`
+      SELECT * FROM app_claim_jobs(${WORKER_ID}, ${limit}::int, ${claimedUntil})
     `;
   }
 
@@ -178,6 +162,24 @@ async function runOne(job: ClaimedJob): Promise<"processed" | "failed" | "dead">
   const requestId = newRequestId();
   const started = Date.now();
 
+  // The whole job — its bookkeeping as well as its handler — runs inside the
+  // job's own tenant context. DomainEvent and JobRun are workspace-scoped, so
+  // the status updates and the execution log are subject to the same isolation
+  // as the work they describe; without this they were refused and the job
+  // appeared never to run. The handler's own withTenantContext reuses this one
+  // rather than nesting.
+  const { withTenantContext } = await import("@/lib/tenant-db");
+  return withTenantContext(
+    { workspaceIds: [job.workspaceId], userId: job.actorId },
+    () => runOneInContext(job, requestId, started),
+  );
+}
+
+async function runOneInContext(
+  job: ClaimedJob,
+  requestId: string,
+  started: number,
+): Promise<"processed" | "failed" | "dead"> {
   const run = await db.jobRun.create({
     data: { eventId: job.id, attempt: job.attempts, worker: WORKER_ID },
     select: { id: true },

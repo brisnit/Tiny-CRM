@@ -56,7 +56,6 @@ export async function recordAudit(
   entry: AuditEntry,
   tx?: Prisma.TransactionClient,
 ): Promise<void> {
-  const client = tx ?? db;
   const context = currentContext();
 
   // Audit rows are gated by the same RLS as everything else: a row naming a

@@ -1,6 +1,7 @@
 import "server-only";
 
-import { db } from "@/lib/db";
+import { db, currentTenantClient } from "@/lib/db";
+import { withTenantContext } from "@/lib/tenant-db";
 import { log } from "@/lib/logger";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -59,19 +60,30 @@ export async function emitEvent(
   input: EmitInput,
   tx?: Prisma.TransactionClient,
 ): Promise<{ id: string }> {
-  const client = tx ?? db;
-  const event = await client.domainEvent.create({
-    data: {
-      workspaceId: input.workspaceId,
-      name: input.name,
-      entityType: input.entityType,
-      entityId: input.entityId,
-      actorId: input.actorId ?? null,
-      payload: JSON.stringify(input.payload ?? {}),
-    },
-    select: { id: true },
-  });
-  return event;
+  const write = async () =>
+    (tx ?? db).domainEvent.create({
+      data: {
+        workspaceId: input.workspaceId,
+        name: input.name,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        actorId: input.actorId ?? null,
+        payload: JSON.stringify(input.payload ?? {}),
+      },
+      select: { id: true },
+    });
+
+  // DomainEvent is workspace-scoped, so the outbox write needs the same tenant
+  // context as the change it records. In an action that context is already
+  // ambient and is reused — which is what keeps the event and the change in one
+  // transaction, the whole point of an outbox. Called from anywhere else, the
+  // context is established from the event's own workspace, so emitting can
+  // never be the thing that fails for want of a context it could have derived.
+  if (tx || currentTenantClient()) return write();
+  return withTenantContext(
+    { workspaceIds: [input.workspaceId], userId: input.actorId ?? null },
+    write,
+  );
 }
 
 /**
