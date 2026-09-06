@@ -1,6 +1,6 @@
 # Production readiness scorecard
 
-Assessed 2026-09-06, after the hardening pass.
+Assessed 2026-09-06, after the hardening pass. 204 automated tests, 15 end-to-end checks.
 
 **GREEN** — implemented, tested, and I would ship it.
 **YELLOW** — implemented and works, but has a named gap that matters at scale or
@@ -117,7 +117,7 @@ been hardened" to "a system whose data survives a mistake."
 Every green row above is reproducible:
 
 ```bash
-npm test                        # 194 tests: unit, security, integration
+npm test                        # 204 tests: unit, security, integration
 npm run test:perf               # 25k contacts / 100k activities, budgeted
 npm run test:perf -- --tier=xl  # 100k contacts / 500k activities
 npm run typecheck
