@@ -1,11 +1,17 @@
 import { AppShell } from "@/components/app/shell";
 import { getShellData } from "@/lib/data/shell";
-import { requireActor, resolveReadScope } from "@/lib/auth/access";
+import { getActor, resolveReadScope } from "@/lib/auth/access";
 import { readProjectFocus, readScope } from "@/lib/scope";
 import { redirect } from "next/navigation";
 
 export default async function AppLayout({ children }: LayoutProps<"/">) {
-  const actor = await requireActor();
+  // A signed-out visitor is redirected rather than shown an error. src/proxy.ts
+  // catches most of these at the edge; this is the authoritative check, and it
+  // also covers a cookie that is present but no longer resolves to a live
+  // account (expired, deactivated, deleted).
+  const actor = await getActor();
+  if (!actor) redirect("/login");
+
   const workspaces = actor.memberships;
 
   // A brand-new account has no workspace yet; onboarding creates the first one.
