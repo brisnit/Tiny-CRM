@@ -262,7 +262,9 @@ async function main() {
     `)
   ).rows[0].n;
   if (deferrable > 0) pass(`${deferrable} deferrable foreign keys (restore is possible)`);
-  else fail("deferrable foreign keys", "003_deferrable_constraints.sql has not been applied — a logical restore will fail");
+  // The SQL filename in this message trips gitleaks' generic-api-key
+  // heuristic. It is prose in an error string, not a credential.
+  else fail("deferrable foreign keys", "003_deferrable_constraints.sql has not been applied — a logical restore will fail"); // gitleaks:allow
 
   await app.end().catch(() => {});
 
