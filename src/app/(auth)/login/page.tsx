@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import { LoginForm } from "@/components/app/auth-forms";
 import { getCurrentUser } from "@/lib/auth/session";
+import { env } from "@/lib/env";
 
 export const metadata = { title: "Sign in" };
 
@@ -16,7 +17,14 @@ export default async function LoginPage() {
         <p className="mt-1 text-[13px] text-muted">Sign in to your workspaces.</p>
       </div>
 
-      <LoginForm />
+      {/* Resolved here, on the server. Passing null in production is what keeps
+          the demo credentials out of the client bundle entirely, rather than
+          merely hiding the button that uses them. */}
+      <LoginForm
+        demo={
+          env.allowDemoAuth ? { email: env.demoEmail, password: env.demoPassword } : null
+        }
+      />
 
       <p className="mt-5 text-center text-[13px] text-muted">
         New here?{" "}

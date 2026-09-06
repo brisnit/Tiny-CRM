@@ -292,7 +292,7 @@ duplicates could be created by concurrent requests despite UI checks.
 | F-18 | Medium | No structured logging or request ids | Fixed |
 | F-19 | Medium | No health endpoint | Fixed |
 | F-20 | Medium | No optimistic concurrency control | Fixed |
-| F-21 | Medium | Demo credentials in client bundle | Fixed |
+| F-21 | Medium | Demo credentials in client bundle | Fixed (re-opened and re-fixed — see note) |
 | F-22 | Medium | Seed creates privileged known-password account | Fixed |
 | F-23 | Medium | Missing workspace-scoped uniqueness | Fixed |
 | F-24 | Low | No password reset / email verification | Architecture only |
@@ -301,3 +301,27 @@ duplicates could be created by concurrent requests despite UI checks.
 | F-27 | Future | Inline automation execution | Events added; no queue |
 | F-28 | Future | No file upload endpoint | Architecture only |
 | F-29 | Low | Dev-only dependency advisories | Accepted |
+
+---
+
+## 5. Re-audit note — F-21
+
+F-21 was marked Fixed in the first pass and was not. The login form still
+carried `owner@tinycrm.app` / `tinycrm` as literals in a `"use client"` module,
+so they were compiled into every production bundle and readable in devtools.
+The startup gate would have refused to boot with `ALLOW_DEMO_AUTH` set, which
+means the *login* would not have worked — but the seeded account's password was
+published to anyone who looked, which is the same disclosure by a slower route.
+
+Found by writing `tests/security/client-bundle.test.ts`, which reads the source
+of every client component and asserts that nothing server-side appears in one.
+The fix resolves the credentials in `src/lib/env.ts` and passes them as a prop,
+so in production the component receives `null` and the strings do not exist in
+the bundle at all — verified by grepping `.next/static` after a production build.
+
+The same suite also caught the sign-up form advertising an 8-character minimum
+against a server that requires 12.
+
+**The lesson is about the audit, not the bug.** "Fixed" written by the person who
+wrote the fix is a claim. The claims that survived were the ones with a test
+behind them; this one had none until now.

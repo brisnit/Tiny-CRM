@@ -68,6 +68,14 @@ export const env = {
    */
   allowDemoAuth: flag("ALLOW_DEMO_AUTH", !isProduction),
 
+  /**
+   * Credentials for the "open the demo workspace" button. Read here, on the
+   * server, so they are never a literal inside a client component and therefore
+   * never compiled into the browser bundle.
+   */
+  demoEmail: optional("DEMO_EMAIL") ?? "owner@tinycrm.app",
+  demoPassword: optional("DEMO_PASSWORD") ?? "tinycrm",
+
   aiProvider: (optional("AI_PROVIDER") ?? "auto") as "auto" | "anthropic" | "openai" | "offline",
   anthropicApiKey: optional("ANTHROPIC_API_KEY"),
   anthropicModel: optional("ANTHROPIC_MODEL") ?? "claude-opus-5",

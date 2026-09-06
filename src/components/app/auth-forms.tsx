@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/label";
 import { signUp } from "@/lib/actions/auth";
+import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
 
 function ErrorNote({ children }: { children: React.ReactNode }) {
   if (!children) return null;
@@ -20,7 +21,18 @@ function ErrorNote({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function LoginForm() {
+export type DemoCredentials = { email: string; password: string };
+
+/**
+ * `demo` is resolved on the server and passed in — never read from a
+ * `NEXT_PUBLIC_` variable, and never written as a literal in this file.
+ *
+ * A literal here would be compiled into the JavaScript bundle and readable by
+ * anyone who opens devtools, whether or not the component that uses it ever
+ * renders. Passing `null` from the server is what keeps the strings out of a
+ * production build entirely, rather than merely keeping the button hidden.
+ */
+export function LoginForm({ demo = null }: { demo?: DemoCredentials | null }) {
   const router = useRouter();
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -59,7 +71,7 @@ export function LoginForm() {
         Sign in
       </Button>
 
-      <DemoHint />
+      {demo ? <DemoHint credentials={demo} /> : null}
     </form>
   );
 }
@@ -106,8 +118,20 @@ export function SignupForm({ plan }: { plan: string }) {
       <Field label="Email" htmlFor="email">
         <Input id="email" name="email" type="email" autoComplete="email" required placeholder="you@company.com" />
       </Field>
-      <Field label="Password" htmlFor="password" hint="At least 8 characters.">
-        <Input id="password" name="password" type="password" autoComplete="new-password" required minLength={8} />
+      <Field
+        label="Password"
+        htmlFor="password"
+        hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}
+      >
+        <Input
+          id="password"
+          name="password"
+          type="password"
+          autoComplete="new-password"
+          required
+          minLength={PASSWORD_MIN_LENGTH}
+          maxLength={72}
+        />
       </Field>
       <Button type="submit" variant="brand" size="lg" className="w-full" loading={pending}>
         Create account
@@ -116,18 +140,21 @@ export function SignupForm({ plan }: { plan: string }) {
   );
 }
 
-/** The demo credentials, so the seeded database is discoverable. */
-function DemoHint() {
+/**
+ * One-click sign-in to the seeded demo workspace.
+ *
+ * Rendered only when the server passed credentials, which it does only when
+ * `ALLOW_DEMO_AUTH` is on — and the production startup gate refuses to boot with
+ * that flag set. Two independent guards, because either alone is one edit away
+ * from shipping a working login to everyone.
+ */
+function DemoHint({ credentials }: { credentials: DemoCredentials }) {
   const router = useRouter();
   const [pending, setPending] = React.useState(false);
 
   async function useDemo() {
     setPending(true);
-    await signIn("credentials", {
-      email: "owner@tinycrm.app",
-      password: "tinycrm",
-      redirect: false,
-    });
+    await signIn("credentials", { ...credentials, redirect: false });
     router.push("/home");
     router.refresh();
   }
