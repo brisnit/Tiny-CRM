@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db, currentTenantClient } from "@/lib/db";
+import { db, currentTenantClient, runDetached } from "@/lib/db";
 import { env } from "@/lib/env";
 import { log, redact } from "@/lib/logger";
 import { withTenantContext } from "@/lib/tenant-db";
@@ -208,7 +208,12 @@ export async function raiseAlert(input: AlertInput): Promise<void> {
     });
 
     // Delivery is fire-and-forget. A slow webhook must not slow a sign-in.
-    void deliver(alert.id, input.kind, severity, input.summary, alert.count, scoped).catch((error) => {
+    void runDetached(() =>
+      deliver(alert.id, input.kind, severity, input.summary, alert.count, {
+        workspaceId: input.workspaceId ?? null,
+        userId: input.userId ?? null,
+      }),
+    ).catch((error) => {
       log.error("alert delivery failed", { kind: input.kind, error: String(error) });
     });
   } catch (error) {
@@ -234,19 +239,30 @@ export async function raiseAlert(input: AlertInput): Promise<void> {
  * count and an id. Whoever receives it looks the rest up in a place that has
  * access control; an alerting channel usually does not.
  */
+/** Opens a fresh context for a delivery status write-back. */
+function deliveryScoped<T>(
+  scope: { workspaceId: string | null; userId: string | null },
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withTenantContext(
+    { workspaceIds: scope.workspaceId ? [scope.workspaceId] : [], userId: scope.userId },
+    fn,
+  );
+}
+
 async function deliver(
   alertId: string,
   kind: AlertKind,
   severity: AlertSeverity,
   summary: string,
   count: number,
-  // The alert's own scope, threaded from raiseAlert. Delivery runs detached
-  // from the request, so it has no ambient context of its own, and the status
-  // write-back is subject to the same policy as the row it updates.
-  scoped: <T>(fn: () => Promise<T>) => Promise<T>,
+  // The alert's own scope. Delivery is fire-and-forget, so by the time it runs
+  // the transaction that raised the alert has committed; it opens its own
+  // context rather than reusing a closed one.
+  scope: { workspaceId: string | null; userId: string | null },
 ): Promise<void> {
   if (!env.alertWebhookUrl) {
-    await scoped(() => db.securityAlert.update({
+    await deliveryScoped(scope, () => db.securityAlert.update({
       where: { id: alertId },
       data: { deliveredAt: new Date() },
     }));
@@ -276,14 +292,14 @@ async function deliver(
       signal: AbortSignal.timeout(5_000),
     });
 
-    await scoped(() => db.securityAlert.update({
+    await deliveryScoped(scope, () => db.securityAlert.update({
       where: { id: alertId },
       data: response.ok
         ? { deliveredAt: new Date(), deliveryError: null }
         : { deliveryError: `Sink returned ${response.status}` },
     }));
   } catch (error) {
-    await scoped(() => db.securityAlert.update({
+    await deliveryScoped(scope, () => db.securityAlert.update({
       where: { id: alertId },
       data: { deliveryError: String(error).slice(0, 300) },
     }));

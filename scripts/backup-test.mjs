@@ -102,9 +102,13 @@ function applySchema() {
   execFileSync("node", ["scripts/apply-sql.mjs", "prisma/postgres/003_deferrable_constraints.sql"], {
     cwd: ROOT, stdio: "ignore", env,
   });
-  // The policy and bootstrap files, so a restored database is a complete one
-  // rather than a schema that happens to hold the rows.
+  // The indexes, policies and bootstrap rules, so a restored database is a
+  // complete one rather than a schema that happens to hold the rows. 002 must
+  // come before 004/005/006: it defines app_user_id(), which their policies
+  // call — applying them without it fails with "function does not exist".
   for (const file of [
+    "001_search_indexes.sql",
+    "002_row_level_security.sql",
     "004_workspace_bootstrap.sql",
     "005_identity_policies.sql",
     "006_job_claim.sql",

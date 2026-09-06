@@ -90,6 +90,20 @@ export function runWithTenantClient<T>(tx: Prisma.TransactionClient, fn: () => P
   return tenantTx.run(tx, fn);
 }
 
+/**
+ * Runs `fn` with no ambient tenant transaction.
+ *
+ * Work that is deliberately detached from the request — a fire-and-forget alert
+ * delivery, a background dispatch — keeps the AsyncLocalStorage store of
+ * whatever scope created it, but the transaction that store points at has
+ * already committed by the time the work runs. Reusing it then fails with
+ * "Transaction already closed". Detached work must therefore leave the ambient
+ * context and open its own.
+ */
+export function runDetached<T>(fn: () => Promise<T>): Promise<T> {
+  return tenantTx.exit(fn);
+}
+
 /** The ambient tenant transaction client, or null outside one. */
 export function currentTenantClient(): Prisma.TransactionClient | null {
   return tenantTx.getStore() ?? null;

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db, currentTenantClient } from "@/lib/db";
+import { db, currentTenantClient, runDetached } from "@/lib/db";
 import { withTenantContext } from "@/lib/tenant-db";
 import { log } from "@/lib/logger";
 import type { Prisma } from "@/generated/prisma/client";
@@ -131,7 +131,11 @@ export const TRIGGER_FOR_EVENT: Partial<Record<DomainEventName, string>> = {
  * is why a dead request meant a lost automation.
  */
 export function dispatchSoon(): void {
-  void dispatchPendingEvents().catch((error) => {
+  // Detached from the caller: by the time this runs, the request's transaction
+  // has committed, and inheriting its (now closed) tenant context would fail
+  // every query with "Transaction already closed". Each dispatched job opens
+  // its own context for its own workspace.
+  void runDetached(() => dispatchPendingEvents()).catch((error) => {
     log.error("background dispatch failed", { error: String(error) });
   });
 }

@@ -169,9 +169,13 @@ async function runOne(job: ClaimedJob): Promise<"processed" | "failed" | "dead">
   // appeared never to run. The handler's own withTenantContext reuses this one
   // rather than nesting.
   const { withTenantContext } = await import("@/lib/tenant-db");
+  // isolated: a job may be dispatched from inside a request whose transaction
+  // has already committed, and reusing that closed transaction fails outright.
+  // A job is its own unit of work and always gets its own.
   return withTenantContext(
     { workspaceIds: [job.workspaceId], userId: job.actorId },
     () => runOneInContext(job, requestId, started),
+    { isolated: true },
   );
 }
 
