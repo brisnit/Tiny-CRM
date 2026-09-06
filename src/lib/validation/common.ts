@@ -44,7 +44,18 @@ export const zOptionalEmail = z
 /**
  * URLs are restricted to http(s). Accepting `javascript:` or `data:` here would
  * put an XSS payload one render away, since these values are shown as links.
+ *
+ * The scheme is checked on the **raw** value, before the `https://` convenience
+ * prefix is applied. Checking only the prefixed form validates a different
+ * string from the one that gets stored: `file:///etc/passwd` parses as
+ * `https://file:///etc/passwd` — protocol `https:`, host `file` — and would
+ * then be written back verbatim as a `file:` link.
+ *
+ * A "scheme" here excludes dots, so `example.com:8080/path` is still read as a
+ * bare host and port rather than as a scheme named `example.com`.
  */
+const EXPLICIT_SCHEME = /^([a-zA-Z][a-zA-Z0-9+-]*):/;
+
 export const zUrl = z
   .string()
   .trim()
@@ -52,8 +63,10 @@ export const zUrl = z
   .refine(
     (value) => {
       if (!value) return true;
+      const scheme = EXPLICIT_SCHEME.exec(value)?.[1];
+      if (scheme && !/^https?$/i.test(scheme)) return false;
       try {
-        const url = new URL(value.startsWith("http") ? value : `https://${value}`);
+        const url = new URL(scheme ? value : `https://${value}`);
         return url.protocol === "http:" || url.protocol === "https:";
       } catch {
         return false;
@@ -188,11 +201,20 @@ export function parseSearchParams<T extends z.ZodTypeAny>(
   schema: T,
   params: URLSearchParams | Record<string, string | string[] | undefined>,
 ): z.infer<T> {
-  const record =
-    params instanceof URLSearchParams
-      ? Object.fromEntries(params.entries())
-      : Object.fromEntries(
-          Object.entries(params).map(([k, v]) => [k, Array.isArray(v) ? v[0] : v]),
-        );
+  // A repeated key yields its FIRST value, matching how Next.js hands a repeated
+  // parameter to a page as an array. `Object.fromEntries` would take the last,
+  // so the two input shapes would disagree about `?page=2&page=999999` — the
+  // classic parameter-pollution split between what a filter checks and what the
+  // handler uses.
+  const record: Record<string, string | undefined> = {};
+  if (params instanceof URLSearchParams) {
+    for (const [key, value] of params.entries()) {
+      if (!(key in record)) record[key] = value;
+    }
+  } else {
+    for (const [key, value] of Object.entries(params)) {
+      record[key] = Array.isArray(value) ? value[0] : value;
+    }
+  }
   return schema.parse(record);
 }

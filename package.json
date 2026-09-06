@@ -20,7 +20,9 @@
     "db:loadtest": "NODE_OPTIONS=\"--require ./scripts/allow-server-modules.cjs\" tsx scripts/loadtest.ts",
     "db:loadtest:clean": "NODE_OPTIONS=\"--require ./scripts/allow-server-modules.cjs\" tsx scripts/loadtest.ts --clean",
     "test": "node scripts/run-tests.mjs",
-    "test:security": "node scripts/run-tests.mjs \"tests/security/**/*.test.ts\""
+    "test:security": "node scripts/run-tests.mjs \"tests/security/**/*.test.ts\"",
+    "test:perf": "node scripts/run-perf.mjs",
+    "check:config": "tsx scripts/check-config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

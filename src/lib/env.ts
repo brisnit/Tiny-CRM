@@ -11,7 +11,12 @@
  * the process instead of serving requests.
  */
 
-const DEV_AUTH_SECRET = "tiny-crm-development-only-secret-never-use-in-production";
+/**
+ * The development session secret. Exported so the production gate, the tests and
+ * the deployment checklist all name the same value rather than three copies of
+ * a string that must never diverge.
+ */
+export const DEV_AUTH_SECRET = "tiny-crm-development-only-secret-never-use-in-production";
 
 function optional(key: string): string | undefined {
   const value = process.env[key];
@@ -26,9 +31,18 @@ export const isDevelopment = !isProduction && !isTest;
 function required(key: string, devFallback?: string): string {
   const value = optional(key);
   if (value) return value;
-  // A fallback is a development convenience only. In production the absence of
-  // a required secret is fatal, never silently substituted.
+
+  // A fallback is a development convenience only; it is never substituted in
+  // production.
   if (devFallback !== undefined && !isProduction) return devFallback;
+
+  // In production, resolve to an empty string rather than throwing here.
+  // Throwing at import time reports only the *first* missing variable, so an
+  // operator fixes one, redeploys, and discovers the next — one incident per
+  // variable. assertProductionEnv() checks every required key and reports them
+  // together; every key that uses this fallback is covered there.
+  if (isProduction) return "";
+
   throw new Error(
     `Missing required environment variable ${key}. Copy .env.example to .env and fill it in.`,
   );

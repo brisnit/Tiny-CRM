@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { env, isProduction } from "@/lib/env";
+import { cookieName, cookieOptions } from "@/lib/auth/cookies";
 import { PASSWORD_HASH_COST, needsRehash } from "@/lib/auth/password";
 import { recordAudit } from "@/lib/audit";
 import { log } from "@/lib/logger";
@@ -56,13 +57,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
   cookies: {
     sessionToken: {
-      name: isProduction ? "__Secure-authjs.session-token" : "authjs.session-token",
-      options: {
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-        secure: isProduction,
-      },
+      name: cookieName(isProduction),
+      options: cookieOptions(isProduction),
     },
   },
 
