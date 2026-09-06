@@ -40,6 +40,10 @@ try {
   execFileSync("npx", ["prisma", "migrate", "deploy"], { cwd: ROOT, stdio: "inherit", env });
   node(["scripts/apply-sql.mjs", "prisma/postgres/001_search_indexes.sql"], { env });
   node(["scripts/apply-sql.mjs", "prisma/postgres/002_row_level_security.sql"], { env });
+  node(["scripts/apply-sql.mjs", "prisma/postgres/003_deferrable_constraints.sql"], { env });
+  node(["scripts/apply-sql.mjs", "prisma/postgres/004_workspace_bootstrap.sql"], { env });
+  node(["scripts/apply-sql.mjs", "prisma/postgres/005_identity_policies.sql"], { env });
+  node(["scripts/apply-sql.mjs", "prisma/postgres/006_job_claim.sql"], { env });
 
   // The RLS tests need a connection as the restricted role. When this script
   // manages the cluster it can provision one; against an external server the
@@ -49,6 +53,28 @@ try {
     env.RLS_APP_DATABASE_URL = execFileSync("node", ["scripts/pg.mjs", "app-url"], {
       cwd: ROOT, encoding: "utf8",
     }).trim();
+  }
+
+  // The split that makes these tests mean anything.
+  //
+  // Everything above — migrations, the SQL files, seeding — is maintenance and
+  // runs as the owner. The *application under test* must connect as the
+  // restricted role, or FORCE ROW LEVEL SECURITY does not bind it and every RLS
+  // assertion passes vacuously. That is exactly what was happening: this script
+  // and CI both ran the whole suite as the superuser.
+  //
+  // The fixtures keep the owner connection, because a harness bound by the same
+  // policies cannot tell a refused attack from a broken application.
+  const adminUrl = env.DATABASE_URL;
+  env.FIXTURE_DATABASE_URL = adminUrl;
+  if (env.RLS_APP_DATABASE_URL) {
+    env.DATABASE_URL = env.RLS_APP_DATABASE_URL;
+  } else {
+    console.warn(
+      "\nNo RLS_APP_DATABASE_URL: the suite will run as the owner, and every\n" +
+        "row-level-security assertion will be vacuous. tests/security/rls-runtime\n" +
+        "asserts the connection is unprivileged and will fail, which is intended.\n",
+    );
   }
 
   const pattern = process.argv[2] ?? "tests/**/*.test.ts";

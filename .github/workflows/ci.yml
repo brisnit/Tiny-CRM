@@ -73,7 +73,18 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://tinycrm:tinycrm@localhost:5432/tinycrm_test
+      # ADMIN_DATABASE_URL is the owner: migrations, the SQL files, seeding, and
+      # the test harness's out-of-band observation of ground truth.
+      ADMIN_DATABASE_URL: postgresql://tinycrm:tinycrm@localhost:5432/tinycrm_test
+      # FIXTURE_DATABASE_URL is what tests/helpers/fixtures.ts connects with.
+      FIXTURE_DATABASE_URL: postgresql://tinycrm:tinycrm@localhost:5432/tinycrm_test
+      # DATABASE_URL is what the *application under test* connects with, and it
+      # is the restricted role. This job previously ran the whole suite as the
+      # superuser, which bypasses FORCE ROW LEVEL SECURITY — so every RLS and
+      # tenant-isolation assertion was vacuous and passed for the wrong reason.
+      # tests/security/rls-runtime.test.ts now fails outright if this is not an
+      # unprivileged role, which is how that was found.
+      DATABASE_URL: postgresql://tinycrm_app:tinycrm_app@localhost:5432/tinycrm_test
       RLS_APP_DATABASE_URL: postgresql://tinycrm_app:tinycrm_app@localhost:5432/tinycrm_test
     steps:
       - uses: actions/checkout@v4
@@ -85,12 +96,16 @@ jobs:
         run: node scripts/use-provider.mjs postgresql
 
       - run: npx prisma generate
+        env:
+          DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
 
       - name: Apply migrations
         # The PostgreSQL history is separate: Prisma locks a history to the
         # provider it was authored against, and prisma7.config.ts selects the
         # directory from DATABASE_URL.
         run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
 
       - name: Apply the PostgreSQL-only SQL
         run: |
@@ -100,18 +115,23 @@ jobs:
           node scripts/apply-sql.mjs prisma/postgres/004_workspace_bootstrap.sql
           node scripts/apply-sql.mjs prisma/postgres/005_identity_policies.sql
           node scripts/apply-sql.mjs prisma/postgres/006_job_claim.sql
+        env:
+          DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
 
       - name: Give the RLS-restricted role a login
         # The migration creates tinycrm_app with NOLOGIN and no password, on
         # purpose: a credential in a migration file is a credential in version
         # control. CI sets a throwaway one.
         run: |
-          psql "$DATABASE_URL" -c "ALTER ROLE tinycrm_app WITH LOGIN PASSWORD 'tinycrm_app';"
-          psql "$DATABASE_URL" -c "GRANT CONNECT ON DATABASE tinycrm_test TO tinycrm_app;"
+          psql "$ADMIN_DATABASE_URL" -c "ALTER ROLE tinycrm_app WITH LOGIN PASSWORD 'tinycrm_app';"
+          psql "$ADMIN_DATABASE_URL" -c "GRANT CONNECT ON DATABASE tinycrm_test TO tinycrm_app;"
 
       - name: Seed verification data
+        # Seeding is a maintenance operation and runs as the owner, like a
+        # migration. The application never gets this credential.
         run: npx tsx prisma/seed/test-seed.ts
         env:
+          DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
           NODE_OPTIONS: --require ./scripts/allow-server-modules.cjs
 
       - name: Run every suite against PostgreSQL
@@ -122,8 +142,10 @@ jobs:
 
       - name: Record the engine differences
         # Not a gate: the output is read when a portability question comes up.
+        # Runs as the owner: it probes engine behaviour, not tenancy.
         run: npx tsx scripts/db-differences.ts
         env:
+          DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
           NODE_ENV: test
           NODE_OPTIONS: --require ./scripts/allow-server-modules.cjs
 
