@@ -52,7 +52,15 @@ export async function classifyText(
   workspaceIds: string[],
   text: string,
 ): Promise<ClassificationResult> {
-  const raw = isModelBacked()
+  // Extraction sends the pasted text — often the most sensitive thing a user
+  // will ever put into this product — so it honours the workspace's mode before
+  // a model sees it. Falling back to the heuristic extractor keeps capture
+  // working with AI off; it finds fewer things and finds them locally.
+  const { aiPermission } = await import("@/lib/ai/privacy");
+  const permissions = await Promise.all(workspaceIds.map((id) => aiPermission(id)));
+  const mayTransmit = permissions.length > 0 && permissions.every((p) => p.mayTransmitContent);
+
+  const raw = mayTransmit && isModelBacked()
     ? await extractWithModel(actor, text)
     : extractHeuristically(text);
 

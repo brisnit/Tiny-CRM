@@ -98,6 +98,16 @@ export const env = {
   openaiApiKey: optional("OPENAI_API_KEY"),
   openaiModel: optional("OPENAI_MODEL") ?? "gpt-4o",
 
+  /**
+   * Asserts that this deployment holds an enterprise or zero-retention
+   * agreement with its model provider.
+   *
+   * Never inferred. A provider offering such an arrangement says nothing about
+   * whether *this account* has one, and the "private model only" workspace mode
+   * fails closed until an operator states that it does.
+   */
+  aiEnterpriseAgreement: flag("AI_ENTERPRISE_AGREEMENT", false),
+
   /** Shared secret a billing provider signs its webhooks with. */
   billingWebhookSecret: optional("BILLING_WEBHOOK_SECRET"),
 

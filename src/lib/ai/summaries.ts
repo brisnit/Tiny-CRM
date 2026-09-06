@@ -3,7 +3,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 
 import { db } from "@/lib/db";
-import { getProvider } from "@/lib/ai/provider";
+import { getProvider, getProviderForWorkspace } from "@/lib/ai/provider";
 import { SYSTEM_PROMPTS, withContext } from "@/lib/ai/prompts";
 import { buildRecordContext, buildWorkspaceSnapshot, type ContextScope } from "@/lib/ai/context";
 import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
@@ -44,7 +44,9 @@ export async function getRecordSummary(
 
   await assertWithinLimit(actor, "aiRequestsPerMonth");
 
-  const provider = getProvider();
+  // Workspace-aware: a workspace with AI off summarises with the deterministic
+  // engine instead of sending its records to a provider.
+  const provider = await getProviderForWorkspace(options.workspaceId || scope.workspaceIds[0]!);
   const result = await provider.complete({
     purpose: "record_summary",
     system: SYSTEM_PROMPTS.recordSummary,
@@ -99,7 +101,15 @@ export async function getDailyBrief(
 
   await assertWithinLimit(actor, "aiRequestsPerMonth");
 
-  const provider = getProvider();
+  // A brief can span workspaces, so it uses a provider only when *every*
+  // workspace in scope permits transmission. One workspace with AI off is
+  // enough to keep the whole brief local — the safe direction.
+  const { aiPermission } = await import("@/lib/ai/privacy");
+  const permissions = await Promise.all(scope.workspaceIds.map((id) => aiPermission(id)));
+  const provider = permissions.every((p) => p.mayTransmitContent)
+    ? getProvider()
+    : await getProviderForWorkspace(scope.workspaceIds[0] ?? "");
+
   const result = await provider.complete({
     purpose: "daily_brief",
     system: SYSTEM_PROMPTS.dailyBrief,

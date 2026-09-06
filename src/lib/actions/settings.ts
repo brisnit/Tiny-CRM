@@ -12,6 +12,8 @@ import { assertCanAssignRole, requireRole } from "@/lib/auth/access";
 import { ROLES } from "@/lib/auth/permissions";
 import { assertWithinLimit } from "@/lib/entitlements";
 import { assertConfirmation } from "@/lib/destructive";
+import { emitEvent } from "@/lib/events";
+import { raiseAlert } from "@/lib/security/alerts";
 import { AppError } from "@/lib/errors";
 import { provisionWorkspace } from "@/lib/workspaces/provision";
 import { LIMITS } from "@/lib/validation/limits";
@@ -146,13 +148,150 @@ export async function updateWorkspace(
   );
 }
 
+/** How long a workspace sits scheduled before it is actually destroyed. */
+export const WORKSPACE_DELETION_GRACE_DAYS = 7;
+
 /**
- * Deletes a workspace and everything in it.
+ * Schedules a workspace for deletion.
  *
- * This is the most destructive operation in the product: `Workspace` is the
- * cascade root, so every record it owns goes with it. It therefore requires the
- * `workspace:delete` permission (owner only) and the workspace name retyped,
+ * The most destructive operation in the product: `Workspace` is the cascade
+ * root, so every record it owns goes with it. It used to happen on the click.
+ *
+ * It no longer does. The request is recorded, an alert is raised, and a worker
+ * performs the deletion after a grace period — during which any owner can
+ * cancel it. An entire customer's business should not end because of one
+ * mis-click, one stolen session, or one bad afternoon.
+ *
+ * Still requires `workspace:delete` (owner only) and the workspace name retyped,
  * verified here rather than in the dialog.
+ */
+export async function requestWorkspaceDeletion(
+  id: string,
+  confirmation: string,
+): Promise<ActionResult<{ id: string; scheduledAt: Date }>> {
+  return guard(() =>
+    workspaceAction(
+      { workspaceId: id, permission: "workspace:delete", rateLimit: "mutation" },
+      async (actor) => {
+        const workspace = await db.workspace.findUniqueOrThrow({
+          where: { id: actor.workspaceId },
+          select: { name: true, deletionScheduledAt: true },
+        });
+        assertConfirmation(confirmation, workspace.name);
+
+        if (workspace.deletionScheduledAt) {
+          throw new AppError(
+            "conflict",
+            "This workspace is already scheduled for deletion.",
+          );
+        }
+
+        const scheduledAt = new Date(
+          Date.now() + WORKSPACE_DELETION_GRACE_DAYS * 24 * 60 * 60 * 1000,
+        );
+
+        await transaction(async (tx) => {
+          await tx.workspace.update({
+            where: { id: actor.workspaceId },
+            data: {
+              deletionRequestedAt: new Date(),
+              deletionRequestedById: actor.identity.id,
+              deletionScheduledAt: scheduledAt,
+            },
+          });
+
+          // The job the worker will pick up when the grace period ends. It
+          // re-reads the schedule, so a cancellation makes it a no-op.
+          await emitEvent(
+            {
+              workspaceId: actor.workspaceId,
+              name: "workspace.deletion_due",
+              entityType: "workspace",
+              entityId: actor.workspaceId,
+              actorId: actor.identity.id,
+              payload: { scheduledAt: scheduledAt.toISOString() },
+            },
+            tx,
+          );
+          await tx.domainEvent.updateMany({
+            where: {
+              workspaceId: actor.workspaceId,
+              name: "workspace.deletion_due",
+              processedAt: null,
+            },
+            // Not eligible for a worker until the grace period is over.
+            data: { availableAt: scheduledAt },
+          });
+        });
+
+        await audit(actor, {
+          workspaceId: actor.workspaceId,
+          action: "workspace.deletion_requested",
+          entityType: "workspace",
+          entityId: actor.workspaceId,
+          summary: `Scheduled deletion of workspace ${workspace.name}`,
+          metadata: { scheduledAt: scheduledAt.toISOString() },
+        });
+
+        await raiseAlert({
+          kind: "workspace.deletion_requested",
+          workspaceId: actor.workspaceId,
+          userId: actor.identity.id,
+          summary:
+            `Workspace "${workspace.name}" is scheduled for deletion on ` +
+            `${scheduledAt.toISOString().slice(0, 10)}. Export first if this was not intended.`,
+          dedupeKey: `workspace-deletion:${actor.workspaceId}`,
+        });
+
+        revalidateLayout();
+        return { id: actor.workspaceId, scheduledAt };
+      },
+    ),
+  );
+}
+
+/** Cancels a scheduled deletion, any time before the worker runs it. */
+export async function cancelWorkspaceDeletion(
+  id: string,
+): Promise<ActionResult<{ id: string }>> {
+  return guard(() =>
+    workspaceAction(
+      { workspaceId: id, permission: "workspace:delete", rateLimit: "mutation" },
+      async (actor) => {
+        await db.workspace.updateMany({
+          where: { id: actor.workspaceId },
+          data: {
+            deletionRequestedAt: null,
+            deletionRequestedById: null,
+            deletionScheduledAt: null,
+          },
+        });
+
+        // The scheduled job is left in place deliberately: it re-reads the
+        // schedule and does nothing when there is none. Deleting it here would
+        // be a second write that could fail independently of this one.
+        await audit(actor, {
+          workspaceId: actor.workspaceId,
+          action: "workspace.deletion_cancelled",
+          entityType: "workspace",
+          entityId: actor.workspaceId,
+          summary: "Cancelled a scheduled workspace deletion",
+        });
+
+        revalidateLayout();
+        return { id: actor.workspaceId };
+      },
+    ),
+  );
+}
+
+/**
+ * Deletes a workspace immediately, skipping the grace period.
+ *
+ * Kept because "I need this gone now" is a legitimate request — a mistaken
+ * import of somebody else's data, a compliance instruction. It requires the name
+ * retyped *and* the workspace to already be scheduled, so nobody reaches it
+ * without having passed through the reversible path first.
  */
 export async function deleteWorkspace(
   id: string,
@@ -164,9 +303,17 @@ export async function deleteWorkspace(
       async (actor) => {
         const workspace = await db.workspace.findUniqueOrThrow({
           where: { id: actor.workspaceId },
-          select: { name: true },
+          select: { name: true, deletionScheduledAt: true },
         });
         assertConfirmation(confirmation, workspace.name);
+
+        if (!workspace.deletionScheduledAt) {
+          throw new AppError(
+            "conflict",
+            "Schedule the deletion first. This gives you a week to change your mind, " +
+              "and this action skips it.",
+          );
+        }
 
         // The audit entry is written *before* the delete, because the workspace
         // row it references disappears with the cascade.
@@ -175,13 +322,57 @@ export async function deleteWorkspace(
           action: "workspace.deleted",
           entityType: "workspace",
           entityId: actor.workspaceId,
-          summary: `Permanently deleted workspace ${workspace.name}`,
+          summary: `Permanently deleted workspace ${workspace.name} (grace period skipped)`,
         });
 
         await db.workspace.delete({ where: { id: actor.workspaceId } });
 
         revalidateLayout();
         return { id: actor.workspaceId };
+      },
+    ),
+  );
+}
+
+/**
+ * Sets whether CRM content from this workspace may be sent to a model provider.
+ *
+ * Workspace-level rather than account-level: one person may run their own
+ * business and a client's in the same account, under different obligations.
+ */
+export async function setAiMode(
+  workspaceId: string,
+  mode: string,
+): Promise<ActionResult<{ mode: string }>> {
+  return guard(() =>
+    workspaceAction(
+      { workspaceId, permission: "workspace:manage", rateLimit: "mutation" },
+      async (actor) => {
+        const { AI_MODES } = await import("@/lib/ai/privacy");
+        const parsed = z.enum(AI_MODES).parse(mode);
+
+        const before = await db.workspace.findUniqueOrThrow({
+          where: { id: actor.workspaceId },
+          select: { aiMode: true },
+        });
+
+        await db.workspace.update({
+          where: { id: actor.workspaceId },
+          data: { aiMode: parsed },
+        });
+
+        await audit(actor, {
+          workspaceId: actor.workspaceId,
+          action: "ai.privacy_changed",
+          entityType: "workspace",
+          entityId: actor.workspaceId,
+          summary: `AI mode changed from ${before.aiMode} to ${parsed}`,
+          metadata: { from: before.aiMode, to: parsed },
+        });
+
+        revalidateLayout();
+        revalidatePathSafely("/settings/ai");
+        return { mode: parsed };
       },
     ),
   );

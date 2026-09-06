@@ -1,7 +1,7 @@
 import "server-only";
 
 import { db } from "@/lib/db";
-import { getProvider } from "@/lib/ai/provider";
+import { getProviderForWorkspace } from "@/lib/ai/provider";
 import { SYSTEM_PROMPTS, withContext } from "@/lib/ai/prompts";
 import { buildRecordContext, buildWorkspaceSnapshot, type ContextScope } from "@/lib/ai/context";
 import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
@@ -34,7 +34,16 @@ export async function* askTinyAi(request: AgentRequest): AsyncIterable<string> {
     ? await buildRecordContext(request.scope, request.focus.type, request.focus.id)
     : await buildWorkspaceSnapshot(request.scope, { limit: 14 });
 
-  const provider = getProvider();
+  // Every workspace in scope must permit transmission; one with AI off keeps
+  // the whole answer local. Erring toward the local engine is the safe
+  // direction — the alternative is transmitting a workspace's records because a
+  // different workspace allowed it.
+  const { aiPermission } = await import("@/lib/ai/privacy");
+  const permissions = await Promise.all(request.scope.workspaceIds.map((id) => aiPermission(id)));
+  const provider = permissions.every((p) => p.mayTransmitContent)
+    ? await getProviderForWorkspace(request.scope.workspaceIds[0] ?? "")
+    : await getProviderForWorkspace("__ai_disabled__");
+
   const messages: AiMessage[] = [
     ...(request.history ?? []).slice(-6),
     { role: "user", content: withContext(request.question, context?.text ?? "No records in scope.") },

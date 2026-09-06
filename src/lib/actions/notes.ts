@@ -331,3 +331,18 @@ function relationsOf(data: Partial<Record<(typeof RELATIONS)[number], string | n
     opportunityId: data.opportunityId ?? null,
   };
 }
+
+export async function restoreNote(id: string): Promise<ActionResult<{ id: string }>> {
+  return guard(() =>
+    recordAction("note", id, { permission: "record:archive", rateLimit: "mutation" },
+      async ({ workspaceId, recordId }) => {
+        await db.note.updateMany({
+          where: { id: recordId, workspaceId },
+          data: { archivedAt: null, version: { increment: 1 } },
+        });
+        revalidateRecord(["/notes", `/notes/${recordId}`]);
+        return { id: recordId };
+      },
+    ),
+  );
+}

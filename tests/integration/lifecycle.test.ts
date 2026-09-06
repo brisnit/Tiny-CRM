@@ -143,7 +143,27 @@ describe("record lifecycle", () => {
     const before = await db.contact.count({ where: { workspaceId: B.workspaceId } });
     assert.ok(before > 0);
 
-    const { deleteWorkspace } = await import("../../src/lib/actions/settings");
+    const { requestWorkspaceDeletion, deleteWorkspace } =
+      await import("../../src/lib/actions/settings");
+
+    // Immediate deletion is deliberately unreachable without first passing
+    // through the reversible path — one click must not end a customer's data.
+    const premature = await runAsTestIdentity(B.ownerId, () =>
+      deleteWorkspace(B.workspaceId, "Cascade Workspace"),
+    );
+    assert.equal(premature.ok, false, "a workspace was destroyed without a grace period");
+
+    const scheduled = await runAsTestIdentity(B.ownerId, () =>
+      requestWorkspaceDeletion(B.workspaceId, "Cascade Workspace"),
+    );
+    assert.equal(scheduled.ok, true, "the owner could not schedule a deletion");
+
+    // Still there during the grace period.
+    assert.ok(
+      await db.workspace.findUnique({ where: { id: B.workspaceId } }),
+      "scheduling destroyed the workspace immediately",
+    );
+
     const result = await runAsTestIdentity(B.ownerId, () =>
       deleteWorkspace(B.workspaceId, "Cascade Workspace"),
     );

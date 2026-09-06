@@ -6,8 +6,8 @@
  * secret, demo authentication left on, a SQLite file in production — stops the
  * process here rather than silently serving requests.
  *
- * It is also the integration point for error tracking and tracing (Sentry,
- * OpenTelemetry); the hooks are marked below.
+ * It is also where observability is wired up and where the second layer of
+ * tenant isolation reports whether it is actually protecting this connection.
  */
 export async function register() {
   // Only the Node runtime can read the full environment or reach the database.
@@ -37,9 +37,20 @@ export async function register() {
     demoAuth: env.allowDemoAuth,
   });
 
-  // Error tracking integration point.
-  //   const Sentry = await import("@sentry/nextjs");
-  //   Sentry.init({ dsn: process.env.SENTRY_DSN, tracesSampleRate: 0.1, release: env.release });
+  const { reportObservabilityStatus } = await import("@/lib/observability");
+  reportObservabilityStatus();
+
+  // Row-level security is the second isolation layer, and it is silently absent
+  // when the connection is a superuser or the policies were never applied. This
+  // asks the database rather than assuming, and says so at error level when the
+  // answer is no. It warns rather than throws: a missing second layer must not
+  // take down a deployment whose first layer is intact.
+  const { reportRlsStatus } = await import("@/lib/tenant-db");
+  await reportRlsStatus();
+
+  const { rateLimitBackend } = await import("@/lib/rate-limit");
+  const limiter = rateLimitBackend();
+  log.info("rate limiting", { backend: limiter.kind, distributed: limiter.distributed });
 }
 
 /**
@@ -57,4 +68,9 @@ export async function onRequestError(
     error: error instanceof Error ? error.message : String(error),
     stack: error instanceof Error ? error.stack : undefined,
   });
+
+  // And to the configured error tracker, with a payload built from an explicit
+  // allowlist — see src/lib/observability.ts for why that matters here.
+  const { captureError } = await import("@/lib/observability");
+  await captureError(error, { route: request.path, operation: request.method });
 }

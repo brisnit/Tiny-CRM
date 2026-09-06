@@ -35,6 +35,9 @@ export const DOMAIN_EVENTS = [
   "note.created",
   "member.added",
   "ai.suggestion.applied",
+  // Emitted with a future availableAt, so the worker performs it when the
+  // grace period ends rather than immediately.
+  "workspace.deletion_due",
 ] as const;
 
 export type DomainEventName = (typeof DOMAIN_EVENTS)[number];

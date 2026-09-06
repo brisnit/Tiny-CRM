@@ -193,3 +193,26 @@ export function describeProvider() {
 export function resetProvider() {
   cached = null;
 }
+
+/**
+ * The provider to use for one workspace, honouring its AI privacy mode.
+ *
+ * A workspace set to `disabled` — or to `private` without an enterprise
+ * agreement — gets the deterministic engine rather than an error. That is the
+ * design: turning AI off must degrade the product, not break it. Scoring,
+ * momentum, stall detection, the cleanup scan and the daily brief all keep
+ * working, because none of them ever needed a model.
+ *
+ * Every call site that sends CRM content to a provider uses this rather than
+ * `getProvider()`, so the mode cannot be bypassed by forgetting a check.
+ */
+export async function getProviderForWorkspace(workspaceId: string): Promise<AiProvider> {
+  const { aiPermission } = await import("@/lib/ai/privacy");
+  const permission = await aiPermission(workspaceId);
+
+  if (permission.mayTransmitContent) return getProvider();
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { OfflineProvider } = require("@/lib/ai/offline") as typeof import("@/lib/ai/offline");
+  return new OfflineProvider();
+}
