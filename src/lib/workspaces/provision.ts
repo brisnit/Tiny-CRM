@@ -1,6 +1,9 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+
 import { db } from "@/lib/db";
+import { withTenantContext } from "@/lib/tenant-db";
 import { slugify } from "@/lib/utils";
 import {
   DEFAULT_DEAL_STAGES, DEFAULT_OPPORTUNITY_STAGES, DEFAULT_PROJECT_STATUSES,
@@ -29,11 +32,44 @@ export type ProvisionInput = {
  * project statuses and both pipelines — in a single transaction, so a failure
  * part-way through cannot leave a workspace with no pipeline to put deals in.
  */
+
+/**
+ * A collision-resistant id generated before the row exists.
+ *
+ * Prisma's `@default(cuid())` runs at insert time, which is too late: the id has
+ * to be in the tenant context *before* the INSERT is attempted. Shaped to
+ * satisfy `zId` (alphanumeric, under 64 characters) and drawn from the CSPRNG.
+ */
+function newWorkspaceId(): string {
+  return `c${randomUUID().replace(/-/g, "")}`;
+}
+
 export async function provisionWorkspace(
   userId: string,
   input: ProvisionInput,
   tx?: Prisma.TransactionClient,
 ): Promise<{ id: string; name: string; slug: string }> {
+  // The workspace bootstrap problem.
+  //
+  // Every RLS policy answers "is this row's workspace one the caller may see?",
+  // and the caller's set of visible workspaces comes from their memberships. A
+  // workspace being created is in nobody's memberships yet, so the very first
+  // INSERT — and the membership, pipelines and statuses created with it — is
+  // denied by the policies that protect every other write.
+  //
+  // Rather than punch a hole in those policies, the id is generated here and
+  // the whole provisioning runs inside a tenant context that contains it. The
+  // rows are then created under exactly the same rule as every other write:
+  // "this row belongs to a workspace in my context".
+  //
+  // The database does not have to trust that reasoning. A RESTRICTIVE policy in
+  // prisma/postgres/004_workspace_bootstrap.sql independently requires
+  // "ownerId" = app_user_id() for any Workspace INSERT, so even a caller who
+  // could influence the context cannot create a workspace owned by someone
+  // else. Restrictive policies AND with the permissive ones, so this narrows
+  // the rule; it never widens it.
+  const workspaceId = newWorkspaceId();
+
   const run = async (client: Prisma.TransactionClient) => {
     const name = input.name.trim().slice(0, 200);
 
@@ -50,6 +86,7 @@ export async function provisionWorkspace(
 
     const workspace = await client.workspace.create({
       data: {
+        id: workspaceId,
         name,
         slug,
         description: input.description?.slice(0, 1000) ?? null,
@@ -107,5 +144,13 @@ export async function provisionWorkspace(
     return workspace;
   };
 
-  return tx ? run(tx) : db.$transaction(run, { timeout: 15_000 });
+  // The context contains only the workspace being created. Provisioning touches
+  // nothing else, and the caller's other workspaces stay out of reach for the
+  // duration — a narrower context than the caller is entitled to, not a wider
+  // one.
+  return withTenantContext(
+    { workspaceIds: [workspaceId], userId },
+    (client) => (tx ? run(tx) : run(client)),
+    { timeout: 15_000 },
+  );
 }

@@ -173,6 +173,38 @@ try {
     else fail("session cookie SameSite", String(session.sameSite));
   } else fail("a session cookie was set");
 
+  // --------------------------------------------------------------- onboarding
+  head("Onboarding");
+
+  // Without this the account has no workspace, every /home request redirects to
+  // /welcome, and a naive "did the page return 200?" check passes while proving
+  // nothing. An earlier version of this script did exactly that.
+  await page.goto(`${BASE}/welcome`, { waitUntil: "networkidle" });
+
+  const workspaceName = `Probe Workspace ${stamp}`;
+  const advance = async (label) => {
+    const btn = page.locator(`button:has-text("${label}")`).first();
+    if (await btn.count()) { await btn.click(); await page.waitForTimeout(1200); return true; }
+    return false;
+  };
+
+  await advance("Continue");
+  const wsInput = page.locator('input[placeholder="Artifact Intelligence"]').first();
+  if (await wsInput.count()) {
+    await wsInput.fill(workspaceName);
+    await advance("Create workspace");
+    pass("onboarding creates the first workspace", workspaceName);
+  } else fail("onboarding creates the first workspace", "workspace name field not found");
+
+  // Skip the optional project/contact steps and get into the product.
+  for (let i = 0; i < 6; i++) {
+    if (/\/home/.test(page.url())) break;
+    if (!(await advance("Continue")) && !(await advance("Skip")) && !(await advance("Finish"))) break;
+  }
+  await page.goto(`${BASE}/home`, { waitUntil: "domcontentloaded" });
+  if (/\/home/.test(page.url())) pass("reaches the dashboard after onboarding");
+  else fail("reaches the dashboard after onboarding", `stuck at ${page.url().replace(BASE, "")}`);
+
   // ------------------------------------------------------------- CRM surfaces
   head("CRM surfaces (production build)");
 
@@ -190,9 +222,13 @@ try {
   ]) {
     const res = await page.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" }).catch(() => null);
     const status = res?.status() ?? 0;
+    const landed = new URL(page.url()).pathname;
+    // A 200 is not enough: /home redirects to /welcome when onboarding is
+    // incomplete, and /login when signed out. Both would look like a pass.
+    const bounced = landed !== path;
     const has = await page.locator(marker).count().catch(() => 0);
-    if (status === 200 && has > 0) pass(`${label} renders`, path);
-    else fail(`${label} renders`, `${path} → http ${status}`);
+    if (status === 200 && has > 0 && !bounced) pass(`${label} renders`, path);
+    else fail(`${label} renders`, bounced ? `${path} → redirected to ${landed}` : `${path} → http ${status}`);
   }
 
   // ---------------------------------------------------------------- sign out

@@ -1,6 +1,8 @@
 import { PrismaClient } from "../../src/generated/prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { randomUUID } from "node:crypto";
+
 import bcrypt from "bcryptjs";
 
 /**
@@ -11,7 +13,18 @@ import bcrypt from "bcryptjs";
  * member of A reach anything in B?
  */
 
-const url = process.env.DATABASE_URL ?? "file:./test.db";
+// The fixtures' connection is deliberately separate from the application's.
+//
+// The application under test connects as the restricted `tinycrm_app` role, so
+// RLS is genuinely enforcing during the test. These fixtures are an out-of-band
+// observer — they build the world before the test and check ground truth after
+// it — and an observer bound by the same policies cannot see whether an attack
+// was actually refused: a blocked read and an unchanged row look identical.
+//
+// So when FIXTURE_DATABASE_URL is provided the harness uses it (an owner
+// connection), and the app still uses DATABASE_URL. With only DATABASE_URL set,
+// both are the same connection and behaviour is unchanged from before.
+const url = process.env.FIXTURE_DATABASE_URL ?? process.env.DATABASE_URL ?? "file:./test.db";
 
 // The adapter is chosen from the connection string, exactly as src/lib/db.ts
 // does, so the same suite runs unchanged against SQLite locally and PostgreSQL
@@ -51,6 +64,32 @@ export type Tenant = {
 let counter = 0;
 const unique = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${counter++}`;
 
+
+/**
+ * Establishes tenant context on the fixtures' own client.
+ *
+ * These fixtures deliberately construct their own PrismaClient (mirroring
+ * src/lib/db.ts) so a test helper never depends on the application's module
+ * graph. That also means the application's AsyncLocalStorage-backed context
+ * does not reach it, so bootstrap writes need their context set here.
+ *
+ * Same mechanism as production: `set_config(..., true)` is SET LOCAL, discarded
+ * when the transaction ends, so nothing leaks onto a pooled connection.
+ */
+async function withFixtureContext<T>(
+  workspaceIds: string[],
+  userId: string,
+  fn: (tx: Parameters<Parameters<typeof db.$transaction>[0]>[0]) => Promise<T>,
+): Promise<T> {
+  return db.$transaction(async (tx) => {
+    if (url.startsWith("postgres")) {
+      await tx.$executeRaw`SELECT set_config('app.workspace_ids', ${workspaceIds.join(",")}, true)`;
+      await tx.$executeRaw`SELECT set_config('app.user_id', ${userId}, true)`;
+    }
+    return fn(tx);
+  }, { timeout: 30_000 });
+}
+
 export async function createTenant(label: string): Promise<Tenant> {
   const password = await bcrypt.hash("correct-horse-battery", 4);
 
@@ -85,21 +124,25 @@ export async function createTenant(label: string): Promise<Tenant> {
     },
   });
 
+  // A tenant is bootstrapped exactly the way production bootstraps one: the id
+  // is generated first and everything below runs inside a tenant context that
+  // contains it, so RLS permits the writes for the same reason it permits them
+  // at sign-up. Previously these were raw inserts, which worked only because no
+  // test had ever run as the restricted role.
+  const workspaceId = `c${randomUUID().replace(/-/g, "")}`;
+
+  return withFixtureContext([workspaceId], owner.id, async (db) => {
   const workspace = await db.workspace.create({
     data: {
+      id: workspaceId,
       name: `${label} Workspace`,
       slug: unique(label.toLowerCase()),
       ownerId: owner.id,
-      members: {
-        create: [
-          { userId: owner.id, role: "owner" },
-          { userId: member.id, role: "member" },
-          { userId: viewer.id, role: "viewer" },
-          // Given a high-privilege role on purpose: the gate must stop them
-          // regardless of role, and a viewer could not export anyway.
-          { userId: unverified.id, role: "admin" },
-        ],
-      },
+      // Only the owner's membership is created with the workspace. The others
+      // are added immediately below, from a context in which the owner is
+      // already a member — which is how an invitation actually happens, and
+      // what prisma/postgres/004_workspace_bootstrap.sql requires.
+      members: { create: [{ userId: owner.id, role: "owner" }] },
       projectStatuses: {
         create: [
           { key: "active", name: "Active", order: 0, isDefault: true },
@@ -108,6 +151,16 @@ export async function createTenant(label: string): Promise<Tenant> {
       },
     },
     include: { projectStatuses: true },
+  });
+
+  await db.workspaceMember.createMany({
+    data: [
+      { workspaceId: workspace.id, userId: member.id, role: "member" },
+      { workspaceId: workspace.id, userId: viewer.id, role: "viewer" },
+      // Given a high-privilege role on purpose: the gate must stop them
+      // regardless of role, and a viewer could not export anyway.
+      { workspaceId: workspace.id, userId: unverified.id, role: "admin" },
+    ],
   });
 
   const pipeline = await db.pipeline.create({
@@ -195,6 +248,7 @@ export async function createTenant(label: string): Promise<Tenant> {
     automationId: automation.id,
     tagId: tag.id,
   };
+  });
 }
 
 export async function cleanupTenants(tenants: Tenant[]) {

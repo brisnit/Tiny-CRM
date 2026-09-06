@@ -3,6 +3,7 @@ import "server-only";
 import { contains, db, isSearchable } from "@/lib/db";
 import { scoreRelationship } from "@/lib/scoring";
 import { tagsForEntities } from "@/lib/actions/tags";
+import { withTenantContext } from "@/lib/tenant-db";
 
 export type ContactFilters = {
   q?: string;
@@ -25,88 +26,94 @@ const PAGE_SIZE = 50;
  * O(contacts).
  */
 export async function listContacts(workspaceIds: string[], filters: ContactFilters) {
-  const now = new Date();
-  const page = Math.max(1, filters.page ?? 1);
+  // Read paths do not go through the action wrapper, so this is where they join
+  // the RLS model. The ids are the caller's already-authorised scope
+  // (resolveReadScope), so this narrows the database to exactly what the
+  // application had already decided the request may see.
+  return withTenantContext({ workspaceIds }, async () => {
+    const now = new Date();
+    const page = Math.max(1, filters.page ?? 1);
 
-  const where: Record<string, unknown> = {
-    workspaceId: { in: workspaceIds },
-    archivedAt: null,
-  };
+    const where: Record<string, unknown> = {
+      workspaceId: { in: workspaceIds },
+      archivedAt: null,
+    };
 
-  if (isSearchable(filters.q)) {
-    where.OR = [
-      { fullName: contains(filters.q) },
-      { email: contains(filters.q) },
-      { jobTitle: contains(filters.q) },
-      { company: { name: contains(filters.q) } },
-    ];
-  }
-  if (filters.relationshipType) where.relationshipType = filters.relationshipType;
-  if (filters.companyId) where.companyId = filters.companyId;
-
-  switch (filters.view) {
-    case "follow_up":
-      where.nextFollowUpAt = { lte: endOfDay(now) };
-      break;
-    case "quiet":
+    if (isSearchable(filters.q)) {
       where.OR = [
-        { lastContactedAt: { lte: new Date(now.getTime() - 30 * 86_400_000) } },
-        { lastContactedAt: null },
+        { fullName: contains(filters.q) },
+        { email: contains(filters.q) },
+        { jobTitle: contains(filters.q) },
+        { company: { name: contains(filters.q) } },
       ];
-      break;
-    case "clients":
-      where.relationshipType = "client";
-      break;
-    case "new":
-      where.createdAt = { gte: new Date(now.getTime() - 14 * 86_400_000) };
-      break;
-  }
+    }
+    if (filters.relationshipType) where.relationshipType = filters.relationshipType;
+    if (filters.companyId) where.companyId = filters.companyId;
 
-  if (filters.tag) {
-    const links = await db.tagLink.findMany({
-      where: { entityType: "contact", tag: { name: filters.tag, workspaceId: { in: workspaceIds } } },
-      select: { entityId: true },
-    });
-    where.id = { in: links.map((l) => l.entityId) };
-  }
+    switch (filters.view) {
+      case "follow_up":
+        where.nextFollowUpAt = { lte: endOfDay(now) };
+        break;
+      case "quiet":
+        where.OR = [
+          { lastContactedAt: { lte: new Date(now.getTime() - 30 * 86_400_000) } },
+          { lastContactedAt: null },
+        ];
+        break;
+      case "clients":
+        where.relationshipType = "client";
+        break;
+      case "new":
+        where.createdAt = { gte: new Date(now.getTime() - 14 * 86_400_000) };
+        break;
+    }
 
-  const orderBy =
-    filters.sort === "name"
-      ? { fullName: "asc" as const }
-      : filters.sort === "oldest_contact"
-        ? { lastContactedAt: "asc" as const }
-        : filters.sort === "follow_up"
-          ? { nextFollowUpAt: "asc" as const }
-          : { updatedAt: "desc" as const };
+    if (filters.tag) {
+      const links = await db.tagLink.findMany({
+        where: { entityType: "contact", tag: { name: filters.tag, workspaceId: { in: workspaceIds } } },
+        select: { entityId: true },
+      });
+      where.id = { in: links.map((l) => l.entityId) };
+    }
 
-  const [rows, total] = await Promise.all([
-    db.contact.findMany({
-      where,
-      select: {
-        id: true, fullName: true, jobTitle: true, email: true, phone: true, location: true,
-        relationshipType: true, lastContactedAt: true, nextFollowUpAt: true, createdAt: true,
-        importance: true, workspaceId: true,
-        company: { select: { id: true, name: true } },
-        owner: { select: { name: true, avatarUrl: true } },
-        _count: { select: { deals: true, projects: true, tasks: true } },
-      },
-      orderBy,
-      skip: (page - 1) * PAGE_SIZE,
-      take: PAGE_SIZE,
-    }),
-    db.contact.count({ where }),
-  ]);
+    const orderBy =
+      filters.sort === "name"
+        ? { fullName: "asc" as const }
+        : filters.sort === "oldest_contact"
+          ? { lastContactedAt: "asc" as const }
+          : filters.sort === "follow_up"
+            ? { nextFollowUpAt: "asc" as const }
+            : { updatedAt: "desc" as const };
 
-  const scored = await attachScores(rows, now);
-  const tags = await tagsForEntities("contact", rows.map((r) => r.id));
+    const [rows, total] = await Promise.all([
+      db.contact.findMany({
+        where,
+        select: {
+          id: true, fullName: true, jobTitle: true, email: true, phone: true, location: true,
+          relationshipType: true, lastContactedAt: true, nextFollowUpAt: true, createdAt: true,
+          importance: true, workspaceId: true,
+          company: { select: { id: true, name: true } },
+          owner: { select: { name: true, avatarUrl: true } },
+          _count: { select: { deals: true, projects: true, tasks: true } },
+        },
+        orderBy,
+        skip: (page - 1) * PAGE_SIZE,
+        take: PAGE_SIZE,
+      }),
+      db.contact.count({ where }),
+    ]);
 
-  return {
-    contacts: scored.map((c) => ({ ...c, tags: tags.get(c.id) ?? [] })),
-    total,
-    page,
-    pageCount: Math.max(1, Math.ceil(total / PAGE_SIZE)),
-    pageSize: PAGE_SIZE,
-  };
+    const scored = await attachScores(rows, now);
+    const tags = await tagsForEntities("contact", rows.map((r) => r.id));
+
+    return {
+      contacts: scored.map((c) => ({ ...c, tags: tags.get(c.id) ?? [] })),
+      total,
+      page,
+      pageCount: Math.max(1, Math.ceil(total / PAGE_SIZE)),
+      pageSize: PAGE_SIZE,
+    };
+  });
 }
 
 type ContactRow = {
@@ -183,85 +190,91 @@ async function attachScores<T extends ContactRow>(rows: T[], now: Date) {
 
 /** One contact with everything its page shows. */
 export async function getContact(workspaceIds: string[], id: string) {
-  const contact = await db.contact.findFirst({
-    where: { id, workspaceId: { in: workspaceIds } },
-    include: {
-      company: { select: { id: true, name: true, industry: true, website: true, logoUrl: true } },
-      owner: { select: { id: true, name: true, avatarUrl: true } },
-      workspace: { select: { id: true, name: true, color: true } },
-      deals: {
-        include: {
-          deal: {
-            select: {
-              id: true, name: true, valueCents: true, expectedCloseAt: true,
-              stage: { select: { name: true, color: true, kind: true } },
+  // Read paths do not go through the action wrapper, so this is where they join
+  // the RLS model. The ids are the caller's already-authorised scope
+  // (resolveReadScope), so this narrows the database to exactly what the
+  // application had already decided the request may see.
+  return withTenantContext({ workspaceIds }, async () => {
+    const contact = await db.contact.findFirst({
+      where: { id, workspaceId: { in: workspaceIds } },
+      include: {
+        company: { select: { id: true, name: true, industry: true, website: true, logoUrl: true } },
+        owner: { select: { id: true, name: true, avatarUrl: true } },
+        workspace: { select: { id: true, name: true, color: true } },
+        deals: {
+          include: {
+            deal: {
+              select: {
+                id: true, name: true, valueCents: true, expectedCloseAt: true,
+                stage: { select: { name: true, color: true, kind: true } },
+              },
             },
           },
         },
-      },
-      projects: {
-        include: {
-          project: {
-            select: {
-              id: true, name: true, health: true,
-              status: { select: { name: true, color: true } },
+        projects: {
+          include: {
+            project: {
+              select: {
+                id: true, name: true, health: true,
+                status: { select: { name: true, color: true } },
+              },
             },
           },
         },
-      },
-      tasks: {
-        where: { status: { in: ["open", "in_progress"] } },
-        select: {
-          id: true, title: true, dueAt: true, priority: true, status: true,
-          project: { select: { id: true, name: true } },
-          deal: { select: { id: true, name: true } },
+        tasks: {
+          where: { status: { in: ["open", "in_progress"] } },
+          select: {
+            id: true, title: true, dueAt: true, priority: true, status: true,
+            project: { select: { id: true, name: true } },
+            deal: { select: { id: true, name: true } },
+          },
+          orderBy: { dueAt: "asc" },
+          take: 10,
         },
-        orderBy: { dueAt: "asc" },
-        take: 10,
-      },
-      notes: {
-        select: { id: true, title: true, plainText: true, createdAt: true, pinned: true },
-        orderBy: [{ pinned: "desc" }, { createdAt: "desc" }],
-        take: 6,
-      },
-      activities: {
-        select: {
-          id: true, type: true, title: true, body: true, direction: true, durationMin: true,
-          occurredAt: true,
-          company: { select: { id: true, name: true } },
-          deal: { select: { id: true, name: true } },
-          project: { select: { id: true, name: true } },
+        notes: {
+          select: { id: true, title: true, plainText: true, createdAt: true, pinned: true },
+          orderBy: [{ pinned: "desc" }, { createdAt: "desc" }],
+          take: 6,
         },
-        orderBy: { occurredAt: "desc" },
-        take: 30,
+        activities: {
+          select: {
+            id: true, type: true, title: true, body: true, direction: true, durationMin: true,
+            occurredAt: true,
+            company: { select: { id: true, name: true } },
+            deal: { select: { id: true, name: true } },
+            project: { select: { id: true, name: true } },
+          },
+          orderBy: { occurredAt: "desc" },
+          take: 30,
+        },
+        emails: {
+          select: { id: true, subject: true, snippet: true, sentAt: true, direction: true, needsReply: true },
+          orderBy: { sentAt: "desc" },
+          take: 6,
+        },
+        events: {
+          select: { id: true, title: true, startAt: true, meetingUrl: true },
+          orderBy: { startAt: "desc" },
+          take: 6,
+        },
+        files: {
+          select: { id: true, name: true, mimeType: true, sizeBytes: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+          take: 6,
+        },
       },
-      emails: {
-        select: { id: true, subject: true, snippet: true, sentAt: true, direction: true, needsReply: true },
-        orderBy: { sentAt: "desc" },
-        take: 6,
-      },
-      events: {
-        select: { id: true, title: true, startAt: true, meetingUrl: true },
-        orderBy: { startAt: "desc" },
-        take: 6,
-      },
-      files: {
-        select: { id: true, name: true, mimeType: true, sizeBytes: true, createdAt: true },
-        orderBy: { createdAt: "desc" },
-        take: 6,
-      },
-    },
+    });
+
+    if (!contact) return null;
+
+    const [scored] = await attachScores(
+      [{ ...contact, _count: { deals: contact.deals.length } }],
+      new Date(),
+    );
+    const tags = await tagsForEntities("contact", [id]);
+
+    return { ...contact, relationship: scored!.relationship, tags: tags.get(id) ?? [] };
   });
-
-  if (!contact) return null;
-
-  const [scored] = await attachScores(
-    [{ ...contact, _count: { deals: contact.deals.length } }],
-    new Date(),
-  );
-  const tags = await tagsForEntities("contact", [id]);
-
-  return { ...contact, relationship: scored!.relationship, tags: tags.get(id) ?? [] };
 }
 
 function endOfDay(date: Date) {

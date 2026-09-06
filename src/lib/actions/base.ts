@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { ZodError } from "zod";
 
 import { db } from "@/lib/db";
+import { withTenantContext } from "@/lib/tenant-db";
 import { AppError, serializeError, toAppError, type SerializedError } from "@/lib/errors";
 import { currentRequestId, log, newRequestId, runWithContext } from "@/lib/logger";
 import { clientAddress, enforceRateLimit, type PolicyName } from "@/lib/rate-limit";
@@ -84,7 +85,14 @@ export async function action<T>(
     if (options.rateLimit) {
       await enforceRateLimit(options.rateLimit, { user: actor.identity.id });
     }
-    return handler(actor);
+    // Context spans every workspace this actor belongs to. These ids come from
+    // the actor's own memberships, never from the request, so RLS is scoped to
+    // exactly what the application already authorised — a second layer over the
+    // same decision, not a different one.
+    return withTenantContext(
+      { workspaceIds: actor.memberships.map((m) => m.id), userId: actor.identity.id },
+      () => handler(actor),
+    );
   });
 }
 
@@ -105,7 +113,11 @@ export async function workspaceAction<T>(
         workspace: actor.workspaceId,
       });
     }
-    return handler(actor);
+    // Exactly one workspace — membership and permission were proven above.
+    return withTenantContext(
+      { workspaceIds: [actor.workspaceId], userId: actor.identity.id },
+      () => handler(actor),
+    );
   });
 }
 
@@ -133,7 +145,10 @@ export async function recordAction<T>(
     if (options.rateLimit) {
       await enforceRateLimit(options.rateLimit, { user: actor.identity.id, workspace: workspaceId });
     }
-    return handler({ actor, workspaceId, recordId });
+    return withTenantContext(
+      { workspaceIds: [workspaceId], userId: actor.identity.id },
+      () => handler({ actor, workspaceId, recordId }),
+    );
   });
 }
 

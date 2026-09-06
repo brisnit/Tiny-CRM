@@ -1,8 +1,10 @@
 import "server-only";
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { PrismaPg } from "@prisma/adapter-pg";
 
-import { PrismaClient } from "@/generated/prisma/client";
+import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import { env, isPostgres, isProduction } from "@/lib/env";
 
 /**
@@ -50,11 +52,90 @@ const globalForPrisma = globalThis as unknown as {
   prisma?: ReturnType<typeof createClient>;
 };
 
-export const db = globalForPrisma.prisma ?? createClient();
+const baseClient = globalForPrisma.prisma ?? createClient();
 
 // Next.js hot-reloads server modules in dev; without this every save would open
 // another connection pool until the database refuses new ones.
-if (!isProduction) globalForPrisma.prisma = db;
+if (!isProduction) globalForPrisma.prisma = baseClient;
+
+/**
+ * The ambient tenant transaction, if this unit of work is inside one.
+ *
+ * ---------------------------------------------------------------------------
+ * Why this exists
+ * ---------------------------------------------------------------------------
+ *
+ * Row-level security only filters a statement that carries tenant context, and
+ * that context is `SET LOCAL` — scoped to one transaction on one connection.
+ * So every workspace-scoped query has to run inside the transaction that set
+ * it. There are 362 `db.<model>` call sites across 75 files; requiring each one
+ * to receive and thread a transaction client is a refactor with 362 chances to
+ * miss one, and a missed one fails *open* on SQLite and *closed* on PostgreSQL
+ * — the second being how a deployment discovers the problem in production.
+ *
+ * Instead `db` is a proxy. Inside `withTenantContext` it resolves to that
+ * transaction's client, so existing call sites participate in RLS without
+ * changing; outside one it resolves to the base client, which under RLS can
+ * only reach the tables deliberately left out of it. The decision is made in
+ * one place and cannot be forgotten at a call site.
+ *
+ * AsyncLocalStorage is per async execution context, so two concurrent requests
+ * on the same pooled connection cannot observe each other's store — which is
+ * the property the pooled-isolation test asserts directly.
+ */
+const tenantTx = new AsyncLocalStorage<Prisma.TransactionClient>();
+
+/** Runs `fn` with `tx` as the ambient client for every `db` access inside it. */
+export function runWithTenantClient<T>(tx: Prisma.TransactionClient, fn: () => Promise<T>): Promise<T> {
+  return tenantTx.run(tx, fn);
+}
+
+/** The ambient tenant transaction client, or null outside one. */
+export function currentTenantClient(): Prisma.TransactionClient | null {
+  return tenantTx.getStore() ?? null;
+}
+
+type Client = typeof baseClient;
+
+export const db: Client = new Proxy(baseClient, {
+  get(target, property, receiver) {
+    const tx = tenantTx.getStore();
+    if (!tx) return Reflect.get(target, property, receiver);
+
+    // Prisma forbids a nested $transaction. Inside a tenant transaction the
+    // atomicity the caller wants is already provided by the outer one, so an
+    // interactive $transaction is flattened onto it. Flattening rather than
+    // failing keeps existing helpers — including base.ts's `transaction()` —
+    // working unchanged, and the semantics still hold: a throw rolls the whole
+    // outer transaction back.
+    if (property === "$transaction") {
+      return (arg: unknown) => {
+        if (typeof arg === "function") return (arg as (c: unknown) => unknown)(tx);
+        // The array form is a batch; run them in order on this transaction.
+        if (Array.isArray(arg)) return Promise.all(arg);
+        return Reflect.get(target, property, receiver);
+      };
+    }
+
+    // $connect/$disconnect/$on belong to the pool, not to a transaction.
+    if (typeof property === "string" && /^\$(connect|disconnect|on|use|extends)$/.test(property)) {
+      return Reflect.get(target, property, receiver);
+    }
+
+    if (property in tx) return (tx as unknown as Record<string | symbol, unknown>)[property];
+    return Reflect.get(target, property, receiver);
+  },
+}) as Client;
+
+/**
+ * The pool itself, bypassing any ambient tenant transaction.
+ *
+ * Only for work that must not join the caller's transaction: startup checks,
+ * the health endpoint, and `withTenantContext` opening the transaction in the
+ * first place. Never for workspace-scoped data — `tests/security/rls.test.ts`
+ * asserts the list of files allowed to import it.
+ */
+export const rootDb = baseClient;
 
 /**
  * A case-insensitive "contains" filter that behaves the same on both engines.

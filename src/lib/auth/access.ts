@@ -10,6 +10,7 @@ import {
 import { can, canAssignRole, type Permission, type Role } from "@/lib/auth/permissions";
 import { assertVerified, verificationEnforced } from "@/lib/auth/verification";
 import { mailConfigured } from "@/lib/mail";
+import { withTenantContext } from "@/lib/tenant-db";
 
 /**
  * Server-side authorization.
@@ -157,11 +158,26 @@ export async function requireRecordAccess<T extends ScopedModel>(
       ? { id, project: { workspaceId: { in: allowed } } }
       : { id, workspaceId: { in: allowed } };
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const record = await (db as any)[model].findFirst({
-    where,
-    select: model === "milestone" ? { id: true, project: { select: { workspaceId: true } } } : { id: true, workspaceId: true },
-  });
+  // The lookup that resolves a record to its workspace runs in a context of
+  // every workspace this actor belongs to. That is the chicken-and-egg of
+  // record-scoped authorisation — the workspace is not known until the record is
+  // read — resolved without weakening anything: the row is visible only if it
+  // lives in one of the caller's own workspaces, so RLS is now *making* the
+  // authorisation decision rather than being consulted after it. Outside a
+  // context this read returned nothing for every record, and every member
+  // operation failed with "not found".
+  const record = await withTenantContext(
+    { workspaceIds: allowed, userId: actor.identity.id },
+    async () =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (db as any)[model].findFirst({
+        where,
+        select:
+          model === "milestone"
+            ? { id: true, project: { select: { workspaceId: true } } }
+            : { id: true, workspaceId: true },
+      }),
+  );
 
   if (!record) throw noSuchRecord();
 

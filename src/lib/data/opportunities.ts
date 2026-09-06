@@ -2,6 +2,7 @@ import "server-only";
 
 import { contains, db, isSearchable } from "@/lib/db";
 import { tagsForEntities } from "@/lib/actions/tags";
+import { withTenantContext } from "@/lib/tenant-db";
 
 /**
  * Opportunity fit and go / no-go.
@@ -149,124 +150,136 @@ export async function listOpportunities(
   workspaceIds: string[],
   filters: { q?: string; type?: string; submissionStatus?: string; view?: string },
 ) {
-  const now = new Date();
-  const where: Record<string, unknown> = { workspaceId: { in: workspaceIds }, archivedAt: null };
+  // Read paths do not go through the action wrapper, so this is where they join
+  // the RLS model. The ids are the caller's already-authorised scope
+  // (resolveReadScope), so this narrows the database to exactly what the
+  // application had already decided the request may see.
+  return withTenantContext({ workspaceIds }, async () => {
+    const now = new Date();
+    const where: Record<string, unknown> = { workspaceId: { in: workspaceIds }, archivedAt: null };
 
-  if (isSearchable(filters.q)) {
-    where.OR = [
-      { name: contains(filters.q) },
-      { solicitationNumber: contains(filters.q) },
-      { requirements: contains(filters.q) },
-    ];
-  }
-  if (filters.type) where.type = filters.type;
-  if (filters.submissionStatus) where.submissionStatus = filters.submissionStatus;
-  if (filters.view === "open") where.submissionStatus = { notIn: ["won", "lost", "no_bid"] };
-  if (filters.view === "due_soon") {
-    where.submissionStatus = { notIn: ["won", "lost", "no_bid"] };
-    where.deadlineAt = { gte: now, lte: new Date(now.getTime() + 30 * 86_400_000) };
-  }
-  if (filters.view === "submitted") where.submissionStatus = "submitted";
+    if (isSearchable(filters.q)) {
+      where.OR = [
+        { name: contains(filters.q) },
+        { solicitationNumber: contains(filters.q) },
+        { requirements: contains(filters.q) },
+      ];
+    }
+    if (filters.type) where.type = filters.type;
+    if (filters.submissionStatus) where.submissionStatus = filters.submissionStatus;
+    if (filters.view === "open") where.submissionStatus = { notIn: ["won", "lost", "no_bid"] };
+    if (filters.view === "due_soon") {
+      where.submissionStatus = { notIn: ["won", "lost", "no_bid"] };
+      where.deadlineAt = { gte: now, lte: new Date(now.getTime() + 30 * 86_400_000) };
+    }
+    if (filters.view === "submitted") where.submissionStatus = "submitted";
 
-  const rows = await db.opportunity.findMany({
-    where,
-    select: {
-      id: true, name: true, type: true, source: true, solicitationNumber: true,
-      deadlineAt: true, questionsDeadlineAt: true, proposalDeadlineAt: true,
-      estimatedValueCents: true, fitScore: true, strategicValue: true, competitionLevel: true,
-      submissionStatus: true, requirements: true, workspaceId: true,
-      company: { select: { id: true, name: true } },
-      project: { select: { id: true, name: true } },
-      stage: { select: { id: true, name: true, color: true } },
-      _count: { select: { contacts: true, tasks: true } },
-    },
-    orderBy: { deadlineAt: "asc" },
-    take: 200,
+    const rows = await db.opportunity.findMany({
+      where,
+      select: {
+        id: true, name: true, type: true, source: true, solicitationNumber: true,
+        deadlineAt: true, questionsDeadlineAt: true, proposalDeadlineAt: true,
+        estimatedValueCents: true, fitScore: true, strategicValue: true, competitionLevel: true,
+        submissionStatus: true, requirements: true, workspaceId: true,
+        company: { select: { id: true, name: true } },
+        project: { select: { id: true, name: true } },
+        stage: { select: { id: true, name: true, color: true } },
+        _count: { select: { contacts: true, tasks: true } },
+      },
+      orderBy: { deadlineAt: "asc" },
+      take: 200,
+    });
+
+    const tags = await tagsForEntities("opportunity", rows.map((r) => r.id));
+
+    return rows.map((o) => ({
+      ...o,
+      tags: tags.get(o.id) ?? [],
+      assessment: assessOpportunity({
+        fitScore: o.fitScore,
+        strategicValue: o.strategicValue,
+        competitionLevel: o.competitionLevel,
+        estimatedValueCents: o.estimatedValueCents,
+        deadlineAt: o.deadlineAt,
+        submissionStatus: o.submissionStatus,
+        requirements: o.requirements,
+        contactCount: o._count.contacts,
+      }),
+    }));
   });
-
-  const tags = await tagsForEntities("opportunity", rows.map((r) => r.id));
-
-  return rows.map((o) => ({
-    ...o,
-    tags: tags.get(o.id) ?? [],
-    assessment: assessOpportunity({
-      fitScore: o.fitScore,
-      strategicValue: o.strategicValue,
-      competitionLevel: o.competitionLevel,
-      estimatedValueCents: o.estimatedValueCents,
-      deadlineAt: o.deadlineAt,
-      submissionStatus: o.submissionStatus,
-      requirements: o.requirements,
-      contactCount: o._count.contacts,
-    }),
-  }));
 }
 
 export async function getOpportunity(workspaceIds: string[], id: string) {
-  const opportunity = await db.opportunity.findFirst({
-    where: { id, workspaceId: { in: workspaceIds } },
-    include: {
-      workspace: { select: { id: true, name: true } },
-      company: { select: { id: true, name: true, industry: true } },
-      project: { select: { id: true, name: true } },
-      owner: { select: { id: true, name: true } },
-      pipeline: {
-        select: {
-          id: true, name: true,
-          stages: {
-            select: { id: true, name: true, order: true, probability: true, color: true, kind: true },
-            orderBy: { order: "asc" },
+  // Read paths do not go through the action wrapper, so this is where they join
+  // the RLS model. The ids are the caller's already-authorised scope
+  // (resolveReadScope), so this narrows the database to exactly what the
+  // application had already decided the request may see.
+  return withTenantContext({ workspaceIds }, async () => {
+    const opportunity = await db.opportunity.findFirst({
+      where: { id, workspaceId: { in: workspaceIds } },
+      include: {
+        workspace: { select: { id: true, name: true } },
+        company: { select: { id: true, name: true, industry: true } },
+        project: { select: { id: true, name: true } },
+        owner: { select: { id: true, name: true } },
+        pipeline: {
+          select: {
+            id: true, name: true,
+            stages: {
+              select: { id: true, name: true, order: true, probability: true, color: true, kind: true },
+              orderBy: { order: "asc" },
+            },
           },
         },
-      },
-      stage: { select: { id: true, name: true, color: true } },
-      contacts: { include: { contact: { select: { id: true, fullName: true, jobTitle: true, email: true } } } },
-      tasks: {
-        select: { id: true, title: true, dueAt: true, priority: true, status: true },
-        orderBy: [{ status: "asc" }, { dueAt: "asc" }],
-      },
-      notes: {
-        select: { id: true, title: true, plainText: true, createdAt: true },
-        orderBy: { createdAt: "desc" },
-        take: 6,
-      },
-      activities: {
-        select: {
-          id: true, type: true, title: true, body: true, direction: true, occurredAt: true,
-          contact: { select: { id: true, fullName: true } },
-          company: { select: { id: true, name: true } },
+        stage: { select: { id: true, name: true, color: true } },
+        contacts: { include: { contact: { select: { id: true, fullName: true, jobTitle: true, email: true } } } },
+        tasks: {
+          select: { id: true, title: true, dueAt: true, priority: true, status: true },
+          orderBy: [{ status: "asc" }, { dueAt: "asc" }],
         },
-        orderBy: { occurredAt: "desc" },
-        take: 25,
+        notes: {
+          select: { id: true, title: true, plainText: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+          take: 6,
+        },
+        activities: {
+          select: {
+            id: true, type: true, title: true, body: true, direction: true, occurredAt: true,
+            contact: { select: { id: true, fullName: true } },
+            company: { select: { id: true, name: true } },
+          },
+          orderBy: { occurredAt: "desc" },
+          take: 25,
+        },
+        files: {
+          select: { id: true, name: true, sizeBytes: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+        },
       },
-      files: {
-        select: { id: true, name: true, sizeBytes: true, createdAt: true },
-        orderBy: { createdAt: "desc" },
-      },
-    },
+    });
+
+    if (!opportunity) return null;
+    const tags = await tagsForEntities("opportunity", [id]);
+
+    return {
+      ...opportunity,
+      tags: tags.get(id) ?? [],
+      assessment: assessOpportunity({
+        fitScore: opportunity.fitScore,
+        strategicValue: opportunity.strategicValue,
+        competitionLevel: opportunity.competitionLevel,
+        estimatedValueCents: opportunity.estimatedValueCents,
+        deadlineAt: opportunity.deadlineAt,
+        submissionStatus: opportunity.submissionStatus,
+        requirements: opportunity.requirements,
+        contactCount: opportunity.contacts.length,
+      }),
+      // Requirements are stored as a block of text; split it so each one can be
+      // shown as a checkable line item.
+      requirementList: (opportunity.requirements ?? "")
+        .split("\n")
+        .map((line) => line.replace(/^[•\-*]\s*/, "").trim())
+        .filter(Boolean),
+    };
   });
-
-  if (!opportunity) return null;
-  const tags = await tagsForEntities("opportunity", [id]);
-
-  return {
-    ...opportunity,
-    tags: tags.get(id) ?? [],
-    assessment: assessOpportunity({
-      fitScore: opportunity.fitScore,
-      strategicValue: opportunity.strategicValue,
-      competitionLevel: opportunity.competitionLevel,
-      estimatedValueCents: opportunity.estimatedValueCents,
-      deadlineAt: opportunity.deadlineAt,
-      submissionStatus: opportunity.submissionStatus,
-      requirements: opportunity.requirements,
-      contactCount: opportunity.contacts.length,
-    }),
-    // Requirements are stored as a block of text; split it so each one can be
-    // shown as a checkable line item.
-    requirementList: (opportunity.requirements ?? "")
-      .split("\n")
-      .map((line) => line.replace(/^[•\-*]\s*/, "").trim())
-      .filter(Boolean),
-  };
 }

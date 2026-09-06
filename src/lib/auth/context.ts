@@ -9,6 +9,7 @@ import { isProduction, isTest } from "@/lib/env";
 import { enrichContext } from "@/lib/logger";
 import { unauthorized } from "@/lib/errors";
 import type { Role } from "@/lib/auth/permissions";
+import { withTenantContext } from "@/lib/tenant-db";
 
 /**
  * The authentication boundary.
@@ -154,14 +155,21 @@ export async function requireIdentity(): Promise<Identity> {
  * all tenant isolation: no code path may widen access beyond this list.
  */
 export const getMemberships = cache(async (userId: string): Promise<WorkspaceMembership[]> => {
-  const rows = await db.workspaceMember.findMany({
-    where: { userId, workspace: { archivedAt: null } },
-    select: {
-      role: true,
-      workspace: { select: { id: true, name: true, slug: true, color: true, createdAt: true } },
-    },
-    orderBy: { workspace: { createdAt: "asc" } },
-  });
+  // This is the lookup that produces the tenant context, so it cannot run
+  // inside one. It runs with the user in context and no workspaces, which is
+  // exactly what prisma/postgres/005_identity_policies.sql permits: a user may
+  // always read their own membership rows and the workspaces those rows name.
+  // Nothing else is visible from here.
+  const rows = await withTenantContext({ workspaceIds: [], userId }, async () =>
+    db.workspaceMember.findMany({
+      where: { userId, workspace: { archivedAt: null } },
+      select: {
+        role: true,
+        workspace: { select: { id: true, name: true, slug: true, color: true, createdAt: true } },
+      },
+        orderBy: { workspace: { createdAt: "asc" } },
+    }),
+  );
 
   return rows.map((row) => ({
     id: row.workspace.id,

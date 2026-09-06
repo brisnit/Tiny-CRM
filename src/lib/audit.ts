@@ -1,6 +1,7 @@
 import "server-only";
 
-import { db } from "@/lib/db";
+import { db, currentTenantClient } from "@/lib/db";
+import { withTenantContext } from "@/lib/tenant-db";
 import { currentContext, log, redact } from "@/lib/logger";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -58,8 +59,18 @@ export async function recordAudit(
   const client = tx ?? db;
   const context = currentContext();
 
-  try {
-    await client.auditLog.create({
+  // Audit rows are gated by the same RLS as everything else: a row naming a
+  // workspace needs that workspace in context, and a row with no workspace needs
+  // `app.user_id` to match its actor. Sign-up, sign-in and password reset all
+  // happen before any workspace exists and outside the action wrapper, so they
+  // ran with no context at all and every one of those writes was refused —
+  // silently, because the failure is swallowed below. That is why AuditLog was
+  // empty on the first hosted deployment.
+  //
+  // Establishing a user-only context here is exactly the claim the row makes:
+  // "this happened to this user". It grants no workspace visibility.
+  const write = async () => {
+    await (tx ?? db).auditLog.create({
       data: {
         workspaceId: entry.workspaceId ?? null,
         actorId: entry.actorId ?? null,
@@ -76,7 +87,27 @@ export async function recordAudit(
         requestId: context?.requestId ?? null,
       },
     });
+  };
+
+  try {
+    // Inside an action the ambient context already covers this row; reuse it so
+    // the audit entry commits or rolls back with the change it describes.
+    if (tx || currentTenantClient()) {
+      await write();
+    } else if (entry.workspaceId) {
+      await withTenantContext({ workspaceIds: [entry.workspaceId], userId: entry.actorId ?? null }, write);
+    } else {
+      await withTenantContext({ workspaceIds: [], userId: entry.actorId ?? null }, write);
+    }
   } catch (error) {
+    // Best-effort by design, and that judgement is now explicit rather than
+    // incidental: see docs/RLS.md — "which audit events are best-effort".
+    // An audit write must never be the reason a user cannot sign in or a
+    // customer cannot save a record. It is logged at error level so a failing
+    // audit trail is loud in monitoring even though it is not fatal to the
+    // request, and the security-critical events that must not be lost are
+    // written inside the caller's transaction via `tx`, where a failure does
+    // roll the whole operation back.
     log.error("audit write failed", { action: entry.action, error: String(error) });
   }
 }

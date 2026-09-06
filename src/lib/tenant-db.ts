@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db } from "@/lib/db";
+import { rootDb, runWithTenantClient, currentTenantClient } from "@/lib/db";
 import { AppError } from "@/lib/errors";
 import { isPostgres } from "@/lib/env";
 import { log } from "@/lib/logger";
@@ -74,7 +74,16 @@ export async function withTenantContext<T>(
     });
   }
 
-  return db.$transaction(
+  // Already inside a tenant transaction: reuse it rather than opening a nested
+  // one, which Prisma forbids. Narrowing is not attempted — the outer context
+  // was established from the same actor's memberships, and re-issuing SET LOCAL
+  // would silently widen or narrow the surrounding unit of work.
+  const existing = currentTenantClient();
+  if (existing) return fn(existing);
+
+  // rootDb, not db: `db` resolves to the ambient transaction, and this is the
+  // call that creates one.
+  return rootDb.$transaction(
     async (tx) => {
       if (isPostgres) {
         // `set_config(name, value, true)` is SET LOCAL, as a function, so the
@@ -82,7 +91,10 @@ export async function withTenantContext<T>(
         await tx.$executeRaw`SELECT set_config('app.workspace_ids', ${ids.join(",")}, true)`;
         await tx.$executeRaw`SELECT set_config('app.user_id', ${context.userId ?? ""}, true)`;
       }
-      return fn(tx);
+      // Bind the transaction as the ambient client so every `db.<model>` call
+      // inside `fn` — including in code that never heard of tenant context —
+      // runs on this transaction, and therefore under this RLS context.
+      return runWithTenantClient(tx, () => fn(tx));
     },
     { timeout: options.timeout ?? 15_000 },
   );
@@ -105,7 +117,9 @@ export async function withoutTenantContext<T>(
   fn: (tx: Prisma.TransactionClient) => Promise<T>,
 ): Promise<T> {
   log.debug("running without tenant context", { reason });
-  return db.$transaction(async (tx) => fn(tx));
+  const existing = currentTenantClient();
+  if (existing) return fn(existing);
+  return rootDb.$transaction(async (tx) => runWithTenantClient(tx, () => fn(tx)));
 }
 
 /**
@@ -137,7 +151,7 @@ export async function rlsStatus(): Promise<{
     };
   }
 
-  const [identity] = await db.$queryRaw<
+  const [identity] = await rootDb.$queryRaw<
     { role: string; is_superuser: boolean; owns_tables: boolean }[]
   >`
     SELECT
@@ -151,7 +165,7 @@ export async function rlsStatus(): Promise<{
       ) AS owns_tables
   `;
 
-  const [counts] = await db.$queryRaw<{ forced: bigint }[]>`
+  const [counts] = await rootDb.$queryRaw<{ forced: bigint }[]>`
     SELECT count(*) AS forced
     FROM pg_class
     WHERE relnamespace = 'public'::regnamespace
