@@ -1,5 +1,6 @@
 import { PrismaClient } from "../../src/generated/prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { PrismaPg } from "@prisma/adapter-pg";
 import bcrypt from "bcryptjs";
 
 /**
@@ -11,7 +12,18 @@ import bcrypt from "bcryptjs";
  */
 
 const url = process.env.DATABASE_URL ?? "file:./test.db";
-export const db = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url }) });
+
+// The adapter is chosen from the connection string, exactly as src/lib/db.ts
+// does, so the same suite runs unchanged against SQLite locally and PostgreSQL
+// in CI. A test helper hard-wired to one engine would quietly make the
+// portability job meaningless.
+const isPostgres = /^postgres(ql)?:\/\//.test(url);
+
+export const db = new PrismaClient({
+  adapter: isPostgres
+    ? new PrismaPg({ connectionString: url })
+    : new PrismaBetterSqlite3({ url }),
+});
 
 export type Tenant = {
   workspaceId: string;

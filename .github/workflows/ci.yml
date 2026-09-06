@@ -1,0 +1,210 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Never the real one. The production gate refuses this value in production,
+  # which is itself covered by tests/security/config.test.ts.
+  AUTH_SECRET: ci-secret-that-is-at-least-32-characters-long
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Static checks. Fast, and the ones most likely to fail, so they run first.
+  # ---------------------------------------------------------------------------
+  static:
+    name: Types, lint, schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Prisma schema is valid
+        run: npx prisma validate
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+
+  # ---------------------------------------------------------------------------
+  # The full suite on SQLite: unit, security, integration.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test suite (SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run every suite
+        run: npm test
+
+  # ---------------------------------------------------------------------------
+  # The same suite against real PostgreSQL.
+  #
+  # This is the job that actually proves portability. The schema is written to
+  # be provider-agnostic (no native enums, no scalar lists, no Json columns,
+  # money as integer cents), but "should port" is not the same as "ported" —
+  # `contains` alone behaves differently on the two engines. Running the whole
+  # suite on Postgres is what turns the claim into evidence.
+  # ---------------------------------------------------------------------------
+  test-postgres:
+    name: Test suite (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: tinycrm
+          POSTGRES_PASSWORD: tinycrm
+          POSTGRES_DB: tinycrm_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://tinycrm:tinycrm@localhost:5432/tinycrm_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Switch the datasource to PostgreSQL
+        run: node scripts/use-provider.mjs postgresql
+
+      - name: Generate the client
+        run: npx prisma generate
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Apply the PostgreSQL-only search indexes
+        run: psql "$DATABASE_URL" -f prisma/postgres/001_search_indexes.sql
+
+      - name: Seed demo data
+        run: npm run db:seed
+
+      - name: Run every suite against PostgreSQL
+        run: npx tsx --test --test-concurrency=1 "tests/**/*.test.ts"
+        env:
+          NODE_ENV: test
+          NODE_OPTIONS: --require ./scripts/allow-server-modules.cjs
+
+      - name: Confirm the schema is unchanged by the provider switch
+        run: |
+          node scripts/use-provider.mjs sqlite
+          git diff --exit-code prisma/schema.prisma
+
+  # ---------------------------------------------------------------------------
+  # Production build, and the configuration gate that guards a real deploy.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Production build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build
+        run: npm run build
+        env:
+          DATABASE_URL: file:./build.db
+
+      - name: The production gate accepts a correct configuration
+        run: npm run check:config
+        env:
+          NODE_ENV: production
+          AUTH_SECRET: a-real-production-secret-of-sufficient-length-here
+          DATABASE_URL: postgresql://user:pw@db.internal:5432/tinycrm
+          APP_URL: https://app.example.com
+
+      - name: The production gate refuses an unsafe configuration
+        run: |
+          if npm run check:config; then
+            echo "::error::The production gate accepted a SQLite database and demo auth."
+            exit 1
+          fi
+        env:
+          NODE_ENV: production
+          AUTH_SECRET: a-real-production-secret-of-sufficient-length-here
+          DATABASE_URL: file:./dev.db
+          APP_URL: http://localhost:3000
+          ALLOW_DEMO_AUTH: "true"
+
+  # ---------------------------------------------------------------------------
+  # Performance budgets. A change that turns an indexed scan into a table scan
+  # fails here rather than being discovered by a customer.
+  # ---------------------------------------------------------------------------
+  performance:
+    name: Performance budgets
+    runs-on: ubuntu-latest
+    # Seeding 25k contacts and 100k activities takes a couple of minutes; it
+    # does not need to gate every push.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'performance')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Query budgets at 25k contacts / 100k activities
+        run: npm run test:perf
+
+  # ---------------------------------------------------------------------------
+  # Supply chain. Advisories are reported rather than silently ignored, but do
+  # not block a merge on a transitive advisory in a build-time-only CLI — see
+  # docs/SECURITY.md, "Dependencies".
+  # ---------------------------------------------------------------------------
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Fail on a critical advisory in runtime dependencies
+        run: npm audit --omit=dev --audit-level=critical
+      - name: Report everything else
+        run: npm audit || true
+
+  # ---------------------------------------------------------------------------
+  # Secret scan. A committed credential is the one mistake that cannot be fixed
+  # by a revert.
+  # ---------------------------------------------------------------------------
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan the full history
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

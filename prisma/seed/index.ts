@@ -1,3 +1,7 @@
+// Imported first, for its side effect: it exits before the Prisma client is
+// constructed if this does not look like a development database.
+import "./guard";
+
 import bcrypt from "bcryptjs";
 
 import { db, NOW, daysAgo, daysAhead, dollars, randInt } from "./helpers";
