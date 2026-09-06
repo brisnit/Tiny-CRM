@@ -3,193 +3,378 @@
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { assertWithinLimit } from "@/lib/auth/session";
 import {
-  action, emptyToNull, logActivity, optionalDate, optionalMoney,
-  requireWorkspace, revalidateRecord,
+  assertVersion, audit, emitEvent, guard, logActivity, pickDefined, readWorkspaceId,
+  recordAction, revalidateRecord, transaction, workspaceAction, type ActionResult,
 } from "@/lib/actions/base";
+import { assertRelations } from "@/lib/auth/access";
+import { assertWithinLimit } from "@/lib/entitlements";
+import { assertConfirmation } from "@/lib/destructive";
+import { diffFields } from "@/lib/audit";
+import { dispatchSoon } from "@/lib/events";
 import { PROJECT_PRIORITY, PROJECT_TYPE } from "@/lib/enums";
-import { runAutomations } from "@/lib/automations";
+import { LIMITS } from "@/lib/validation/limits";
+import {
+  zId, zOptionalDate, zOptionalId, zOptionalMoney, zOptionalText, zShortText, zVersion,
+} from "@/lib/validation/common";
 
 const projectSchema = z.object({
-  workspaceId: z.string().min(1, "Choose a workspace"),
-  name: z.string().trim().min(1, "Give the project a name"),
-  companyId: emptyToNull,
-  statusId: emptyToNull,
+  workspaceId: zId,
+  name: zShortText.min(1, "Give the project a name"),
+  companyId: zOptionalId,
+  statusId: zOptionalId,
   type: z.enum(PROJECT_TYPE.values).nullish(),
-  description: emptyToNull,
+  description: zOptionalText(LIMITS.longText),
   priority: z.enum(PROJECT_PRIORITY.values).default("medium"),
-  startDate: optionalDate,
-  targetDate: optionalDate,
-  budgetCents: optionalMoney,
-  revenueCents: optionalMoney,
-  nextAction: emptyToNull,
-  nextActionDueAt: optionalDate,
+  startDate: zOptionalDate,
+  targetDate: zOptionalDate,
+  budgetCents: zOptionalMoney,
+  revenueCents: zOptionalMoney,
+  nextAction: zOptionalText(LIMITS.mediumText),
+  nextActionDueAt: zOptionalDate,
 });
 
-export async function createProject(input: z.input<typeof projectSchema>) {
-  return action(async (user) => {
-    const data = projectSchema.parse(input);
-    await requireWorkspace(user.id, data.workspaceId);
-    await assertWithinLimit(user, "projects");
+const projectUpdateSchema = projectSchema
+  .omit({ workspaceId: true })
+  .partial()
+  .extend({ version: zVersion });
 
-    // Fall back to the workspace's default status so a project always has a home.
-    const statusId =
-      data.statusId ??
-      (
-        await db.projectStatus.findFirst({
-          where: { workspaceId: data.workspaceId, isDefault: true },
+type ProjectInput = z.input<typeof projectSchema>;
+type ProjectUpdate = z.input<typeof projectUpdateSchema>;
+
+const EDITABLE = [
+  "name", "companyId", "statusId", "type", "description", "priority",
+  "startDate", "targetDate", "budgetCents", "revenueCents", "nextAction", "nextActionDueAt",
+] as const;
+
+export async function createProject(
+  input: ProjectInput,
+): Promise<ActionResult<{ id: string; name: string }>> {
+  return guard(() =>
+    workspaceAction(
+      { workspaceId: readWorkspaceId(input), permission: "record:create", rateLimit: "mutation" },
+      async (actor) => {
+        const data = projectSchema.parse(input);
+        const workspaceId = actor.workspaceId;
+
+        await assertWithinLimit(actor, "projects");
+        await assertRelations(workspaceId, {
+          companyId: data.companyId ?? null,
+          statusId: data.statusId ?? null,
+        });
+
+        // Fall back to the workspace's default status so a project always has a
+        // home — and the fallback is looked up *within* the workspace.
+        const statusId =
+          data.statusId ??
+          (
+            await db.projectStatus.findFirst({
+              where: { workspaceId, isDefault: true },
+              select: { id: true },
+            })
+          )?.id ??
+          null;
+
+        const project = await transaction(async (tx) => {
+          const created = await tx.project.create({
+            data: {
+              workspaceId,
+              name: data.name,
+              companyId: data.companyId ?? null,
+              statusId,
+              type: data.type ?? null,
+              description: data.description ?? null,
+              priority: data.priority,
+              startDate: data.startDate ?? null,
+              targetDate: data.targetDate ?? null,
+              budgetCents: data.budgetCents ?? null,
+              revenueCents: data.revenueCents ?? null,
+              nextAction: data.nextAction ?? null,
+              nextActionDueAt: data.nextActionDueAt ?? null,
+              ownerId: actor.identity.id,
+              lastActivityAt: new Date(),
+            },
+            select: { id: true, name: true, companyId: true },
+          });
+
+          await logActivity(
+            {
+              workspaceId, actorId: actor.identity.id, type: "created",
+              title: `Started ${created.name}`, projectId: created.id, companyId: created.companyId,
+            },
+            tx,
+          );
+
+          await emitEvent(
+            {
+              workspaceId, name: "project.created", entityType: "project",
+              entityId: created.id, actorId: actor.identity.id, payload: { name: created.name },
+            },
+            tx,
+          );
+
+          return created;
+        });
+
+        await audit(actor, {
+          workspaceId, action: "record.created", entityType: "project",
+          entityId: project.id, summary: `Created project ${project.name}`,
+        });
+
+        dispatchSoon();
+        revalidateRecord(["/projects", "/companies"]);
+        return { id: project.id, name: project.name };
+      },
+    ),
+  );
+}
+
+export async function updateProject(
+  id: string,
+  input: ProjectUpdate,
+): Promise<ActionResult<{ id: string; name: string }>> {
+  return guard(() =>
+    recordAction("project", id, { permission: "record:edit", rateLimit: "mutation" },
+      async ({ actor, workspaceId, recordId }) => {
+        const data = projectUpdateSchema.parse(input);
+
+        const existing = await db.project.findFirstOrThrow({
+          where: { id: recordId, workspaceId },
+          select: {
+            name: true, statusId: true, companyId: true, priority: true,
+            targetDate: true, budgetCents: true, revenueCents: true,
+          },
+        });
+
+        await assertRelations(workspaceId, {
+          companyId: data.companyId ?? null,
+          statusId: data.statusId ?? null,
+        });
+
+        const statusChanged = Boolean(data.statusId && data.statusId !== existing.statusId);
+        const status = statusChanged
+          ? await db.projectStatus.findFirstOrThrow({
+              where: { id: data.statusId!, workspaceId },
+              select: { name: true, key: true, isTerminal: true },
+            })
+          : null;
+
+        const patch = pickDefined(data, EDITABLE);
+
+        const result = await db.project.updateMany({
+          where: {
+            id: recordId, workspaceId,
+            ...(data.version !== undefined ? { version: data.version } : {}),
+          },
+          data: {
+            ...patch,
+            ...(status
+              ? { completedAt: status.isTerminal ? new Date() : null, lastActivityAt: new Date() }
+              : {}),
+            version: { increment: 1 },
+          },
+        });
+        assertVersion(result.count, data.version, "project");
+
+        if (status) {
+          await transaction(async (tx) => {
+            await logActivity(
+              {
+                workspaceId, actorId: actor.identity.id, type: "project_update",
+                title: `Status changed to ${status.name}`,
+                meta: { statusKey: status.key }, projectId: recordId,
+              },
+              tx,
+            );
+            await emitEvent(
+              {
+                workspaceId, name: "project.status.changed", entityType: "project",
+                entityId: recordId, actorId: actor.identity.id,
+                payload: {
+                  statusKey: status.key, statusName: status.name,
+                  projectName: data.name ?? existing.name,
+                },
+              },
+              tx,
+            );
+          });
+        }
+
+        const changes = diffFields(existing, patch, [
+          "name", "statusId", "companyId", "priority", "targetDate", "budgetCents", "revenueCents",
+        ]);
+        if (Object.keys(changes).length > 0) {
+          await audit(actor, {
+            workspaceId, action: "record.updated", entityType: "project", entityId: recordId,
+            summary: `Updated project ${data.name ?? existing.name}`, metadata: changes,
+          });
+        }
+
+        dispatchSoon();
+        revalidateRecord(["/projects", `/projects/${recordId}`]);
+        return { id: recordId, name: data.name ?? existing.name };
+      },
+    ),
+  );
+}
+
+export async function archiveProject(id: string): Promise<ActionResult<{ id: string }>> {
+  return guard(() =>
+    recordAction("project", id, { permission: "record:archive", rateLimit: "mutation" },
+      async ({ actor, workspaceId, recordId }) => {
+        await db.project.updateMany({
+          where: { id: recordId, workspaceId },
+          data: { archivedAt: new Date(), version: { increment: 1 } },
+        });
+        await audit(actor, {
+          workspaceId, action: "record.archived", entityType: "project",
+          entityId: recordId, summary: "Archived a project",
+        });
+        revalidateRecord(["/projects", `/projects/${recordId}`]);
+        return { id: recordId };
+      },
+    ),
+  );
+}
+
+export async function restoreProject(id: string): Promise<ActionResult<{ id: string }>> {
+  return guard(() =>
+    recordAction("project", id, { permission: "record:archive", rateLimit: "mutation" },
+      async ({ actor, workspaceId, recordId }) => {
+        await db.project.updateMany({
+          where: { id: recordId, workspaceId },
+          data: { archivedAt: null, version: { increment: 1 } },
+        });
+        await audit(actor, {
+          workspaceId, action: "record.restored", entityType: "project",
+          entityId: recordId, summary: "Restored a project",
+        });
+        revalidateRecord(["/projects", `/projects/${recordId}`]);
+        return { id: recordId };
+      },
+    ),
+  );
+}
+
+export async function deleteProject(
+  id: string,
+  confirmation: string,
+): Promise<ActionResult<{ id: string }>> {
+  return guard(() =>
+    recordAction("project", id, { permission: "record:delete", rateLimit: "mutation" },
+      async ({ actor, workspaceId, recordId }) => {
+        const project = await db.project.findFirstOrThrow({
+          where: { id: recordId, workspaceId },
+          select: { name: true },
+        });
+        assertConfirmation(confirmation, project.name);
+
+        await db.project.delete({ where: { id: recordId } });
+
+        await audit(actor, {
+          workspaceId, action: "record.deleted", entityType: "project", entityId: recordId,
+          summary: `Permanently deleted project ${project.name}`,
+        });
+
+        revalidateRecord(["/projects"]);
+        return { id: recordId };
+      },
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Milestones
+//
+// A milestone has no workspaceId of its own; it is reached through its project,
+// which is why "milestone" is a scoped model with a join in requireRecordAccess.
+// ---------------------------------------------------------------------------
+
+export async function toggleMilestone(id: string): Promise<ActionResult<{ id: string; done: boolean }>> {
+  return guard(() =>
+    recordAction("milestone", id, { permission: "record:edit", rateLimit: "mutation" },
+      async ({ actor, workspaceId, recordId }) => {
+        const milestone = await db.milestone.findFirstOrThrow({
+          where: { id: recordId, project: { workspaceId } },
+          select: { completedAt: true, name: true, projectId: true },
+        });
+
+        const done = Boolean(milestone.completedAt);
+        await db.milestone.updateMany({
+          where: { id: recordId, project: { workspaceId } },
+          data: { completedAt: done ? null : new Date() },
+        });
+
+        if (!done) {
+          await logActivity({
+            workspaceId, actorId: actor.identity.id, type: "project_update",
+            title: `Milestone complete: ${milestone.name}`, projectId: milestone.projectId,
+          });
+        }
+
+        revalidateRecord([`/projects/${milestone.projectId}`, "/projects"]);
+        return { id: recordId, done: !done };
+      },
+    ),
+  );
+}
+
+export async function addMilestone(
+  projectId: string,
+  name: string,
+  dueDate?: string | null,
+): Promise<ActionResult<{ id: string }>> {
+  return guard(() =>
+    recordAction("project", projectId, { permission: "record:edit", rateLimit: "mutation" },
+      async ({ workspaceId, recordId }) => {
+        const parsed = z
+          .object({ name: zShortText.min(1, "Give the milestone a name"), dueDate: zOptionalDate })
+          .parse({ name, dueDate });
+
+        const count = await db.milestone.count({ where: { projectId: recordId } });
+        const milestone = await db.milestone.create({
+          data: {
+            projectId: recordId,
+            name: parsed.name,
+            order: count,
+            dueDate: parsed.dueDate ?? null,
+          },
           select: { id: true },
-        })
-      )?.id ??
-      null;
+        });
 
-    const project = await db.project.create({
-      data: {
-        workspaceId: data.workspaceId,
-        name: data.name,
-        companyId: data.companyId,
-        statusId,
-        type: data.type,
-        description: data.description,
-        priority: data.priority,
-        startDate: data.startDate,
-        targetDate: data.targetDate,
-        budgetCents: data.budgetCents,
-        revenueCents: data.revenueCents,
-        nextAction: data.nextAction,
-        nextActionDueAt: data.nextActionDueAt,
-        ownerId: user.id,
-        lastActivityAt: new Date(),
+        void workspaceId;
+        revalidateRecord([`/projects/${recordId}`]);
+        return { id: milestone.id };
       },
-    });
-
-    await logActivity({
-      workspaceId: data.workspaceId,
-      actorId: user.id,
-      type: "created",
-      title: `Started ${project.name}`,
-      projectId: project.id,
-      companyId: project.companyId,
-    });
-
-    revalidateRecord(["/projects", "/companies"]);
-    return { id: project.id, name: project.name };
-  });
+    ),
+  );
 }
 
-export async function updateProject(id: string, input: Partial<z.input<typeof projectSchema>>) {
-  return action(async (user) => {
-    const existing = await db.project.findUniqueOrThrow({
-      where: { id },
-      select: { workspaceId: true, statusId: true, name: true },
-    });
-    await requireWorkspace(user.id, existing.workspaceId);
+export async function setProjectNextAction(
+  id: string,
+  nextAction: string,
+  dueAt?: string | null,
+): Promise<ActionResult<{ id: string }>> {
+  return guard(() =>
+    recordAction("project", id, { permission: "record:edit", rateLimit: "mutation" },
+      async ({ workspaceId, recordId }) => {
+        const parsed = z
+          .object({ nextAction: zOptionalText(LIMITS.mediumText), dueAt: zOptionalDate })
+          .parse({ nextAction, dueAt });
 
-    const data = projectSchema.partial().parse({ ...input, workspaceId: existing.workspaceId });
-    const statusChanged = Boolean(data.statusId && data.statusId !== existing.statusId);
+        await db.project.updateMany({
+          where: { id: recordId, workspaceId },
+          data: {
+            nextAction: parsed.nextAction ?? null,
+            nextActionDueAt: parsed.dueAt ?? null,
+            lastActivityAt: new Date(),
+            version: { increment: 1 },
+          },
+        });
 
-    const project = await db.project.update({ where: { id }, data });
-
-    if (statusChanged) {
-      const status = await db.projectStatus.findUnique({
-        where: { id: data.statusId! },
-        select: { name: true, key: true, isTerminal: true },
-      });
-      await db.project.update({
-        where: { id },
-        data: { completedAt: status?.isTerminal ? new Date() : null, lastActivityAt: new Date() },
-      });
-      await logActivity({
-        workspaceId: existing.workspaceId,
-        actorId: user.id,
-        type: "project_update",
-        title: `Status changed to ${status?.name ?? "Updated"}`,
-        meta: { statusKey: status?.key },
-        projectId: id,
-      });
-      await runAutomations({
-        workspaceId: existing.workspaceId,
-        userId: user.id,
-        trigger: "project_status_changed",
-        entityType: "project",
-        entityId: id,
-        context: { statusKey: status?.key ?? "", statusName: status?.name ?? "", projectName: project.name },
-      });
-    }
-
-    revalidateRecord(["/projects", `/projects/${id}`]);
-    return { id: project.id, name: project.name };
-  });
-}
-
-export async function deleteProject(id: string) {
-  return action(async (user) => {
-    const existing = await db.project.findUniqueOrThrow({ where: { id }, select: { workspaceId: true } });
-    await requireWorkspace(user.id, existing.workspaceId, "manager");
-    await db.project.delete({ where: { id } });
-    revalidateRecord(["/projects"]);
-    return { id };
-  });
-}
-
-export async function toggleMilestone(id: string) {
-  return action(async (user) => {
-    const milestone = await db.milestone.findUniqueOrThrow({
-      where: { id },
-      select: { completedAt: true, name: true, project: { select: { id: true, workspaceId: true } } },
-    });
-    await requireWorkspace(user.id, milestone.project.workspaceId);
-
-    const done = Boolean(milestone.completedAt);
-    await db.milestone.update({ where: { id }, data: { completedAt: done ? null : new Date() } });
-
-    if (!done) {
-      await logActivity({
-        workspaceId: milestone.project.workspaceId,
-        actorId: user.id,
-        type: "project_update",
-        title: `Milestone complete: ${milestone.name}`,
-        projectId: milestone.project.id,
-      });
-    }
-
-    revalidateRecord([`/projects/${milestone.project.id}`, "/projects"]);
-    return { id, done: !done };
-  });
-}
-
-export async function addMilestone(projectId: string, name: string, dueDate?: string | null) {
-  return action(async (user) => {
-    const project = await db.project.findUniqueOrThrow({
-      where: { id: projectId },
-      select: { workspaceId: true },
-    });
-    await requireWorkspace(user.id, project.workspaceId);
-
-    const count = await db.milestone.count({ where: { projectId } });
-    const milestone = await db.milestone.create({
-      data: { projectId, name: name.trim(), order: count, dueDate: dueDate ? new Date(dueDate) : null },
-    });
-
-    revalidateRecord([`/projects/${projectId}`]);
-    return { id: milestone.id };
-  });
-}
-
-export async function setProjectNextAction(id: string, nextAction: string, dueAt?: string | null) {
-  return action(async (user) => {
-    const existing = await db.project.findUniqueOrThrow({ where: { id }, select: { workspaceId: true } });
-    await requireWorkspace(user.id, existing.workspaceId);
-    await db.project.update({
-      where: { id },
-      data: {
-        nextAction: nextAction.trim() || null,
-        nextActionDueAt: dueAt ? new Date(dueAt) : null,
-        lastActivityAt: new Date(),
+        revalidateRecord([`/projects/${recordId}`, "/projects", "/home"]);
+        return { id: recordId };
       },
-    });
-    revalidateRecord([`/projects/${id}`, "/projects", "/home"]);
-    return { id };
-  });
+    ),
+  );
 }

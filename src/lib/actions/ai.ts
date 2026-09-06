@@ -1,53 +1,139 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { action } from "@/lib/actions/base";
-import { getUserWorkspaces, resolveScope, requireWorkspace } from "@/lib/auth/session";
+import {
+  action, audit, emitEvent, guard, readWorkspaceId, recordAction, revalidateRecord,
+  transaction, workspaceAction, type ActionResult, type Actor,
+} from "@/lib/actions/base";
+import { assertRelations, requireActor, resolveReadScope } from "@/lib/auth/access";
 import { getDailyBrief, getRecordSummary } from "@/lib/ai/summaries";
 import { classifyText, type Proposal } from "@/lib/ai/classification";
 import { findRecommendations } from "@/lib/ai/recommendations";
+import { sanitizeHtml } from "@/lib/sanitize";
 import { setTags } from "@/lib/actions/tags";
+import { LIMITS } from "@/lib/validation/limits";
+import { zId, zOptionalId, zOptionalInt, zScope, zShortText } from "@/lib/validation/common";
+import type { ContextScope } from "@/lib/ai/context";
 
-async function scopeFor(userId: string, scopeParam?: string | null) {
-  const { workspaceIds } = await resolveScope(userId, scopeParam);
-  const workspaces = await getUserWorkspaces(userId);
-  return { workspaceIds, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) };
+/**
+ * Tiny AI's write surface.
+ *
+ * Two rules govern this file, and both are structural rather than prompted:
+ *
+ *  1. **The model never determines authorization.** Scope is resolved from the
+ *     session *before* any generation, and retrieval is filtered to it. A model
+ *     cannot ask for a workspace, and no prompt it produces is used to select
+ *     records.
+ *  2. **The model never writes.** `classifyText` returns *proposals*. Nothing
+ *     reaches the database until a user ticks them and calls `applyProposals`,
+ *     which then re-validates every id the proposal carries against the target
+ *     workspace — because a proposal's payload has passed through model output
+ *     and is therefore untrusted input, not a capability.
+ */
+
+/** Builds the retrieval scope from the session. Never from a request or a model. */
+async function scopeFor(scopeParam?: string | null): Promise<{ actor: Actor; scope: ContextScope }> {
+  const actor = await requireActor();
+  const { workspaceIds, memberships } = await resolveReadScope(zScope.parse(scopeParam ?? null));
+  return {
+    actor,
+    scope: {
+      workspaceIds,
+      workspaceNames: new Map(memberships.map((m) => [m.id, m.name])),
+    },
+  };
 }
 
 export async function refreshDailyBrief(scopeParam?: string | null) {
-  return action(async (user) => {
-    const scope = await scopeFor(user.id, scopeParam);
-    const brief = await getDailyBrief(user, scope, { force: true });
-    revalidatePath("/home");
-    return brief;
-  });
+  return guard(() =>
+    action(
+      async () => {
+        const { actor, scope } = await scopeFor(scopeParam);
+        const brief = await getDailyBrief(actor, scope, { force: true });
+        revalidatePath("/home");
+        return brief;
+      },
+      { rateLimit: "ai" },
+    ),
+  );
 }
 
+/**
+ * Summarises one record.
+ *
+ * The workspace comes from the record, via `recordAction` — the caller does not
+ * get to say which workspace the summary is "for". Retrieval is then restricted
+ * to that single workspace rather than the caller's whole scope, so a summary
+ * cannot pull in context from a workspace the record does not belong to.
+ */
 export async function refreshRecordSummary(
   entityType: "contact" | "company" | "deal" | "project" | "opportunity",
   entityId: string,
-  workspaceId: string,
 ) {
-  return action(async (user) => {
-    await requireWorkspace(user.id, workspaceId);
-    const scope = await scopeFor(user.id, "all");
-    const summary = await getRecordSummary(user, scope, entityType, entityId, {
-      force: true,
-      workspaceId,
-    });
-    revalidatePath(`/${entityType}s/${entityId}`);
-    return summary;
+  return guard(async () => {
+    const kind = z
+      .enum(["contact", "company", "deal", "project", "opportunity"])
+      .parse(entityType);
+
+    return recordAction(kind, entityId, { permission: "ai:use", rateLimit: "ai" },
+      async ({ actor, workspaceId, recordId }) => {
+        const scope: ContextScope = {
+          workspaceIds: [workspaceId],
+          workspaceNames: new Map(
+            actor.memberships.filter((m) => m.id === workspaceId).map((m) => [m.id, m.name]),
+          ),
+        };
+
+        const summary = await getRecordSummary(actor, scope, kind, recordId, {
+          force: true,
+          workspaceId,
+        });
+        revalidatePath(`/${kind}s/${recordId}`);
+        return summary;
+      },
+    );
   });
 }
 
 export async function analyzeText(text: string, scopeParam?: string | null) {
-  return action(async (user) => {
-    const { workspaceIds } = await resolveScope(user.id, scopeParam);
-    return classifyText(user, workspaceIds, text);
-  });
+  return guard(() =>
+    action(
+      async () => {
+        const input = z.string().trim().min(1, "Paste something first").max(LIMITS.maxAiQuestion).parse(text);
+        const { actor, scope } = await scopeFor(scopeParam);
+        return classifyText(actor, scope.workspaceIds, input);
+      },
+      { rateLimit: "ai" },
+    ),
+  );
 }
+
+/**
+ * A proposal, as it arrives back from the browser.
+ *
+ * This is re-parsed rather than trusted: the round trip through the client means
+ * the payload the user approves is not necessarily the payload the model
+ * produced, and neither is trusted anyway.
+ */
+const proposalSchema = z.object({
+  id: zShortText.max(40),
+  kind: z.enum(["company", "contact", "opportunity", "task", "note", "date"]),
+  label: zShortText,
+  detail: zShortText.optional(),
+  matchId: zOptionalId,
+  matchLabel: zShortText.optional(),
+  isNew: z.boolean().optional(),
+  payload: z.record(z.string().max(60), z.unknown()).default({}),
+});
+
+const applySchema = z.object({
+  workspaceId: zId,
+  proposals: z.array(proposalSchema).max(LIMITS.maxAiProposals),
+  sourceText: z.string().max(LIMITS.maxAiQuestion),
+});
 
 /**
  * Applies the proposals the user ticked. Nothing is written until this runs —
@@ -57,164 +143,284 @@ export async function applyProposals(
   workspaceId: string,
   proposals: Proposal[],
   sourceText: string,
-) {
-  return action(async (user) => {
-    await requireWorkspace(user.id, workspaceId);
+): Promise<ActionResult<{ created: { type: string; id: string; label: string }[]; noteId: string }>> {
+  return guard(() =>
+    workspaceAction(
+      { workspaceId, permission: "ai:apply", rateLimit: "mutation" },
+      async (actor) => {
+        const data = applySchema.parse({ workspaceId, proposals, sourceText });
+        const scopedWorkspaceId = actor.workspaceId;
 
-    const created: { type: string; id: string; label: string }[] = [];
-    const companyIds = new Map<string, string>();
-    let contactId: string | null = null;
+        // Every `matchId` the batch wants to link to must already belong to this
+        // workspace. Without this a proposal could name any id in the database
+        // and have it attached to the caller's own records.
+        for (const proposal of data.proposals) {
+          if (!proposal.matchId) continue;
+          const model =
+            proposal.kind === "company" ? "companyId"
+            : proposal.kind === "contact" ? "contactId"
+            : proposal.kind === "opportunity" ? "opportunityId"
+            : proposal.kind === "task" ? "taskId"
+            : proposal.kind === "note" ? "noteId"
+            : null;
+          if (!model) continue;
+          await assertRelations(scopedWorkspaceId, { [model]: proposal.matchId });
+        }
 
-    for (const p of proposals.filter((x) => x.kind === "company")) {
-      if (p.matchId) {
-        companyIds.set(String(p.payload.name).toLowerCase(), p.matchId);
-        continue;
-      }
-      const company = await db.company.create({
-        data: { workspaceId, name: String(p.payload.name), ownerId: user.id, relationshipStatus: "prospect" },
-      });
-      companyIds.set(company.name.toLowerCase(), company.id);
-      created.push({ type: "company", id: company.id, label: company.name });
-    }
+        const created: { type: string; id: string; label: string }[] = [];
+        const companyIds = new Map<string, string>();
+        let contactId: string | null = null;
 
-    for (const p of proposals.filter((x) => x.kind === "contact")) {
-      if (p.matchId) {
-        contactId ??= p.matchId;
-        continue;
-      }
-      const companyName = p.payload.companyName ? String(p.payload.companyName).toLowerCase() : null;
-      const linkedCompany = (p.payload.companyId as string | null) ?? (companyName ? companyIds.get(companyName) ?? null : null);
-      const firstName = String(p.payload.firstName ?? p.payload.name ?? "").trim();
-      const lastName = String(p.payload.lastName ?? "").trim();
+        const result = await transaction(async (tx) => {
+          for (const p of data.proposals.filter((x) => x.kind === "company")) {
+            if (p.matchId) {
+              companyIds.set(String(p.payload.name ?? "").toLowerCase(), p.matchId);
+              continue;
+            }
+            const company = await tx.company.create({
+              data: {
+                workspaceId: scopedWorkspaceId,
+                name: text(p.payload.name, "Untitled company"),
+                ownerId: actor.identity.id,
+                relationshipStatus: "prospect",
+              },
+              select: { id: true, name: true },
+            });
+            companyIds.set(company.name.toLowerCase(), company.id);
+            created.push({ type: "company", id: company.id, label: company.name });
+          }
 
-      const contact = await db.contact.create({
-        data: {
-          workspaceId,
-          firstName: firstName || String(p.payload.name),
-          lastName,
-          fullName: `${firstName} ${lastName}`.trim(),
-          jobTitle: (p.payload.jobTitle as string | null) ?? null,
-          companyId: linkedCompany,
-          ownerId: user.id,
-          relationshipType: "prospect",
-          lastContactedAt: new Date(),
-        },
-      });
-      contactId ??= contact.id;
-      created.push({ type: "contact", id: contact.id, label: contact.fullName });
-    }
+          for (const p of data.proposals.filter((x) => x.kind === "contact")) {
+            if (p.matchId) {
+              contactId ??= p.matchId;
+              continue;
+            }
+            const companyName = p.payload.companyName
+              ? String(p.payload.companyName).toLowerCase()
+              : null;
+            const linkedCompany = companyName ? companyIds.get(companyName) ?? null : null;
+            const firstName = text(p.payload.firstName ?? p.payload.name, "Unnamed");
+            const lastName = text(p.payload.lastName, "");
 
-    for (const p of proposals.filter((x) => x.kind === "opportunity")) {
-      const pipeline = await db.pipeline.findFirst({
-        where: { workspaceId, kind: "opportunity" },
-        select: { id: true, stages: { select: { id: true }, orderBy: { order: "asc" }, take: 1 } },
-      });
-      const opportunity = await db.opportunity.create({
-        data: {
-          workspaceId,
-          name: String(p.payload.name),
-          ownerId: user.id,
-          pipelineId: pipeline?.id ?? null,
-          stageId: pipeline?.stages[0]?.id ?? null,
-          estimatedValueCents: p.payload.value ? Math.round(Number(p.payload.value) * 100) : null,
-          companyId: companyIds.values().next().value ?? null,
-        },
-      });
-      created.push({ type: "opportunity", id: opportunity.id, label: opportunity.name });
-    }
+            const contact = await tx.contact.create({
+              data: {
+                workspaceId: scopedWorkspaceId,
+                firstName,
+                lastName,
+                fullName: `${firstName} ${lastName}`.trim(),
+                jobTitle: optionalText(p.payload.jobTitle),
+                companyId: linkedCompany,
+                ownerId: actor.identity.id,
+                relationshipType: "prospect",
+                lastContactedAt: new Date(),
+              },
+              select: { id: true, fullName: true },
+            });
+            contactId ??= contact.id;
+            created.push({ type: "contact", id: contact.id, label: contact.fullName });
+          }
 
-    for (const p of proposals.filter((x) => x.kind === "task")) {
-      const dueInDays = p.payload.dueInDays as number | null;
-      const task = await db.task.create({
-        data: {
-          workspaceId,
-          title: String(p.payload.title),
-          ownerId: user.id,
-          priority: String(p.payload.priority ?? "medium"),
-          dueAt: dueInDays === null || dueInDays === undefined ? null : daysFromNow(dueInDays),
-          contactId,
-          companyId: companyIds.values().next().value ?? null,
-        },
-      });
-      created.push({ type: "task", id: task.id, label: task.title });
-    }
+          const firstCompanyId = companyIds.values().next().value ?? null;
 
-    // The original text is kept as a note so the CRM records where these
-    // records came from.
-    const note = await db.note.create({
-      data: {
-        workspaceId,
-        title: "Captured with Tiny AI",
-        body: `<p>${escapeHtml(sourceText).replace(/\n/g, "<br>")}</p>`,
-        plainText: sourceText,
-        authorId: user.id,
-        contactId,
-        companyId: companyIds.values().next().value ?? null,
+          for (const p of data.proposals.filter((x) => x.kind === "opportunity")) {
+            const pipeline = await tx.pipeline.findFirst({
+              where: { workspaceId: scopedWorkspaceId, kind: "opportunity" },
+              select: { id: true, stages: { select: { id: true }, orderBy: { order: "asc" }, take: 1 } },
+            });
+            const opportunity = await tx.opportunity.create({
+              data: {
+                workspaceId: scopedWorkspaceId,
+                name: text(p.payload.name, "Untitled opportunity"),
+                ownerId: actor.identity.id,
+                pipelineId: pipeline?.id ?? null,
+                stageId: pipeline?.stages[0]?.id ?? null,
+                estimatedValueCents: money(p.payload.value),
+                companyId: firstCompanyId,
+              },
+              select: { id: true, name: true },
+            });
+            created.push({ type: "opportunity", id: opportunity.id, label: opportunity.name });
+          }
+
+          for (const p of data.proposals.filter((x) => x.kind === "task")) {
+            const dueInDays = zOptionalInt(0, 3_650).parse(p.payload.dueInDays ?? null);
+            const priority = ["low", "medium", "high", "urgent"].includes(String(p.payload.priority))
+              ? String(p.payload.priority)
+              : "medium";
+            const task = await tx.task.create({
+              data: {
+                workspaceId: scopedWorkspaceId,
+                title: text(p.payload.title, "Follow up"),
+                ownerId: actor.identity.id,
+                priority,
+                dueAt: dueInDays == null ? null : daysFromNow(dueInDays),
+                contactId,
+                companyId: firstCompanyId,
+              },
+              select: { id: true, title: true },
+            });
+            created.push({ type: "task", id: task.id, label: task.title });
+          }
+
+          // The original text is kept as a note so the CRM records where these
+          // records came from. It is sanitised like any other user content.
+          const body = sanitizeHtml(`<p>${escapeHtml(data.sourceText).replace(/\n/g, "<br>")}</p>`);
+          const note = await tx.note.create({
+            data: {
+              workspaceId: scopedWorkspaceId,
+              title: "Captured with Tiny AI",
+              body,
+              plainText: data.sourceText,
+              authorId: actor.identity.id,
+              contactId,
+              companyId: firstCompanyId,
+            },
+            select: { id: true },
+          });
+
+          await emitEvent(
+            {
+              workspaceId: scopedWorkspaceId,
+              name: "ai.suggestion.applied",
+              entityType: "note",
+              entityId: note.id,
+              actorId: actor.identity.id,
+              payload: { created: created.length },
+            },
+            tx,
+          );
+
+          return { created, noteId: note.id };
+        });
+
+        await setTags(scopedWorkspaceId, "note", result.noteId, ["AI"]);
+
+        await audit(actor, {
+          workspaceId: scopedWorkspaceId,
+          action: "ai.suggestion_applied",
+          entityType: "note",
+          entityId: result.noteId,
+          summary: `Applied ${result.created.length} AI proposals`,
+          metadata: { kinds: result.created.map((c) => c.type) },
+        });
+
+        revalidateRecord(["/contacts", "/companies", "/opportunities", "/tasks", "/notes"]);
+        return result;
       },
-    });
-    await setTags(workspaceId, "note", note.id, ["AI"]);
-
-    revalidatePath("/", "layout");
-    return { created, noteId: note.id };
-  });
+    ),
+  );
 }
 
 export async function getCleanupSuggestions(scopeParam?: string | null) {
-  return action(async (user) => {
-    const scope = await scopeFor(user.id, scopeParam);
-    return findRecommendations(scope);
-  });
+  return guard(() =>
+    action(
+      async () => {
+        const { scope } = await scopeFor(scopeParam);
+        return findRecommendations(scope);
+      },
+      { rateLimit: "ai" },
+    ),
+  );
 }
 
-/** One-click resolution for a hygiene finding. */
+const recommendationSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("link_company"),
+    contactId: zId,
+    companyId: zId,
+  }),
+  z.object({
+    type: z.literal("create_task"),
+    title: zShortText.min(1),
+    dueInDays: zOptionalInt(0, 365),
+    contactId: zOptionalId,
+    dealId: zOptionalId,
+    projectId: zOptionalId,
+  }),
+]);
+
+/**
+ * One-click resolution for a hygiene finding.
+ *
+ * The prototype's version had no ownership check at all and took its target ids
+ * straight from the payload, so it could rewrite any contact in the database
+ * (F-02). Every id is now proven to belong to the caller's workspace before it
+ * is used, and the write itself is workspace-filtered as well.
+ */
 export async function applyRecommendation(
   type: string,
   payload: Record<string, unknown>,
   workspaceId: string,
-) {
-  return action(async (user) => {
-    await requireWorkspace(user.id, workspaceId);
+): Promise<ActionResult<{ applied: boolean }>> {
+  return guard(() =>
+    workspaceAction(
+      { workspaceId, permission: "ai:apply", rateLimit: "mutation" },
+      async (actor) => {
+        const data = recommendationSchema.parse({ type, ...payload });
+        const scopedWorkspaceId = actor.workspaceId;
 
-    switch (type) {
-      case "link_company": {
-        await db.contact.update({
-          where: { id: String(payload.contactId) },
-          data: { companyId: String(payload.companyId) },
-        });
-        break;
-      }
-      case "create_task": {
-        await db.task.create({
-          data: {
-            workspaceId,
-            title: String(payload.title),
-            ownerId: user.id,
-            priority: "high",
-            dueAt: daysFromNow(Number(payload.dueInDays ?? 1)),
-            contactId: (payload.contactId as string) ?? null,
-            dealId: (payload.dealId as string) ?? null,
-            projectId: (payload.projectId as string) ?? null,
-          },
-        });
-        break;
-      }
-      default:
-        return { applied: false };
-    }
+        switch (data.type) {
+          case "link_company": {
+            await assertRelations(scopedWorkspaceId, {
+              contactId: data.contactId,
+              companyId: data.companyId,
+            });
+            const result = await db.contact.updateMany({
+              where: { id: data.contactId, workspaceId: scopedWorkspaceId },
+              data: { companyId: data.companyId, version: { increment: 1 } },
+            });
+            if (result.count === 0) return { applied: false };
+            break;
+          }
+          case "create_task": {
+            await assertRelations(scopedWorkspaceId, {
+              contactId: data.contactId ?? null,
+              dealId: data.dealId ?? null,
+              projectId: data.projectId ?? null,
+            });
+            await db.task.create({
+              data: {
+                workspaceId: scopedWorkspaceId,
+                title: data.title,
+                ownerId: actor.identity.id,
+                priority: "high",
+                dueAt: daysFromNow(data.dueInDays ?? 1),
+                contactId: data.contactId ?? null,
+                dealId: data.dealId ?? null,
+                projectId: data.projectId ?? null,
+              },
+            });
+            break;
+          }
+        }
 
-    revalidatePath("/", "layout");
-    return { applied: true };
-  });
+        await audit(actor, {
+          workspaceId: scopedWorkspaceId,
+          action: "ai.suggestion_applied",
+          summary: `Applied cleanup suggestion: ${data.type}`,
+          metadata: { type: data.type },
+        });
+
+        revalidateRecord(["/contacts", "/tasks", "/home"]);
+        return { applied: true };
+      },
+    ),
+  );
 }
 
-export async function dismissInsight(id: string) {
-  return action(async (user) => {
-    const insight = await db.aiInsight.findUniqueOrThrow({ where: { id }, select: { workspaceId: true } });
-    await requireWorkspace(user.id, insight.workspaceId);
-    await db.aiInsight.update({ where: { id }, data: { status: "dismissed" } });
-    revalidatePath("/home");
-    return { id };
-  });
+export async function dismissInsight(id: string): Promise<ActionResult<{ id: string }>> {
+  return guard(() =>
+    recordAction("aiInsight", id, { permission: "ai:use", rateLimit: "mutation" },
+      async ({ workspaceId, recordId }) => {
+        await db.aiInsight.updateMany({
+          where: { id: recordId, workspaceId },
+          data: { status: "dismissed" },
+        });
+        revalidatePath("/home");
+        return { id: recordId };
+      },
+    ),
+  );
 }
 
 function daysFromNow(days: number) {
@@ -224,9 +430,26 @@ function daysFromNow(days: number) {
   return d;
 }
 
-function escapeHtml(text: string) {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+/** Coerces model-produced payload values into bounded strings. */
+function text(value: unknown, fallback: string): string {
+  const raw = typeof value === "string" ? value.trim() : "";
+  return (raw || fallback).slice(0, 200);
 }
+
+function optionalText(value: unknown): string | null {
+  const raw = typeof value === "string" ? value.trim() : "";
+  return raw ? raw.slice(0, 200) : null;
+}
+
+function money(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return null;
+  const cents = Math.round(n * 100);
+  return Math.abs(cents) > LIMITS.maxMoneyCents ? null : cents;
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+export type { Proposal };

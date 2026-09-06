@@ -3,137 +3,328 @@
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { assertWithinLimit } from "@/lib/auth/session";
 import {
-  action, emptyToNull, logActivity, optionalDate, requireWorkspace, revalidateRecord,
+  assertVersion, audit, emitEvent, guard, logActivity, pickDefined, readWorkspaceId,
+  recordAction, revalidateRecord, transaction, workspaceAction, type ActionResult,
 } from "@/lib/actions/base";
+import { assertRelations } from "@/lib/auth/access";
+import { assertWithinLimit } from "@/lib/entitlements";
+import { assertConfirmation } from "@/lib/destructive";
+import { dispatchSoon } from "@/lib/events";
 import { RECURRENCE, TASK_PRIORITY, TASK_STATUS } from "@/lib/enums";
+import { LIMITS } from "@/lib/validation/limits";
+import {
+  zId, zIdBatch, zOptionalDate, zOptionalId, zOptionalText, zShortText, zVersion,
+} from "@/lib/validation/common";
 
 const taskSchema = z.object({
-  workspaceId: z.string().min(1, "Choose a workspace"),
-  title: z.string().trim().min(1, "What needs doing?"),
-  description: emptyToNull,
-  dueAt: optionalDate,
+  workspaceId: zId,
+  title: zShortText.min(1, "What needs doing?"),
+  description: zOptionalText(LIMITS.longText),
+  dueAt: zOptionalDate,
   priority: z.enum(TASK_PRIORITY.values).default("medium"),
   status: z.enum(TASK_STATUS.values).default("open"),
   recurrence: z.enum(RECURRENCE.values).default("none"),
-  reminderAt: optionalDate,
-  contactId: emptyToNull,
-  companyId: emptyToNull,
-  dealId: emptyToNull,
-  projectId: emptyToNull,
-  opportunityId: emptyToNull,
+  reminderAt: zOptionalDate,
+  contactId: zOptionalId,
+  companyId: zOptionalId,
+  dealId: zOptionalId,
+  projectId: zOptionalId,
+  opportunityId: zOptionalId,
 });
 
-export async function createTask(input: z.input<typeof taskSchema>) {
-  return action(async (user) => {
-    const data = taskSchema.parse(input);
-    await requireWorkspace(user.id, data.workspaceId);
-    await assertWithinLimit(user, "tasks");
+const taskUpdateSchema = taskSchema
+  .omit({ workspaceId: true })
+  .partial()
+  .extend({ version: zVersion });
 
-    const task = await db.task.create({
-      data: { ...data, ownerId: user.id },
-    });
+type TaskInput = z.input<typeof taskSchema>;
+type TaskUpdate = z.input<typeof taskUpdateSchema>;
 
-    revalidateRecord(["/tasks", "/projects", "/deals"]);
-    return { id: task.id, title: task.title };
-  });
+const RELATIONS = ["contactId", "companyId", "dealId", "projectId", "opportunityId"] as const;
+
+const EDITABLE = [
+  "title", "description", "dueAt", "priority", "status", "recurrence", "reminderAt",
+  ...RELATIONS,
+] as const;
+
+export async function createTask(
+  input: TaskInput,
+): Promise<ActionResult<{ id: string; title: string }>> {
+  return guard(() =>
+    workspaceAction(
+      { workspaceId: readWorkspaceId(input), permission: "record:create", rateLimit: "mutation" },
+      async (actor) => {
+        const data = taskSchema.parse(input);
+        const workspaceId = actor.workspaceId;
+
+        await assertWithinLimit(actor, "tasks");
+        await assertRelations(workspaceId, relationsOf(data));
+
+        const task = await transaction(async (tx) => {
+          const created = await tx.task.create({
+            data: {
+              workspaceId,
+              title: data.title,
+              description: data.description ?? null,
+              dueAt: data.dueAt ?? null,
+              priority: data.priority,
+              status: data.status,
+              recurrence: data.recurrence,
+              reminderAt: data.reminderAt ?? null,
+              contactId: data.contactId ?? null,
+              companyId: data.companyId ?? null,
+              dealId: data.dealId ?? null,
+              projectId: data.projectId ?? null,
+              opportunityId: data.opportunityId ?? null,
+              ownerId: actor.identity.id,
+            },
+            select: { id: true, title: true },
+          });
+
+          await emitEvent(
+            {
+              workspaceId, name: "task.created", entityType: "task",
+              entityId: created.id, actorId: actor.identity.id, payload: { title: created.title },
+            },
+            tx,
+          );
+
+          return created;
+        });
+
+        dispatchSoon();
+        revalidateRecord(["/tasks", "/projects", "/deals"]);
+        return { id: task.id, title: task.title };
+      },
+    ),
+  );
 }
 
-export async function updateTask(id: string, input: Partial<z.input<typeof taskSchema>>) {
-  return action(async (user) => {
-    const existing = await db.task.findUniqueOrThrow({
-      where: { id },
-      select: { workspaceId: true, status: true },
-    });
-    await requireWorkspace(user.id, existing.workspaceId);
+export async function updateTask(
+  id: string,
+  input: TaskUpdate,
+): Promise<ActionResult<{ id: string; title: string }>> {
+  return guard(() =>
+    recordAction("task", id, { permission: "record:edit", rateLimit: "mutation" },
+      async ({ workspaceId, recordId }) => {
+        const data = taskUpdateSchema.parse(input);
 
-    const data = taskSchema.partial().parse({ ...input, workspaceId: existing.workspaceId });
-    const becomingDone = data.status === "done" && existing.status !== "done";
+        const existing = await db.task.findFirstOrThrow({
+          where: { id: recordId, workspaceId },
+          select: { status: true, title: true },
+        });
 
-    const task = await db.task.update({
-      where: { id },
-      data: {
-        ...data,
-        completedAt: becomingDone ? new Date() : data.status && data.status !== "done" ? null : undefined,
+        await assertRelations(workspaceId, relationsOf(data));
+
+        const becomingDone = data.status === "done" && existing.status !== "done";
+        const patch = pickDefined(data, EDITABLE);
+
+        const result = await db.task.updateMany({
+          where: {
+            id: recordId, workspaceId,
+            ...(data.version !== undefined ? { version: data.version } : {}),
+          },
+          data: {
+            ...patch,
+            completedAt: becomingDone
+              ? new Date()
+              : data.status && data.status !== "done"
+                ? null
+                : undefined,
+            version: { increment: 1 },
+          },
+        });
+        assertVersion(result.count, data.version, "task");
+
+        revalidateRecord(["/tasks", "/projects", "/deals", "/home"]);
+        return { id: recordId, title: data.title ?? existing.title };
       },
-    });
-
-    revalidateRecord(["/tasks", "/projects", "/deals", "/home"]);
-    return { id: task.id, title: task.title };
-  });
+    ),
+  );
 }
 
 /**
  * Completing a task is the highest-frequency write in the product, so it gets
- * its own narrow action: one round-trip, and recurring tasks respawn here
- * rather than needing a background job.
+ * its own narrow action. Recurring tasks respawn here rather than needing a
+ * background job, inside the same transaction as the completion.
  */
-export async function toggleTask(id: string) {
-  return action(async (user) => {
-    const task = await db.task.findUniqueOrThrow({
-      where: { id },
-      select: {
-        id: true, workspaceId: true, status: true, title: true, dueAt: true, recurrence: true,
-        priority: true, description: true, contactId: true, companyId: true, dealId: true,
-        projectId: true, opportunityId: true, ownerId: true,
-      },
-    });
-    await requireWorkspace(user.id, task.workspaceId);
-
-    const done = task.status === "done";
-    await db.task.update({
-      where: { id },
-      data: { status: done ? "open" : "done", completedAt: done ? null : new Date() },
-    });
-
-    if (!done) {
-      await logActivity({
-        workspaceId: task.workspaceId,
-        actorId: user.id,
-        type: "task",
-        title: `Completed: ${task.title}`,
-        taskId: task.id,
-        contactId: task.contactId,
-        companyId: task.companyId,
-        dealId: task.dealId,
-        projectId: task.projectId,
-        opportunityId: task.opportunityId,
-      });
-
-      if (task.recurrence !== "none" && task.dueAt) {
-        await db.task.create({
-          data: {
-            workspaceId: task.workspaceId,
-            title: task.title,
-            description: task.description,
-            ownerId: task.ownerId,
-            dueAt: nextOccurrence(task.dueAt, task.recurrence),
-            priority: task.priority,
-            recurrence: task.recurrence,
-            contactId: task.contactId,
-            companyId: task.companyId,
-            dealId: task.dealId,
-            projectId: task.projectId,
-            opportunityId: task.opportunityId,
+export async function toggleTask(id: string): Promise<ActionResult<{ id: string; done: boolean }>> {
+  return guard(() =>
+    recordAction("task", id, { permission: "record:edit", rateLimit: "mutation" },
+      async ({ actor, workspaceId, recordId }) => {
+        const task = await db.task.findFirstOrThrow({
+          where: { id: recordId, workspaceId },
+          select: {
+            id: true, status: true, title: true, dueAt: true, recurrence: true,
+            priority: true, description: true, contactId: true, companyId: true, dealId: true,
+            projectId: true, opportunityId: true, ownerId: true,
           },
         });
-      }
-    }
 
-    revalidateRecord(["/tasks", "/projects", "/deals", "/contacts", "/companies"]);
-    return { id, done: !done };
-  });
+        const done = task.status === "done";
+
+        await transaction(async (tx) => {
+          await tx.task.updateMany({
+            where: { id: recordId, workspaceId },
+            data: {
+              status: done ? "open" : "done",
+              completedAt: done ? null : new Date(),
+              version: { increment: 1 },
+            },
+          });
+
+          if (done) return;
+
+          await logActivity(
+            {
+              workspaceId,
+              actorId: actor.identity.id,
+              type: "task",
+              title: `Completed: ${task.title}`,
+              taskId: task.id,
+              contactId: task.contactId,
+              companyId: task.companyId,
+              dealId: task.dealId,
+              projectId: task.projectId,
+              opportunityId: task.opportunityId,
+            },
+            tx,
+          );
+
+          await emitEvent(
+            {
+              workspaceId, name: "task.completed", entityType: "task",
+              entityId: task.id, actorId: actor.identity.id, payload: { title: task.title },
+            },
+            tx,
+          );
+
+          const next = task.recurrence !== "none" && task.dueAt
+            ? nextOccurrence(task.dueAt, task.recurrence)
+            : null;
+          if (next) {
+            await tx.task.create({
+              data: {
+                workspaceId,
+                title: task.title,
+                description: task.description,
+                ownerId: task.ownerId,
+                dueAt: next,
+                priority: task.priority,
+                recurrence: task.recurrence,
+                contactId: task.contactId,
+                companyId: task.companyId,
+                dealId: task.dealId,
+                projectId: task.projectId,
+                opportunityId: task.opportunityId,
+              },
+            });
+          }
+        });
+
+        dispatchSoon();
+        revalidateRecord(["/tasks", "/projects", "/deals", "/contacts", "/companies"]);
+        return { id: recordId, done: !done };
+      },
+    ),
+  );
 }
 
-export async function deleteTask(id: string) {
-  return action(async (user) => {
-    const existing = await db.task.findUniqueOrThrow({ where: { id }, select: { workspaceId: true } });
-    await requireWorkspace(user.id, existing.workspaceId);
-    await db.task.delete({ where: { id } });
-    revalidateRecord(["/tasks"]);
-    return { id };
-  });
+/**
+ * Bulk completion.
+ *
+ * Two independent bounds apply. The batch size is capped by the schema
+ * (`zIdBatch`), and the `updateMany` filter carries the workspace id, so ids
+ * belonging to another tenant simply match nothing rather than being rejected
+ * one by one — which would also confirm which of them exist.
+ */
+export async function bulkCompleteTasks(
+  workspaceId: string,
+  ids: string[],
+): Promise<ActionResult<{ updated: number }>> {
+  return guard(() =>
+    workspaceAction(
+      { workspaceId, permission: "record:edit", rateLimit: "bulk" },
+      async (actor) => {
+        const taskIds = zIdBatch.parse(ids);
+
+        const result = await db.task.updateMany({
+          where: {
+            id: { in: taskIds },
+            workspaceId: actor.workspaceId,
+            status: { not: "done" },
+          },
+          data: { status: "done", completedAt: new Date(), version: { increment: 1 } },
+        });
+
+        if (result.count > 0) {
+          await audit(actor, {
+            workspaceId: actor.workspaceId,
+            action: "record.updated",
+            entityType: "task",
+            summary: `Bulk completed ${result.count} tasks`,
+            metadata: { requested: taskIds.length, updated: result.count },
+          });
+        }
+
+        revalidateRecord(["/tasks", "/home"]);
+        return { updated: result.count };
+      },
+    ),
+  );
+}
+
+export async function archiveTask(id: string): Promise<ActionResult<{ id: string }>> {
+  return guard(() =>
+    recordAction("task", id, { permission: "record:archive", rateLimit: "mutation" },
+      async ({ workspaceId, recordId }) => {
+        await db.task.updateMany({
+          where: { id: recordId, workspaceId },
+          data: { archivedAt: new Date(), version: { increment: 1 } },
+        });
+        revalidateRecord(["/tasks"]);
+        return { id: recordId };
+      },
+    ),
+  );
+}
+
+export async function deleteTask(
+  id: string,
+  confirmation?: string,
+): Promise<ActionResult<{ id: string }>> {
+  return guard(() =>
+    recordAction("task", id, { permission: "record:delete", rateLimit: "mutation" },
+      async ({ actor, workspaceId, recordId }) => {
+        const task = await db.task.findFirstOrThrow({
+          where: { id: recordId, workspaceId },
+          select: { title: true },
+        });
+        assertConfirmation(confirmation, task.title);
+
+        await db.task.delete({ where: { id: recordId } });
+
+        await audit(actor, {
+          workspaceId, action: "record.deleted", entityType: "task", entityId: recordId,
+          summary: `Permanently deleted task ${task.title}`,
+        });
+
+        revalidateRecord(["/tasks"]);
+        return { id: recordId };
+      },
+    ),
+  );
+}
+
+function relationsOf(data: Partial<Record<(typeof RELATIONS)[number], string | null | undefined>>) {
+  return {
+    contactId: data.contactId ?? null,
+    companyId: data.companyId ?? null,
+    dealId: data.dealId ?? null,
+    projectId: data.projectId ?? null,
+    opportunityId: data.opportunityId ?? null,
+  };
 }
 
 function nextOccurrence(from: Date, recurrence: string) {
