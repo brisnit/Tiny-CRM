@@ -28,7 +28,8 @@
     "db:differences": "tsx scripts/db-differences.ts",
     "db:seed:test": "tsx prisma/seed/test-seed.ts",
     "test:backup": "node scripts/backup-test.mjs",
-    "worker": "NODE_OPTIONS=\"--require ./scripts/allow-server-modules.cjs\" tsx scripts/worker.ts"
+    "worker": "NODE_OPTIONS=\"--require ./scripts/allow-server-modules.cjs\" tsx scripts/worker.ts",
+    "audit:deps": "node scripts/dependency-audit.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

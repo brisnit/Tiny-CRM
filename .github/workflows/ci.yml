@@ -26,9 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+        with: { node-version: 22, cache: npm }
       - run: npm ci
       - name: Prisma schema is valid
         run: npx prisma validate
@@ -38,7 +36,7 @@ jobs:
         run: npm run lint
 
   # ---------------------------------------------------------------------------
-  # The full suite on SQLite: unit, security, integration.
+  # The full suite on SQLite: unit, security, integration, portability.
   # ---------------------------------------------------------------------------
   test:
     name: Test suite (SQLite)
@@ -46,24 +44,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+        with: { node-version: 22, cache: npm }
       - run: npm ci
-      - name: Run every suite
-        run: npm test
+      - run: npm test
 
   # ---------------------------------------------------------------------------
-  # The same suite against real PostgreSQL.
+  # The same suite against real PostgreSQL, plus row-level security.
   #
-  # This is the job that actually proves portability. The schema is written to
-  # be provider-agnostic (no native enums, no scalar lists, no Json columns,
-  # money as integer cents), but "should port" is not the same as "ported" —
-  # `contains` alone behaves differently on the two engines. Running the whole
-  # suite on Postgres is what turns the claim into evidence.
+  # This is the job that proves portability and the second isolation layer. The
+  # RLS tests connect directly as the restricted role and issue the queries the
+  # policies must survive — SELECT with no WHERE clause at all — so they need a
+  # real server and a non-superuser login.
   # ---------------------------------------------------------------------------
   test-postgres:
-    name: Test suite (PostgreSQL)
+    name: Test suite (PostgreSQL 17)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -80,31 +74,52 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://tinycrm:tinycrm@localhost:5432/tinycrm_test
+      RLS_APP_DATABASE_URL: postgresql://tinycrm_app:tinycrm_app@localhost:5432/tinycrm_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+        with: { node-version: 22, cache: npm }
       - run: npm ci
 
       - name: Switch the datasource to PostgreSQL
         run: node scripts/use-provider.mjs postgresql
 
-      - name: Generate the client
-        run: npx prisma generate
+      - run: npx prisma generate
 
       - name: Apply migrations
+        # The PostgreSQL history is separate: Prisma locks a history to the
+        # provider it was authored against, and prisma7.config.ts selects the
+        # directory from DATABASE_URL.
         run: npx prisma migrate deploy
 
-      - name: Apply the PostgreSQL-only search indexes
-        run: psql "$DATABASE_URL" -f prisma/postgres/001_search_indexes.sql
+      - name: Apply the PostgreSQL-only SQL
+        run: |
+          node scripts/apply-sql.mjs prisma/postgres/001_search_indexes.sql
+          node scripts/apply-sql.mjs prisma/postgres/002_row_level_security.sql
+          node scripts/apply-sql.mjs prisma/postgres/003_deferrable_constraints.sql
 
-      - name: Seed demo data
-        run: npm run db:seed
+      - name: Give the RLS-restricted role a login
+        # The migration creates tinycrm_app with NOLOGIN and no password, on
+        # purpose: a credential in a migration file is a credential in version
+        # control. CI sets a throwaway one.
+        run: |
+          psql "$DATABASE_URL" -c "ALTER ROLE tinycrm_app WITH LOGIN PASSWORD 'tinycrm_app';"
+          psql "$DATABASE_URL" -c "GRANT CONNECT ON DATABASE tinycrm_test TO tinycrm_app;"
+
+      - name: Seed verification data
+        run: npx tsx prisma/seed/test-seed.ts
+        env:
+          NODE_OPTIONS: --require ./scripts/allow-server-modules.cjs
 
       - name: Run every suite against PostgreSQL
         run: npx tsx --test --test-concurrency=1 "tests/**/*.test.ts"
+        env:
+          NODE_ENV: test
+          NODE_OPTIONS: --require ./scripts/allow-server-modules.cjs
+
+      - name: Record the engine differences
+        # Not a gate: the output is read when a portability question comes up.
+        run: npx tsx scripts/db-differences.ts
         env:
           NODE_ENV: test
           NODE_OPTIONS: --require ./scripts/allow-server-modules.cjs
@@ -115,7 +130,38 @@ jobs:
           git diff --exit-code prisma/schema.prisma
 
   # ---------------------------------------------------------------------------
-  # Production build, and the configuration gate that guards a real deploy.
+  # Backup and restore, actually performed.
+  # ---------------------------------------------------------------------------
+  backup-restore:
+    name: Backup and restore
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: tinycrm
+          POSTGRES_PASSWORD: tinycrm
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Back up, destroy, restore, verify
+        # Fails if row counts, the content fingerprint, referential integrity or
+        # tenant isolation differ after the restore.
+        run: npm run test:backup
+        env:
+          PGPORT: 5432
+
+  # ---------------------------------------------------------------------------
+  # Production build, the configuration gate in both directions, and the CSP.
   # ---------------------------------------------------------------------------
   build:
     name: Production build
@@ -123,9 +169,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+        with: { node-version: 22, cache: npm }
       - run: npm ci
       - name: Build
         run: npm run build
@@ -139,11 +183,12 @@ jobs:
           AUTH_SECRET: a-real-production-secret-of-sufficient-length-here
           DATABASE_URL: postgresql://user:pw@db.internal:5432/tinycrm
           APP_URL: https://app.example.com
+          RATE_LIMIT_REDIS_URL: https://redis.example.com
 
       - name: The production gate refuses an unsafe configuration
         run: |
           if npm run check:config; then
-            echo "::error::The production gate accepted a SQLite database and demo auth."
+            echo "::error::The gate accepted SQLite, demo auth, and an in-process limiter on 3 instances."
             exit 1
           fi
         env:
@@ -152,6 +197,10 @@ jobs:
           DATABASE_URL: file:./dev.db
           APP_URL: http://localhost:3000
           ALLOW_DEMO_AUTH: "true"
+          APP_INSTANCES: "3"
+
+      - name: No package with an open advisory is loaded at runtime
+        run: npm run audit:deps
 
   # ---------------------------------------------------------------------------
   # Performance budgets. A change that turns an indexed scan into a table scan
@@ -166,17 +215,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+        with: { node-version: 22, cache: npm }
       - run: npm ci
       - name: Query budgets at 25k contacts / 100k activities
         run: npm run test:perf
 
   # ---------------------------------------------------------------------------
-  # Supply chain. Advisories are reported rather than silently ignored, but do
-  # not block a merge on a transitive advisory in a build-time-only CLI — see
-  # docs/SECURITY.md, "Dependencies".
+  # Supply chain. A critical advisory in a runtime dependency blocks; everything
+  # else is reported, because a transitive advisory in a build-time tool should
+  # not stop a security fix from shipping.
   # ---------------------------------------------------------------------------
   audit:
     name: Dependency audit
@@ -184,9 +231,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+        with: { node-version: 22, cache: npm }
       - run: npm ci
       - name: Fail on a critical advisory in runtime dependencies
         run: npm audit --omit=dev --audit-level=critical
@@ -194,16 +239,14 @@ jobs:
         run: npm audit || true
 
   # ---------------------------------------------------------------------------
-  # Secret scan. A committed credential is the one mistake that cannot be fixed
-  # by a revert.
+  # Secret scan. A committed credential is the one mistake a revert cannot fix.
   # ---------------------------------------------------------------------------
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
       - name: Scan the full history
         uses: gitleaks/gitleaks-action@v2
         env:
