@@ -2,13 +2,13 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { LoginForm } from "@/components/app/auth-forms";
-import { getCurrentUser } from "@/lib/auth/session";
+import { getIdentity } from "@/lib/auth/context";
 import { env } from "@/lib/env";
 
 export const metadata = { title: "Sign in" };
 
 export default async function LoginPage() {
-  if (await getCurrentUser()) redirect("/home");
+  if (await getIdentity()) redirect("/home");
 
   return (
     <div className="rounded-2xl border border-hairline bg-panel p-6 shadow-panel">

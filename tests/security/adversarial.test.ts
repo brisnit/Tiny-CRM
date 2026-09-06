@@ -1,6 +1,9 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
+import { readdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { runAsTestIdentity } from "../../src/lib/auth/context";
 import { createTenant, cleanupTenants, db, type Tenant } from "../helpers/fixtures";
 
@@ -620,5 +623,111 @@ describe("adversarial", () => {
 
       await db.user.update({ where: { id: A.ownerId }, data: { plan: "lifetime" } });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("the server-action surface", () => {
+  /**
+   * Every export of a `"use server"` module is a callable HTTP endpoint,
+   * whether or not the UI calls it. This suite enumerates that surface from
+   * source and asserts each entry is guarded, so a new action cannot be added
+   * without either a guard or a failing test.
+   */
+  // `import.meta.dirname`, not a URL pathname — this project's own path contains
+  // a space, which a pathname leaves percent-encoded.
+  const ACTIONS_DIR = resolve(import.meta.dirname, "../../src/lib/actions");
+
+  const actionModules = () => {
+    const dir = ACTIONS_DIR;
+    return readdirSync(dir)
+      .filter((name) => name.endsWith(".ts"))
+      .map((name) => ({ name, text: readFileSync(`${dir}/${name}`, "utf8") }))
+      .filter((file) => /^\s*["']use server["']/.test(file.text));
+  };
+
+  test("every exported action runs inside the guard", () => {
+    // scope.ts writes view-preference cookies and validates inline; auth.ts is
+    // the one deliberately unauthenticated endpoint and rate-limits itself.
+    const exempt = new Set(["scope.ts", "auth.ts"]);
+
+    for (const file of actionModules()) {
+      if (exempt.has(file.name)) continue;
+
+      const exported = [...file.text.matchAll(/export async function (\w+)/g)].map((m) => m[1]!);
+      assert.ok(exported.length > 0, `${file.name} exports no actions — is it still an action module?`);
+
+      for (const name of exported) {
+        const body = file.text.slice(file.text.indexOf(`export async function ${name}`));
+        const next = body.slice(1).search(/\nexport /);
+        const source = next === -1 ? body : body.slice(0, next);
+        assert.match(
+          source,
+          /return guard\(/,
+          `${file.name}:${name} does not run inside guard() — its errors and its validation escape the boundary`,
+        );
+      }
+    }
+  });
+
+  test("no action module writes with an unfiltered payload", () => {
+    // `data: input` or `data: { ...data }` is mass assignment: it writes
+    // whatever the request carried, including columns no schema mentions.
+    for (const file of actionModules()) {
+      assert.ok(
+        !/data:\s*(input|body|payload|raw)\b/.test(file.text),
+        `${file.name} writes a request payload directly`,
+      );
+      assert.ok(
+        !/data:\s*\{\s*\.\.\.(data|input|body|payload)\s*[,}]/.test(file.text),
+        `${file.name} spreads a parsed payload into a write instead of naming its columns`,
+      );
+    }
+  });
+
+  test("no action writes an ownership column from the request", () => {
+    // Ownership and authorship come from the session. Writing `ownerId` from a
+    // parsed payload lets a caller create records attributed to someone else.
+    //
+    // `userId` is deliberately absent from this list: in membership management
+    // it is the *target* of the operation, not the acting identity, and those
+    // actions authorize the caller separately.
+    for (const file of actionModules()) {
+      for (const column of ["ownerId", "actorId", "authorId", "uploaderId"]) {
+        const pattern = new RegExp(`${column}:\\s*(data|input|body|payload|parsed)\\.`);
+        const match = pattern.exec(file.text);
+        assert.equal(
+          match,
+          null,
+          `${file.name} writes ${column} from the request (${match?.[0]}) instead of from the session`,
+        );
+      }
+    }
+  });
+
+  test("no action reads a workspace-scoped model by id alone", () => {
+    // `findUnique` matches on a unique key and has nowhere to put a workspace
+    // filter, so on a scoped model it reads across tenants by construction.
+    // Every such read uses findFirst with the workspace beside the id, or goes
+    // through requireRecordAccess.
+    //
+    // `db.user` and `db.workspace` are exempt: neither is workspace-scoped, and
+    // the workspace read is keyed on an id the guard has already authorized.
+    const scoped = [
+      "contact", "company", "deal", "project", "opportunity", "task", "note",
+      "activity", "fileAsset", "pipeline", "pipelineStage", "automation",
+      "projectStatus", "customFieldDef", "tag", "aiInsight", "milestone",
+      "notification", "workspaceMember",
+    ];
+
+    for (const file of actionModules()) {
+      for (const model of scoped) {
+        const pattern = new RegExp(`\\b${model}\\.findUnique(OrThrow)?\\(`);
+        assert.ok(
+          !pattern.test(file.text),
+          `${file.name} reads ${model} by id alone, with no workspace filter`,
+        );
+      }
+    }
   });
 });

@@ -9,7 +9,7 @@ import { ProductPreview } from "@/components/marketing/product-preview";
 import { AiCallout, Pricing } from "@/components/marketing/pricing";
 import { Button } from "@/components/ui/button";
 import { LogoMark } from "@/components/brand/logo";
-import { getCurrentUser } from "@/lib/auth/session";
+import { getIdentity } from "@/lib/auth/context";
 
 export const metadata = {
   title: "Tiny CRM — Your whole business. Organized.",
@@ -65,7 +65,7 @@ const FAQ = [
 ];
 
 export default async function MarketingPage() {
-  const user = await getCurrentUser();
+  const user = await getIdentity();
   const signedIn = Boolean(user);
 
   return (

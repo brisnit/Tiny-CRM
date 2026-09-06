@@ -3,13 +3,13 @@ import { redirect } from "next/navigation";
 import { Check } from "lucide-react";
 
 import { SignupForm } from "@/components/app/auth-forms";
-import { getCurrentUser } from "@/lib/auth/session";
+import { getIdentity } from "@/lib/auth/context";
 import { PLANS } from "@/lib/plans";
 
 export const metadata = { title: "Create your account" };
 
 export default async function SignupPage({ searchParams }: PageProps<"/signup">) {
-  if (await getCurrentUser()) redirect("/home");
+  if (await getIdentity()) redirect("/home");
   const params = await searchParams;
   const plan = typeof params.plan === "string" ? params.plan : "free";
   const selected = PLANS[plan as keyof typeof PLANS] ?? PLANS.free;
