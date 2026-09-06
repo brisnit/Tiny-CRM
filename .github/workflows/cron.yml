@@ -1,22 +1,17 @@
 name: Drain the job queue
 
-# Vercel's Hobby plan runs cron once a day, which cannot exercise worker
-# behaviour in any meaningful way. This calls the same protected endpoint on a
-# useful cadence, at no cost, using infrastructure the project already has.
-#
-# vercel.json still declares Vercel crons for the day this moves to Pro. Both
-# firing is harmless: the endpoint drains until empty and is idempotent.
-#
 # Required repository secrets (Settings -> Secrets and variables -> Actions):
 #   STAGING_URL   e.g. https://tiny-crm-xxxx.vercel.app   (no trailing slash)
 #   CRON_SECRET   the same value set in Vercel's environment variables
 
+# NOT SCHEDULED. The Vercel team hosting this project is on the Pro plan, whose
+# cron supports minute-level schedules, so vercel.json drives the queue every 5
+# minutes and this workflow would only duplicate it (harmlessly, but noisily —
+# and it fails every run until STAGING_URL and CRON_SECRET are set).
+#
+# Kept as a manual fallback: run it from the Actions tab if Vercel Cron is
+# unavailable, the plan changes, or you need an out-of-band drain.
 on:
-  schedule:
-    # Every 15 minutes. GitHub's scheduler is best-effort and can be delayed
-    # under load, which is acceptable: jobs are claimed with an expiring lock,
-    # so a late run picks up whatever is pending rather than losing it.
-    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       sweep:
@@ -74,19 +69,14 @@ jobs:
     name: Retention sweep
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Once a day is the right cadence for retention; see docs/RETENTION.md.
-    if: github.event_name == 'schedule'
+    # Only when explicitly asked for; vercel.json runs the daily sweep.
+    if: inputs.sweep
     steps:
-      - name: Run the sweep at 04:17 UTC only
+      - name: Run the retention sweep
         env:
           STAGING_URL: ${{ secrets.STAGING_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          hour=$(date -u +%H); minute=$(date -u +%M)
-          if [ "$hour" != "04" ] || [ "$minute" -ge 30 ]; then
-            echo "Not the sweep window (now ${hour}:${minute} UTC). Nothing to do."
-            exit 0
-          fi
           if [ -z "$STAGING_URL" ] || [ -z "$CRON_SECRET" ]; then
             echo "::error::STAGING_URL and CRON_SECRET must both be set."
             exit 1

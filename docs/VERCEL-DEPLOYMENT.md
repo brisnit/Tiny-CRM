@@ -67,6 +67,23 @@ every boot** if that role is a superuser or the policies are missing. If you see
 that line in Vercel's logs, RLS is not protecting you — fix it before onboarding
 anyone.
 
+### Why `vercel.json` has no comments
+
+`vercel.json` is validated against a strict schema that rejects unknown
+properties — including the `"//"` keys commonly used as JSON comments. Adding
+them fails the build outright with *"should NOT have additional property `//`"*,
+before any code runs. Keep that file minimal; the reasoning lives here.
+
+**The build command deliberately does not run `prisma migrate deploy`.** A build
+runs on every push, including every preview, and a preview inherits whatever
+`DATABASE_URL` its environment supplies. Migrating from the build step would let
+an in-flight branch alter the schema production is serving. Migrations are a
+deliberate, separately-credentialed step (above). The runtime role has no DDL
+grant so it would fail anyway; not relying on that is the point.
+
+`prisma generate` *is* required: the client is generated into `src/generated`,
+which is gitignored, so it does not exist in a fresh checkout.
+
 ### Applying the schema
 
 Migrations are a **deliberate, separately-credentialed step**. They are not in
