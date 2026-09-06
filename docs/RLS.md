@@ -110,7 +110,7 @@ ownership and the count of `FORCE`'d tables, and `src/instrumentation.ts` logs o
 every boot:
 
 ```
-INFO   row-level security active   { role: "tinycrm_app", tables: 42 }
+INFO   row-level security active   { role: "tinycrm_app", tables: 38 }
 ERROR  row-level security is NOT protecting this connection
        { reason: 'Connected as "tinycrm", which is a superuser. A superuser
                   bypasses row-level security even on a FORCE'd table.' }
@@ -128,7 +128,8 @@ vacuously.
 
 ## Which tables use RLS
 
-**42 tables under `ENABLE` + `FORCE ROW LEVEL SECURITY`.**
+**38 of the 47 tables are under `ENABLE` + `FORCE ROW LEVEL SECURITY`.**
+The other nine are listed below with the reason for each.
 
 ### Directly scoped — a `NOT NULL workspaceId`
 

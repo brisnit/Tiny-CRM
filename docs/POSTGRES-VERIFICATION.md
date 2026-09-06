@@ -24,7 +24,7 @@ is a property of PostgreSQL rather than of this laptop.
 | Client generation | `prisma generate` | ✅ |
 | Migrations | `prisma migrate deploy` | ✅ after a fix — see F-1 |
 | Search indexes | `001_search_indexes.sql` | ✅ 12 statements |
-| Row-level security | `002_row_level_security.sql` | ✅ 61 statements, 36 tables |
+| Row-level security | `002_row_level_security.sql` | ✅ 38 of 47 tables |
 | Deferrable constraints | `003_deferrable_constraints.sql` | ✅ — see F-4 |
 | Verification seed | `prisma/seed/test-seed.ts` | ✅ two isolated tenants |
 | Unit tests | `tests/unit/**` | ✅ |
