@@ -29,7 +29,8 @@
     "db:seed:test": "tsx prisma/seed/test-seed.ts",
     "test:backup": "node scripts/backup-test.mjs",
     "worker": "NODE_OPTIONS=\"--require ./scripts/allow-server-modules.cjs\" tsx scripts/worker.ts",
-    "audit:deps": "node scripts/dependency-audit.mjs"
+    "audit:deps": "node scripts/dependency-audit.mjs",
+    "verify:hosted": "node scripts/verify-hosted.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

@@ -50,6 +50,42 @@ describe("production configuration gate", () => {
     assert.equal(status, 0, `a safe configuration was refused:\n${output}`);
   });
 
+  test("refuses the migration credential in the application environment", () => {
+    // DIRECT_URL is the unpooled owner/admin connection used to run migrations.
+    // It can drop tables, rewrite the append-only audit log, and — because
+    // FORCE ROW LEVEL SECURITY does not bind a superuser — read every tenant's
+    // rows with the policies fully in place. It belongs on an operator's
+    // machine, never in the deployed application's environment.
+    const { status, output } = check({
+      DIRECT_URL: "postgresql://owner:pw@db-direct.internal:5432/tinycrm",
+    });
+    assert.equal(status, 1, "production started holding the admin migration credential");
+    assert.match(output, /DIRECT_URL/);
+  });
+
+  test("refuses an administrative role in DATABASE_URL", () => {
+    // A superuser bypasses FORCE ROW LEVEL SECURITY entirely, so tenant
+    // isolation would silently rest on the application layer alone. This is a
+    // cheap name-based guard, not the control — rlsStatus() asks the database
+    // itself — but it catches the overwhelmingly common mistake of pasting the
+    // provider's default connection string straight in.
+    for (const role of ["postgres", "root", "admin"]) {
+      const { status, output } = check({
+        DATABASE_URL: `postgresql://${role}:pw@db.internal:5432/tinycrm`,
+      });
+      assert.equal(status, 1, `production accepted a "${role}" connection`);
+      assert.match(output, /administrative role|unprivileged/i);
+    }
+  });
+
+  test("an unprivileged runtime role is accepted", () => {
+    // The guard must not be so broad that the correct configuration trips it.
+    const { status, output } = check({
+      DATABASE_URL: "postgresql://tinycrm_app:pw@db.internal:5432/tinycrm?sslmode=require",
+    });
+    assert.equal(status, 0, `the intended runtime role was refused:\n${output}`);
+  });
+
   test("refuses to start without AUTH_SECRET", () => {
     const { status, output } = check({ AUTH_SECRET: undefined });
     assert.equal(status, 1, "production started with no session secret");

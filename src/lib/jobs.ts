@@ -405,6 +405,22 @@ export async function sweep(): Promise<Record<string, number>> {
     where: { expiresAt: { lt: new Date() } },
   }).then((r) => r.count);
 
+  // Acknowledged security alerts older than a year. Deliberately only the
+  // acknowledged ones: an unacknowledged alert is unfinished work and is kept
+  // however old it is. JobRun rows need no sweep of their own — they cascade
+  // with the DomainEvent deleted above.
+  //
+  // This is the only retention rule here that touches a record a person reads.
+  // Everything customer-owned — archived contacts, deals, notes, the audit log —
+  // is deliberately NOT purged by this sweep: see docs/RETENTION.md. Deleting a
+  // customer's business data on a timer needs a policy they have agreed to,
+  // not a cleanup job.
+  results.securityAlerts = await db.securityAlert.deleteMany({
+    where: {
+      acknowledgedAt: { not: null, lt: new Date(Date.now() - 365 * 86_400_000) },
+    },
+  }).then((r) => r.count);
+
   if (isPostgres) {
     const { PostgresStore } = await import("@/lib/rate-limit/stores");
     results.rateLimitCounters = await PostgresStore.sweep();

@@ -1,0 +1,98 @@
+name: Drain the job queue
+
+# Vercel's Hobby plan runs cron once a day, which cannot exercise worker
+# behaviour in any meaningful way. This calls the same protected endpoint on a
+# useful cadence, at no cost, using infrastructure the project already has.
+#
+# vercel.json still declares Vercel crons for the day this moves to Pro. Both
+# firing is harmless: the endpoint drains until empty and is idempotent.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   STAGING_URL   e.g. https://tiny-crm-xxxx.vercel.app   (no trailing slash)
+#   CRON_SECRET   the same value set in Vercel's environment variables
+
+on:
+  schedule:
+    # Every 15 minutes. GitHub's scheduler is best-effort and can be delayed
+    # under load, which is acceptable: jobs are claimed with an expiring lock,
+    # so a late run picks up whatever is pending rather than losing it.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      sweep:
+        description: "Also run the retention sweep"
+        type: boolean
+        default: false
+
+concurrency:
+  # Never two drains at once. The queue tolerates it — claims use
+  # FOR UPDATE SKIP LOCKED — but there is no reason to pay for the contention.
+  group: cron-jobs
+  cancel-in-progress: false
+
+jobs:
+  drain:
+    name: Drain
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call the job endpoint
+        env:
+          STAGING_URL: ${{ secrets.STAGING_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SWEEP: ${{ inputs.sweep && '?sweep=1' || '' }}
+        run: |
+          if [ -z "$STAGING_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::error::STAGING_URL and CRON_SECRET must both be set as repository secrets."
+            exit 1
+          fi
+
+          # -sS: quiet but still report transport errors. The body is printed so
+          # the run log shows what was processed; it contains counts only.
+          response=$(mktemp)
+          code=$(curl -sS -o "$response" -w '%{http_code}' \
+                   --max-time 120 \
+                   -H "Authorization: Bearer $CRON_SECRET" \
+                   "${STAGING_URL}/api/cron/jobs${SWEEP}")
+
+          echo "HTTP $code"
+          cat "$response"
+          echo
+
+          if [ "$code" != "200" ]; then
+            echo "::error::Job endpoint returned $code."
+            exit 1
+          fi
+
+          # A dead-lettered job is not a failed run — a poisoned job must never
+          # block healthy work — but it does need a human, so surface it.
+          if grep -q '"dead":[1-9]' "$response"; then
+            echo "::warning::Dead-lettered jobs are waiting. Inspect with listDeadJobs()."
+          fi
+
+  sweep:
+    name: Retention sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Once a day is the right cadence for retention; see docs/RETENTION.md.
+    if: github.event_name == 'schedule'
+    steps:
+      - name: Run the sweep at 04:17 UTC only
+        env:
+          STAGING_URL: ${{ secrets.STAGING_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          hour=$(date -u +%H); minute=$(date -u +%M)
+          if [ "$hour" != "04" ] || [ "$minute" -ge 30 ]; then
+            echo "Not the sweep window (now ${hour}:${minute} UTC). Nothing to do."
+            exit 0
+          fi
+          if [ -z "$STAGING_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::error::STAGING_URL and CRON_SECRET must both be set."
+            exit 1
+          fi
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 120 \
+                   -H "Authorization: Bearer $CRON_SECRET" \
+                   "${STAGING_URL}/api/cron/jobs?sweep=1")
+          echo "HTTP $code"
+          [ "$code" = "200" ] || { echo "::error::Sweep returned $code."; exit 1; }

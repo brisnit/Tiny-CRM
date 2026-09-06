@@ -192,6 +192,34 @@ export function assertProductionEnv(): void {
     );
   }
 
+  // The migration credential must not exist in the application's environment.
+  // It is the owner/admin role: it can drop tables, rewrite the audit log, and
+  // — because FORCE ROW LEVEL SECURITY does not bind a superuser — read every
+  // tenant's data with the policies fully in place. Migrations are run by an
+  // operator from their own machine, deliberately, with these credentials
+  // supplied there and nowhere else.
+  if (optional("DIRECT_URL")) {
+    problems.push(
+      "DIRECT_URL is set. That is the unpooled migration credential and belongs " +
+        "only on the machine running migrations — never in the application's " +
+        "environment. Remove it from this deployment.",
+    );
+  }
+
+  // A best-effort check on the runtime role. This cannot catch every misuse —
+  // an owner role can be named anything — so it is a cheap guard, not the
+  // control. The control is rlsStatus(), which asks the database itself and is
+  // reported at boot by src/instrumentation.ts.
+  const runtimeUser = /^postgres(ql)?:\/\/([^:@/]+)/.exec(env.databaseUrl)?.[2];
+  if (runtimeUser && ["postgres", "root", "admin", "superuser"].includes(runtimeUser.toLowerCase())) {
+    problems.push(
+      `DATABASE_URL connects as "${runtimeUser}", which is an administrative role. ` +
+        "The application must connect as an unprivileged role (tinycrm_app): a " +
+        "superuser bypasses FORCE ROW LEVEL SECURITY entirely, so tenant isolation " +
+        "would rest on the application layer alone. See docs/VERCEL-DEPLOYMENT.md.",
+    );
+  }
+
   if (!optional("APP_URL")) {
     problems.push("APP_URL is not set.");
   } else if (/localhost|127\.0\.0\.1|0\.0\.0\.0/.test(env.appUrl)) {

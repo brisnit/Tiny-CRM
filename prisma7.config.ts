@@ -21,7 +21,31 @@ import { defineConfig } from "prisma/config";
  *
  *   node scripts/sync-postgres-migration.mjs
  */
-const isPostgres = /^postgres(ql)?:\/\//.test(process.env["DATABASE_URL"] ?? "");
+/**
+ * DIRECT_URL vs DATABASE_URL.
+ *
+ * A serverless deployment points DATABASE_URL at a *pooled* endpoint (PgBouncer
+ * in transaction mode, or a provider's equivalent). Two things do not work
+ * through transaction pooling: DDL, and the advisory lock Prisma takes to
+ * serialise a migration. So the CLI needs an unpooled connection.
+ *
+ * Prisma 7's config datasource exposes only `url` and `shadowDatabaseUrl` —
+ * there is no `directUrl` property as there was in the Prisma 5/6 schema block.
+ * This file is read exclusively by the CLI (migrate, db, introspect), never by
+ * the running application, so resolving it here gives the correct split:
+ *
+ *   DIRECT_URL     unpooled, admin/owner role, migrations only.
+ *                  Used from an operator's machine. NEVER set in Vercel.
+ *   DATABASE_URL   pooled, tinycrm_app role, the running application.
+ *                  Read by src/lib/db.ts at runtime.
+ *
+ * If DIRECT_URL is unset the CLI falls back to DATABASE_URL, which is correct
+ * for local development and for a provider with no separate pooler.
+ */
+const migrationUrl = process.env["DIRECT_URL"] || process.env["DATABASE_URL"];
+
+// Either URL is enough to identify the engine; a migration run may set only one.
+const isPostgres = /^postgres(ql)?:\/\//.test(migrationUrl ?? "");
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
@@ -29,6 +53,9 @@ export default defineConfig({
     path: isPostgres ? "prisma/migrations-postgres" : "prisma/migrations",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    url: migrationUrl,
+    ...(process.env["SHADOW_DATABASE_URL"]
+      ? { shadowDatabaseUrl: process.env["SHADOW_DATABASE_URL"] }
+      : {}),
   },
 });
