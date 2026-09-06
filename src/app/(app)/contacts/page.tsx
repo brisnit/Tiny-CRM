@@ -16,6 +16,7 @@ import { listContacts } from "@/lib/data/contacts";
 import { db } from "@/lib/db";
 import { RELATIONSHIP_STRENGTH, RELATIONSHIP_TYPE } from "@/lib/enums";
 import { formatDay, daysSince } from "@/lib/dates";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Contacts" };
 
@@ -54,12 +55,14 @@ async function ContactsTable({
       sort: (str("sort") as never) ?? "recent",
       page: Number(str("page") ?? 1),
     }),
-    db.tag.findMany({
-      where: { workspaceId: { in: workspaceIds } },
-      select: { name: true },
-      orderBy: { name: "asc" },
-      take: 40,
-    }),
+    scopedRead(workspaceIds, () =>
+      db.tag.findMany({
+        where: { workspaceId: { in: workspaceIds } },
+        select: { name: true },
+        orderBy: { name: "asc" },
+        take: 40,
+      }),
+    ),
   ]);
 
   return (

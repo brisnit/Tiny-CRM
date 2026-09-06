@@ -62,7 +62,7 @@ export type TenantContext = {
 export async function withTenantContext<T>(
   context: TenantContext,
   fn: (tx: Prisma.TransactionClient) => Promise<T>,
-  options: { timeout?: number } = {},
+  options: { timeout?: number; isolated?: boolean } = {},
 ): Promise<T> {
   // Ids come from the caller's own memberships, never from a request. Rejecting
   // anything unexpected keeps the value that reaches `set_config` free of the
@@ -78,8 +78,24 @@ export async function withTenantContext<T>(
   // one, which Prisma forbids. Narrowing is not attempted — the outer context
   // was established from the same actor's memberships, and re-issuing SET LOCAL
   // would silently widen or narrow the surrounding unit of work.
+  // `isolated` opens its own transaction even inside an ambient one, for the
+  // rare read whose legitimate scope is *wider* than the surrounding unit of
+  // work — account-wide plan usage inside a single-workspace action being the
+  // case that needs it. Reusing the ambient context there would silently count
+  // one workspace and under-report the total. The ids still come from the
+  // actor's own memberships, so this widens to what the caller is entitled to
+  // and never beyond it.
+  // SQLite has no row-level security, and better-sqlite3 is a single
+  // synchronous connection: opening a transaction here would change local
+  // behaviour for no benefit, and an `isolated` call inside an outer
+  // transaction would deadlock against itself. So on SQLite this is a
+  // pass-through, exactly as it was before the request path started using it.
+  // Isolation on SQLite remains what it always was — the application's own
+  // guards, which every tenant-isolation test also exercises.
+  if (!isPostgres) return fn(rootDb as unknown as Prisma.TransactionClient);
+
   const existing = currentTenantClient();
-  if (existing) return fn(existing);
+  if (existing && !options.isolated) return fn(existing);
 
   // rootDb, not db: `db` resolves to the ambient transaction, and this is the
   // call that creates one.

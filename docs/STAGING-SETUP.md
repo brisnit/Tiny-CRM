@@ -15,7 +15,7 @@ verify:hosted` is how you turn each one into evidence.
 | Need | Recommendation | Why this one |
 |---|---|---|
 | Database | **Neon** | Serverless Postgres 17, a real pooled endpoint *and* a direct endpoint (which is exactly the split this app needs), database branching for preview isolation, and a free tier that covers owner testing. Supabase is a fine alternative; it bundles auth and storage you will not use. |
-| Scheduler | **GitHub Actions cron** hitting `/api/cron/jobs` | Vercel Hobby cron runs **daily only**, which is useless for testing a worker. You already have Actions, it is free, and it exercises the exact production endpoint. Upgrade to Vercel Pro later if you want the scheduler co-located. |
+| Scheduler | **Vercel Cron** (`vercel.json`, every 5 minutes) | The team hosting this project is on the **Pro** plan, whose cron supports minute-level schedules. The GitHub Actions workflow remains as a manual fallback. |
 | Email | **Resend** | Simplest API of the transactional providers, generous free tier, and it works with the existing `HttpAdapter` with no code change. |
 | Alerts | **Slack or Discord incoming webhook** | A URL, no account provisioning, no per-seat cost. |
 | Errors | **Sentry** free tier | The observability adapter already targets it. |
@@ -68,6 +68,9 @@ npx prisma migrate deploy
 node scripts/apply-sql.mjs prisma/postgres/001_search_indexes.sql
 node scripts/apply-sql.mjs prisma/postgres/002_row_level_security.sql
 node scripts/apply-sql.mjs prisma/postgres/003_deferrable_constraints.sql
+node scripts/apply-sql.mjs prisma/postgres/004_workspace_bootstrap.sql
+node scripts/apply-sql.mjs prisma/postgres/005_identity_policies.sql
+node scripts/apply-sql.mjs prisma/postgres/006_job_claim.sql
 ```
 
 `003` is not optional. `Company.primaryContactId` and `Contact.companyId` form a
@@ -133,7 +136,7 @@ npm run verify:hosted
 does not bypass RLS and owns nothing, that RLS is enabled *and forced* with
 policies on every table, that a bare `SELECT *` with no tenant context returns
 zero rows, that `UPDATE`/`DELETE` on `AuditLog` are refused, that a scoped
-connection cannot see another workspace, and that all three SQL files landed.
+connection cannot see another workspace, and that every SQL file landed.
 
 It prints **HOSTED RLS VERIFIED: YES / PARTIAL / NO**. Anything but `YES` means
 stop and fix, not proceed and note.

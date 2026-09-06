@@ -7,6 +7,7 @@ import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { timeAgo } from "@/lib/dates";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Integrations" };
 
@@ -21,17 +22,21 @@ export default async function IntegrationSettings() {
   const actor = await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
 
-  const connected = await db.integration.findMany({
-    where: { workspaceId: { in: workspaceIds }, userId: actor.identity.id },
-    select: { provider: true, status: true, accountEmail: true, lastSyncAt: true },
-    distinct: ["provider"],
-  });
+  const connected = await scopedRead(workspaceIds, () =>
+    db.integration.findMany({
+      where: { workspaceId: { in: workspaceIds }, userId: actor.identity.id },
+      select: { provider: true, status: true, accountEmail: true, lastSyncAt: true },
+      distinct: ["provider"],
+    }),
+  );
   const byProvider = new Map(connected.map((c) => [c.provider, c]));
 
-  const [emailCount, eventCount] = await Promise.all([
-    db.emailMessage.count({ where: { workspaceId: { in: workspaceIds } } }),
-    db.calendarEvent.count({ where: { workspaceId: { in: workspaceIds } } }),
-  ]);
+  const [emailCount, eventCount] = await scopedRead(workspaceIds, () =>
+    Promise.all([
+      db.emailMessage.count({ where: { workspaceId: { in: workspaceIds } } }),
+      db.calendarEvent.count({ where: { workspaceId: { in: workspaceIds } } }),
+    ]),
+  );
 
   return (
     <div className="space-y-5">

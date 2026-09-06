@@ -5,6 +5,7 @@ import { ImportExport } from "@/components/app/import-export";
 import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Import & export" };
 
@@ -14,14 +15,16 @@ export default async function DataSettings() {
   const { workspaceIds, workspaceId } = await resolveReadScope(await readScope());
   const where = { workspaceId: { in: workspaceIds } };
 
-  const [contacts, companies, deals, projects, opportunities, tasks] = await Promise.all([
-    db.contact.count({ where }),
-    db.company.count({ where }),
-    db.deal.count({ where }),
-    db.project.count({ where }),
-    db.opportunity.count({ where }),
-    db.task.count({ where }),
-  ]);
+  const [contacts, companies, deals, projects, opportunities, tasks] = await scopedRead(workspaceIds, async () => {
+    return Promise.all([
+      db.contact.count({ where }),
+      db.company.count({ where }),
+      db.deal.count({ where }),
+      db.project.count({ where }),
+      db.opportunity.count({ where }),
+      db.task.count({ where }),
+    ]);
+  });
 
   return (
     <div className="space-y-5">

@@ -6,6 +6,7 @@ import { requireActor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 import { planFor, UNLIMITED } from "@/lib/plans";
 import { WORKSPACE_ROLE } from "@/lib/enums";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Workspaces" };
 
@@ -14,13 +15,15 @@ export default async function WorkspacesSettings() {
   const workspaces = actor.memberships;
   const plan = planFor(actor.identity.plan);
 
-  const details = await db.workspace.findMany({
-    where: { id: { in: workspaces.map((w) => w.id) } },
-    select: {
-      id: true, name: true, description: true, color: true,
-      members: { select: { role: true, user: { select: { id: true, name: true, email: true } } } },
-      _count: { select: { contacts: true, companies: true, projects: true, deals: true } },
-    },
+  const details = await scopedRead(workspaces.map((w) => w.id), async () => {
+    return db.workspace.findMany({
+      where: { id: { in: workspaces.map((w) => w.id) } },
+      select: {
+        id: true, name: true, description: true, color: true,
+        members: { select: { role: true, user: { select: { id: true, name: true, email: true } } } },
+        _count: { select: { contacts: true, companies: true, projects: true, deals: true } },
+      },
+    });
   });
 
   const atLimit = plan.limits.workspaces !== UNLIMITED && workspaces.length >= plan.limits.workspaces;

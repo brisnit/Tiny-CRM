@@ -5,6 +5,7 @@ import { requireActor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 import { parseJson } from "@/lib/json";
 import { CUSTOM_FIELD_TYPE, ENTITY_LABEL, type EntityType } from "@/lib/enums";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Custom fields" };
 
@@ -12,13 +13,15 @@ export default async function FieldSettings() {
   const actor = await requireActor();
   const workspaces = actor.memberships;
 
-  const fields = await db.customFieldDef.findMany({
-    where: { workspaceId: { in: workspaces.map((w) => w.id) } },
-    select: {
-      id: true, entityType: true, key: true, label: true, type: true, options: true,
-      workspaceId: true, _count: { select: { values: true } },
-    },
-    orderBy: [{ workspaceId: "asc" }, { entityType: "asc" }, { order: "asc" }],
+  const fields = await scopedRead(workspaces.map((w) => w.id), async () => {
+    return db.customFieldDef.findMany({
+      where: { workspaceId: { in: workspaces.map((w) => w.id) } },
+      select: {
+        id: true, entityType: true, key: true, label: true, type: true, options: true,
+        workspaceId: true, _count: { select: { values: true } },
+      },
+      orderBy: [{ workspaceId: "asc" }, { entityType: "asc" }, { order: "asc" }],
+    });
   });
 
   return (

@@ -17,6 +17,7 @@ import { db } from "@/lib/db";
 import { COMPANY_TYPE, RELATIONSHIP_STATUS } from "@/lib/enums";
 import { formatCompact } from "@/lib/money";
 import { timeAgo } from "@/lib/dates";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Companies" };
 
@@ -54,12 +55,14 @@ async function CompaniesTable({
       view: str("view"),
       page: Number(str("page") ?? 1),
     }),
-    db.tag.findMany({
-      where: { workspaceId: { in: workspaceIds } },
-      select: { name: true },
-      orderBy: { name: "asc" },
-      take: 40,
-    }),
+    scopedRead(workspaceIds, () =>
+      db.tag.findMany({
+        where: { workspaceId: { in: workspaceIds } },
+        select: { name: true },
+        orderBy: { name: "asc" },
+        take: 40,
+      }),
+    ),
   ]);
 
   return (

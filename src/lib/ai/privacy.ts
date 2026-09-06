@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { AppError } from "@/lib/errors";
 import { log } from "@/lib/logger";
+import { withTenantContext } from "@/lib/tenant-db";
 
 /**
  * Per-workspace AI privacy.
@@ -84,12 +85,29 @@ export type AiPermission = {
  * a cached window.
  */
 export async function aiPermission(workspaceId: string): Promise<AiPermission> {
-  const workspace = await db.workspace.findUnique({
-    where: { id: workspaceId },
-    select: { aiMode: true },
-  });
+  // Read inside the workspace's own tenant context. Without it RLS hides the
+  // row, and the fallback below used to be "enabled" — so a workspace that had
+  // deliberately switched AI off would have had its content transmitted. That
+  // is the wrong direction to fail in, and it failed that way silently.
+  const workspace = await withTenantContext({ workspaceIds: [workspaceId] }, async () =>
+    db.workspace.findUnique({ where: { id: workspaceId }, select: { aiMode: true } }),
+  );
 
-  const mode: AiMode = workspace && isAiMode(workspace.aiMode) ? workspace.aiMode : "enabled";
+  // An unreadable workspace now denies transmission rather than permitting it.
+  // Not being able to read the setting is not evidence that the setting is
+  // permissive; the deterministic engine keeps working either way, so failing
+  // closed costs a sentence of prose and never a disclosure.
+  if (!workspace) {
+    return {
+      allowed: true,
+      mayTransmitContent: false,
+      mode: "disabled",
+      reason:
+        "The workspace's AI setting could not be read, so nothing is sent to a provider.",
+    };
+  }
+
+  const mode: AiMode = isAiMode(workspace.aiMode) ? workspace.aiMode : "enabled";
   const provider = providerProfile();
 
   if (mode === "disabled") {

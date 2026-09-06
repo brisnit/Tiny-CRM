@@ -10,15 +10,18 @@ import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { formatDateTime } from "@/lib/dates";
 import { tagsForEntities } from "@/lib/actions/tags";
+import { scopedRead } from "@/lib/data/scoped";
 
 export async function generateMetadata({ params }: PageProps<"/notes/[id]">) {
   const { id } = await params;
   await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
-  const note = await db.note.findFirst({
-    where: { id, workspaceId: { in: workspaceIds } },
-    select: { title: true },
-  });
+  const note = await scopedRead(workspaceIds, () =>
+    db.note.findFirst({
+      where: { id, workspaceId: { in: workspaceIds } },
+      select: { title: true },
+    }),
+  );
   return { title: note?.title ?? "Note" };
 }
 
@@ -27,7 +30,7 @@ export default async function NotePage({ params }: PageProps<"/notes/[id]">) {
   await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
 
-  const note = await db.note.findFirst({
+  const note = await scopedRead(workspaceIds, () => db.note.findFirst({
     where: { id, workspaceId: { in: workspaceIds } },
     include: {
       author: { select: { name: true } },
@@ -38,7 +41,7 @@ export default async function NotePage({ params }: PageProps<"/notes/[id]">) {
       project: { select: { id: true, name: true } },
       opportunity: { select: { id: true, name: true } },
     },
-  });
+  }));
   if (!note) notFound();
 
   const tags = (await tagsForEntities("note", [id])).get(id) ?? [];

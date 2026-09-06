@@ -103,7 +103,7 @@ export async function claimJobs(limit = 10): Promise<ClaimedJob[]> {
     // prisma/postgres/006_job_claim.sql for why this is the claim step only,
     // and rootDb because the claim must not join a caller's transaction.
     return rootDb.$queryRaw<ClaimedJob[]>`
-      SELECT * FROM app_claim_jobs(${WORKER_ID}, ${limit}::int, ${claimedUntil})
+      SELECT * FROM app_claim_jobs(${WORKER_ID}, ${limit}::int, ${Math.round(CLAIM_TTL_MS / 1000)}::int)
     `;
   }
 

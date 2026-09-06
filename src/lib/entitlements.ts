@@ -5,6 +5,7 @@ import { currentPeriod } from "@/lib/dates";
 import { AppError } from "@/lib/errors";
 import { LIMIT_NOUN, PLANS, PlanLimitError, UNLIMITED, limitFor, planFor, type LimitKey, type PlanId } from "@/lib/plans";
 import type { Actor, WorkspaceActor } from "@/lib/auth/access";
+import { withTenantContext } from "@/lib/tenant-db";
 
 /**
  * Entitlements.
@@ -73,6 +74,12 @@ export async function getPlanUsage(actor: Actor | WorkspaceActor): Promise<Recor
   const workspaceIds = actor.memberships.map((m) => m.id);
   const where = { workspaceId: { in: workspaceIds } };
 
+  // Plan limits are account-wide, so this counts across every workspace the
+  // actor belongs to — wider than the single-workspace context a mutation runs
+  // in, hence `isolated`. Without a context at all these counts came back zero
+  // under RLS and the limits stopped being enforced entirely, which is the
+  // wrong direction for a check whose job is to say no.
+  return withTenantContext({ workspaceIds, userId: actor.identity.id }, async () => {
   const [contacts, companies, deals, projects, opportunities, tasks, automations, savedViews, customFields, ai] =
     await Promise.all([
       db.contact.count({ where: { ...where, archivedAt: null } }),
@@ -110,6 +117,7 @@ export async function getPlanUsage(actor: Actor | WorkspaceActor): Promise<Recor
     aiRequestsPerMonth: ai?.count ?? 0,
     seats: 1,
   };
+  }, { isolated: true });
 }
 
 export async function recordUsage(userId: string, metric: string, amount = 1): Promise<void> {

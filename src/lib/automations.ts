@@ -2,6 +2,7 @@ import "server-only";
 
 import { db } from "@/lib/db";
 import { parseJson } from "@/lib/json";
+import { withTenantContext } from "@/lib/tenant-db";
 
 /**
  * Lightweight workflow engine.
@@ -32,54 +33,59 @@ export async function runAutomations(input: {
   entityId: string;
   context: RunContext;
 }) {
-  const automations = await db.automation.findMany({
-    where: { workspaceId: input.workspaceId, enabled: true, trigger: input.trigger },
+  // Automations run from job handlers (which already hold the job's context)
+  // and can also be triggered inline. Establishing the workspace's context
+  // here makes both paths identical rather than leaving one to fail closed.
+  return withTenantContext({ workspaceIds: [input.workspaceId] }, async () => {
+    const automations = await db.automation.findMany({
+      where: { workspaceId: input.workspaceId, enabled: true, trigger: input.trigger },
+    });
+    if (automations.length === 0) return;
+
+    for (const automation of automations) {
+      const conditions = parseJson<AutomationCondition[]>(automation.conditions, []);
+      if (!conditionsMatch(conditions, input.context)) {
+        await db.automationRun.create({
+          data: {
+            automationId: automation.id,
+            entityType: input.entityType,
+            entityId: input.entityId,
+            status: "skipped",
+            message: "Conditions not met",
+          },
+        });
+        continue;
+      }
+
+      const actions = parseJson<AutomationAction[]>(automation.actions, []);
+      try {
+        for (const act of actions) await applyAction(act, input);
+        await db.automation.update({
+          where: { id: automation.id },
+          data: { lastRunAt: new Date(), runCount: { increment: 1 } },
+        });
+        await db.automationRun.create({
+          data: {
+            automationId: automation.id,
+            entityType: input.entityType,
+            entityId: input.entityId,
+            status: "success",
+            message: actions.map((a) => a.type).join(", "),
+          },
+        });
+      } catch (error) {
+        await db.automationRun.create({
+          data: {
+            automationId: automation.id,
+            entityType: input.entityType,
+            entityId: input.entityId,
+            status: "error",
+            message: error instanceof Error ? error.message : "Unknown error",
+          },
+        });
+      }
+    }
   });
-  if (automations.length === 0) return;
-
-  for (const automation of automations) {
-    const conditions = parseJson<AutomationCondition[]>(automation.conditions, []);
-    if (!conditionsMatch(conditions, input.context)) {
-      await db.automationRun.create({
-        data: {
-          automationId: automation.id,
-          entityType: input.entityType,
-          entityId: input.entityId,
-          status: "skipped",
-          message: "Conditions not met",
-        },
-      });
-      continue;
-    }
-
-    const actions = parseJson<AutomationAction[]>(automation.actions, []);
-    try {
-      for (const act of actions) await applyAction(act, input);
-      await db.automation.update({
-        where: { id: automation.id },
-        data: { lastRunAt: new Date(), runCount: { increment: 1 } },
-      });
-      await db.automationRun.create({
-        data: {
-          automationId: automation.id,
-          entityType: input.entityType,
-          entityId: input.entityId,
-          status: "success",
-          message: actions.map((a) => a.type).join(", "),
-        },
-      });
-    } catch (error) {
-      await db.automationRun.create({
-        data: {
-          automationId: automation.id,
-          entityType: input.entityType,
-          entityId: input.entityId,
-          status: "error",
-          message: error instanceof Error ? error.message : "Unknown error",
-        },
-      });
-    }
-  }
 }
 
 function conditionsMatch(conditions: AutomationCondition[], context: RunContext) {

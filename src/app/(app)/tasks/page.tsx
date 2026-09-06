@@ -13,6 +13,7 @@ import { readProjectFocus, readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { TASK_PRIORITY } from "@/lib/enums";
 import { formatDay } from "@/lib/dates";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Tasks" };
 
@@ -79,27 +80,29 @@ async function TaskList({ searchParams }: { searchParams: PageProps<"/tasks">["s
     company: { select: { id: true, name: true } },
   };
 
-  const [tasks, counts] = await Promise.all([
-    db.task.findMany({
-      where,
-      select,
-      orderBy:
-        view === "completed"
-          ? [{ completedAt: "desc" as const }]
-          : [{ dueAt: "asc" as const }, { priority: "desc" as const }],
-      take: 200,
-    }),
-    Promise.all([
-      db.task.count({ where: { ...base, status: { in: ["open", "in_progress"] }, dueAt: { lt: now } } }),
-      db.task.count({
-        where: { ...base, status: { in: ["open", "in_progress"] }, dueAt: { gte: now, lte: endOfToday } },
+  const [tasks, counts] = await scopedRead(workspaceIds, async () => {
+    return Promise.all([
+      db.task.findMany({
+        where,
+        select,
+        orderBy:
+          view === "completed"
+            ? [{ completedAt: "desc" as const }]
+            : [{ dueAt: "asc" as const }, { priority: "desc" as const }],
+        take: 200,
       }),
-      db.task.count({ where: { ...base, status: { in: ["open", "in_progress"] } } }),
-      db.task.count({
-        where: { ...base, status: "done", completedAt: { gte: new Date(now.getFullYear(), now.getMonth(), 1) } },
-      }),
-    ]),
-  ]);
+      Promise.all([
+        db.task.count({ where: { ...base, status: { in: ["open", "in_progress"] }, dueAt: { lt: now } } }),
+        db.task.count({
+          where: { ...base, status: { in: ["open", "in_progress"] }, dueAt: { gte: now, lte: endOfToday } },
+        }),
+        db.task.count({ where: { ...base, status: { in: ["open", "in_progress"] } } }),
+        db.task.count({
+          where: { ...base, status: "done", completedAt: { gte: new Date(now.getFullYear(), now.getMonth(), 1) } },
+        }),
+      ]),
+    ]);
+  });
 
   const [overdue, today, open, completedThisMonth] = counts;
 

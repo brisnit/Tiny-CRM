@@ -2,6 +2,7 @@ import { Panel, PanelHeader } from "@/components/ui/surface";
 import { TagManager } from "@/components/app/tag-manager";
 import { requireActor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Tags" };
 
@@ -9,13 +10,15 @@ export default async function TagSettings() {
   const actor = await requireActor();
   const workspaces = actor.memberships;
 
-  const tags = await db.tag.findMany({
-    where: { workspaceId: { in: workspaces.map((w) => w.id) } },
-    select: {
-      id: true, name: true, color: true, workspaceId: true,
-      _count: { select: { links: true } },
-    },
-    orderBy: { name: "asc" },
+  const tags = await scopedRead(workspaces.map((w) => w.id), async () => {
+    return db.tag.findMany({
+      where: { workspaceId: { in: workspaces.map((w) => w.id) } },
+      select: {
+        id: true, name: true, color: true, workspaceId: true,
+        _count: { select: { links: true } },
+      },
+      orderBy: { name: "asc" },
+    });
   });
 
   return (

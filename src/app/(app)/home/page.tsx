@@ -24,6 +24,7 @@ import { db } from "@/lib/db";
 import { formatCompact, formatMoney } from "@/lib/money";
 import { daysSince, describeDeadline, formatDay, formatTime, timeAgo } from "@/lib/dates";
 import { PROJECT_HEALTH, SUBMISSION_STATUS, TONE } from "@/lib/enums";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Home" };
 
@@ -35,26 +36,28 @@ export default async function HomePage() {
   const scope = isAll ? "all" : (workspaceIds[0] ?? "all");
 
   const workspaces = actor.memberships;
-  const [dashboard, todayTasks] = await Promise.all([
-    getDashboard(workspaceIds, projectFocus),
-    db.task.findMany({
-      where: {
-        workspaceId: { in: workspaceIds },
-        status: { in: ["open", "in_progress"] },
-        ...(projectFocus ? { projectId: projectFocus } : {}),
-        dueAt: { lte: endOfToday() },
-      },
-      select: {
-        id: true, title: true, dueAt: true, priority: true, status: true, workspaceId: true,
-        project: { select: { id: true, name: true } },
-        deal: { select: { id: true, name: true } },
-        contact: { select: { id: true, fullName: true } },
-        company: { select: { id: true, name: true } },
-      },
-      orderBy: [{ dueAt: "asc" }, { priority: "desc" }],
-      take: 8,
-    }),
-  ]);
+  const [dashboard, todayTasks] = await scopedRead(workspaceIds, async () => {
+    return Promise.all([
+      getDashboard(workspaceIds, projectFocus),
+      db.task.findMany({
+        where: {
+          workspaceId: { in: workspaceIds },
+          status: { in: ["open", "in_progress"] },
+          ...(projectFocus ? { projectId: projectFocus } : {}),
+          dueAt: { lte: endOfToday() },
+        },
+        select: {
+          id: true, title: true, dueAt: true, priority: true, status: true, workspaceId: true,
+          project: { select: { id: true, name: true } },
+          deal: { select: { id: true, name: true } },
+          contact: { select: { id: true, fullName: true } },
+          company: { select: { id: true, name: true } },
+        },
+        orderBy: [{ dueAt: "asc" }, { priority: "desc" }],
+        take: 8,
+      }),
+    ]);
+  });
 
   const scopeLabel = isAll
     ? "All Businesses"

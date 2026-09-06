@@ -35,6 +35,9 @@ that no amount of correct deployment will substitute for.
       psql "$DATABASE_URL" -f prisma/postgres/001_search_indexes.sql
       psql "$DATABASE_URL" -f prisma/postgres/002_row_level_security.sql
       psql "$DATABASE_URL" -f prisma/postgres/003_deferrable_constraints.sql
+      psql "$DATABASE_URL" -f prisma/postgres/004_workspace_bootstrap.sql
+      psql "$DATABASE_URL" -f prisma/postgres/005_identity_policies.sql
+      psql "$DATABASE_URL" -f prisma/postgres/006_job_claim.sql
       ```
       None is optional:
 

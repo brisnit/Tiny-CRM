@@ -4,6 +4,7 @@ import { PipelineManager } from "@/components/app/pipeline-manager";
 import { requireActor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 import { PIPELINE_KIND } from "@/lib/enums";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Pipelines" };
 
@@ -11,17 +12,19 @@ export default async function PipelineSettings() {
   const actor = await requireActor();
   const workspaces = actor.memberships;
 
-  const pipelines = await db.pipeline.findMany({
-    where: { workspaceId: { in: workspaces.map((w) => w.id) } },
-    select: {
-      id: true, name: true, kind: true, description: true, isDefault: true, workspaceId: true,
-      stages: {
-        select: { id: true, name: true, probability: true, color: true, kind: true, order: true },
-        orderBy: { order: "asc" },
+  const pipelines = await scopedRead(workspaces.map((w) => w.id), async () => {
+    return db.pipeline.findMany({
+      where: { workspaceId: { in: workspaces.map((w) => w.id) } },
+      select: {
+        id: true, name: true, kind: true, description: true, isDefault: true, workspaceId: true,
+        stages: {
+          select: { id: true, name: true, probability: true, color: true, kind: true, order: true },
+          orderBy: { order: "asc" },
+        },
+        _count: { select: { deals: true, opportunities: true } },
       },
-      _count: { select: { deals: true, opportunities: true } },
-    },
-    orderBy: [{ workspaceId: "asc" }, { order: "asc" }],
+      orderBy: [{ workspaceId: "asc" }, { order: "asc" }],
+    });
   });
 
   return (

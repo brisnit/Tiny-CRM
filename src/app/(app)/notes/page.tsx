@@ -13,6 +13,7 @@ import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { formatDay, timeAgo } from "@/lib/dates";
 import { truncate } from "@/lib/utils";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Notes" };
 
@@ -43,7 +44,7 @@ async function NotesList({ searchParams }: { searchParams: PageProps<"/notes">["
   }
   if (str("view") === "pinned") where.pinned = true;
 
-  const notes = await db.note.findMany({
+  const notes = await scopedRead(workspaceIds, () => db.note.findMany({
     where,
     select: {
       id: true, title: true, plainText: true, pinned: true, createdAt: true, updatedAt: true,
@@ -55,17 +56,19 @@ async function NotesList({ searchParams }: { searchParams: PageProps<"/notes">["
     },
     orderBy: [{ pinned: "desc" }, { updatedAt: "desc" }],
     take: 100,
-  });
+  }));
 
   return (
     <div className="space-y-4">
       <CaptureWithAi
         workspaceId={workspaceId}
-        workspaces={(await db.workspace.findMany({
-          where: { id: { in: workspaceIds } },
-          select: { id: true, name: true },
-          orderBy: { createdAt: "asc" },
-        }))}
+        workspaces={await scopedRead(workspaceIds, () =>
+          db.workspace.findMany({
+            where: { id: { in: workspaceIds } },
+            select: { id: true, name: true },
+            orderBy: { createdAt: "asc" },
+          }),
+        )}
       />
 
       <FilterBar

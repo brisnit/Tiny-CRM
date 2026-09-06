@@ -101,6 +101,9 @@ npx prisma migrate deploy
 node scripts/apply-sql.mjs prisma/postgres/001_search_indexes.sql
 node scripts/apply-sql.mjs prisma/postgres/002_row_level_security.sql
 node scripts/apply-sql.mjs prisma/postgres/003_deferrable_constraints.sql
+node scripts/apply-sql.mjs prisma/postgres/004_workspace_bootstrap.sql
+node scripts/apply-sql.mjs prisma/postgres/005_identity_policies.sql
+node scripts/apply-sql.mjs prisma/postgres/006_job_claim.sql
 ```
 
 Then set the login password for `tinycrm_app` as above, and verify:
@@ -336,6 +339,9 @@ A backup that has never been restored is a hypothesis, not a backup.
       node scripts/apply-sql.mjs prisma/postgres/001_search_indexes.sql
       node scripts/apply-sql.mjs prisma/postgres/002_row_level_security.sql
       node scripts/apply-sql.mjs prisma/postgres/003_deferrable_constraints.sql
+node scripts/apply-sql.mjs prisma/postgres/004_workspace_bootstrap.sql
+node scripts/apply-sql.mjs prisma/postgres/005_identity_policies.sql
+node scripts/apply-sql.mjs prisma/postgres/006_job_claim.sql
 3.  ALTER ROLE tinycrm_app WITH LOGIN PASSWORD '<generated>';
     GRANT CONNECT ON DATABASE <db> TO tinycrm_app;
 4.  Verify RLS binds:  reportRlsStatus() as tinycrm_app.

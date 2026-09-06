@@ -8,6 +8,7 @@ import { log, newRequestId, runWithContext } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { zScope } from "@/lib/validation/common";
 import { LIMITS } from "@/lib/validation/limits";
+import { scopedRead } from "@/lib/data/scoped";
 
 /**
  * Record pickers.
@@ -55,6 +56,10 @@ export async function GET(request: Request) {
           { headers: { "x-request-id": requestId, "cache-control": "no-store" } },
         );
 
+      // Every branch below reads a workspace-scoped model, so the whole switch
+      // runs in the scope resolveReadScope returned. That set is derived from
+      // the actor's memberships; the ?workspaceId parameter can only narrow it.
+      return scopedRead(workspaceIds, async () => {
       switch (params.type) {
         case "contact": {
           const rows = await db.contact.findMany({
@@ -125,6 +130,8 @@ export async function GET(request: Request) {
           return respond(rows.map((r) => ({ value: r.name, label: r.name, color: r.color })));
         }
       }
+      return respond([]);
+      });
     } catch (raw) {
       const error = toAppError(raw);
       if (error.category === "internal") {

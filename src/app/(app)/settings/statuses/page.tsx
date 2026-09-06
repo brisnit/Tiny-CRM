@@ -2,6 +2,7 @@ import { Panel, PanelHeader } from "@/components/ui/surface";
 import { StatusManager } from "@/components/app/status-manager";
 import { requireActor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Project statuses" };
 
@@ -9,14 +10,16 @@ export default async function StatusSettings() {
   const actor = await requireActor();
   const workspaces = actor.memberships;
 
-  const statuses = await db.projectStatus.findMany({
-    where: { workspaceId: { in: workspaces.map((w) => w.id) } },
-    select: {
-      id: true, name: true, color: true, order: true, isTerminal: true, isDefault: true,
-      workspaceId: true,
-      _count: { select: { projects: true } },
-    },
-    orderBy: [{ workspaceId: "asc" }, { order: "asc" }],
+  const statuses = await scopedRead(workspaces.map((w) => w.id), async () => {
+    return db.projectStatus.findMany({
+      where: { workspaceId: { in: workspaces.map((w) => w.id) } },
+      select: {
+        id: true, name: true, color: true, order: true, isTerminal: true, isDefault: true,
+        workspaceId: true,
+        _count: { select: { projects: true } },
+      },
+      orderBy: [{ workspaceId: "asc" }, { order: "asc" }],
+    });
   });
 
   return (

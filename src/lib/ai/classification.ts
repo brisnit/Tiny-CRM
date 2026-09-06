@@ -6,6 +6,7 @@ import { SYSTEM_PROMPTS } from "@/lib/ai/prompts";
 import { parseJson } from "@/lib/json";
 import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
 import type { Actor } from "@/lib/auth/access";
+import { withTenantContext } from "@/lib/tenant-db";
 
 /**
  * Auto-categorisation.
@@ -52,110 +53,114 @@ export async function classifyText(
   workspaceIds: string[],
   text: string,
 ): Promise<ClassificationResult> {
-  // Extraction sends the pasted text — often the most sensitive thing a user
-  // will ever put into this product — so it honours the workspace's mode before
-  // a model sees it. Falling back to the heuristic extractor keeps capture
-  // working with AI off; it finds fewer things and finds them locally.
-  const { aiPermission } = await import("@/lib/ai/privacy");
-  const permissions = await Promise.all(workspaceIds.map((id) => aiPermission(id)));
-  const mayTransmit = permissions.length > 0 && permissions.every((p) => p.mayTransmitContent);
+  // Establishes its own tenant context: reachable from pages and from job
+  // handlers, not only from the action wrapper.
+  return withTenantContext({ workspaceIds: workspaceIds }, async () => {
+    // Extraction sends the pasted text — often the most sensitive thing a user
+    // will ever put into this product — so it honours the workspace's mode before
+    // a model sees it. Falling back to the heuristic extractor keeps capture
+    // working with AI off; it finds fewer things and finds them locally.
+    const { aiPermission } = await import("@/lib/ai/privacy");
+    const permissions = await Promise.all(workspaceIds.map((id) => aiPermission(id)));
+    const mayTransmit = permissions.length > 0 && permissions.every((p) => p.mayTransmitContent);
 
-  const raw = mayTransmit && isModelBacked()
-    ? await extractWithModel(actor, text)
-    : extractHeuristically(text);
+    const raw = mayTransmit && isModelBacked()
+      ? await extractWithModel(actor, text)
+      : extractHeuristically(text);
 
-  const proposals: Proposal[] = [];
-  let counter = 0;
-  const nextId = () => `p${counter++}`;
+    const proposals: Proposal[] = [];
+    let counter = 0;
+    const nextId = () => `p${counter++}`;
 
-  // Match against existing records so the user is offered "link" rather than
-  // "create a duplicate".
-  for (const c of raw.companies ?? []) {
-    const existing = await db.company.findFirst({
-      where: { workspaceId: { in: workspaceIds }, name: contains(c.name) },
-      select: { id: true, name: true },
-    });
-    proposals.push({
-      id: nextId(),
-      kind: "company",
-      label: existing ? `Link to ${existing.name}` : `Create company “${c.name}”`,
-      matchId: existing?.id,
-      matchLabel: existing?.name,
-      isNew: !existing,
-      payload: { name: c.name },
-    });
-  }
+    // Match against existing records so the user is offered "link" rather than
+    // "create a duplicate".
+    for (const c of raw.companies ?? []) {
+      const existing = await db.company.findFirst({
+        where: { workspaceId: { in: workspaceIds }, name: contains(c.name) },
+        select: { id: true, name: true },
+      });
+      proposals.push({
+        id: nextId(),
+        kind: "company",
+        label: existing ? `Link to ${existing.name}` : `Create company “${c.name}”`,
+        matchId: existing?.id,
+        matchLabel: existing?.name,
+        isNew: !existing,
+        payload: { name: c.name },
+      });
+    }
 
-  for (const c of raw.contacts ?? []) {
-    const existing = await db.contact.findFirst({
-      where: { workspaceId: { in: workspaceIds }, fullName: contains(c.name) },
-      select: { id: true, fullName: true, company: { select: { name: true } } },
-    });
-    const company = c.company
-      ? await db.company.findFirst({
-          where: { workspaceId: { in: workspaceIds }, name: contains(c.company) },
-          select: { id: true, name: true },
-        })
-      : null;
+    for (const c of raw.contacts ?? []) {
+      const existing = await db.contact.findFirst({
+        where: { workspaceId: { in: workspaceIds }, fullName: contains(c.name) },
+        select: { id: true, fullName: true, company: { select: { name: true } } },
+      });
+      const company = c.company
+        ? await db.company.findFirst({
+            where: { workspaceId: { in: workspaceIds }, name: contains(c.company) },
+            select: { id: true, name: true },
+          })
+        : null;
 
-    proposals.push({
-      id: nextId(),
-      kind: "contact",
-      label: existing ? `Link to ${existing.fullName}` : `Create contact “${c.name}”`,
-      detail: [c.title, c.company].filter(Boolean).join(" · ") || undefined,
-      matchId: existing?.id,
-      matchLabel: existing?.fullName,
-      isNew: !existing,
-      payload: {
-        name: c.name,
-        firstName: c.name.split(" ")[0],
-        lastName: c.name.split(" ").slice(1).join(" "),
-        jobTitle: c.title ?? null,
-        companyId: company?.id ?? null,
-        companyName: c.company ?? null,
-      },
-    });
-  }
+      proposals.push({
+        id: nextId(),
+        kind: "contact",
+        label: existing ? `Link to ${existing.fullName}` : `Create contact “${c.name}”`,
+        detail: [c.title, c.company].filter(Boolean).join(" · ") || undefined,
+        matchId: existing?.id,
+        matchLabel: existing?.fullName,
+        isNew: !existing,
+        payload: {
+          name: c.name,
+          firstName: c.name.split(" ")[0],
+          lastName: c.name.split(" ").slice(1).join(" "),
+          jobTitle: c.title ?? null,
+          companyId: company?.id ?? null,
+          companyName: c.company ?? null,
+        },
+      });
+    }
 
-  for (const o of raw.opportunities ?? []) {
-    proposals.push({
-      id: nextId(),
-      kind: "opportunity",
-      label: `Track opportunity “${o.name}”`,
-      detail: o.note ?? undefined,
-      isNew: true,
-      payload: { name: o.name, value: o.value ?? null },
-    });
-  }
+    for (const o of raw.opportunities ?? []) {
+      proposals.push({
+        id: nextId(),
+        kind: "opportunity",
+        label: `Track opportunity “${o.name}”`,
+        detail: o.note ?? undefined,
+        isNew: true,
+        payload: { name: o.name, value: o.value ?? null },
+      });
+    }
 
-  for (const t of raw.tasks ?? []) {
-    proposals.push({
-      id: nextId(),
-      kind: "task",
-      label: `Task: ${t.title}`,
-      detail: t.dueInDays != null ? `Due in ${t.dueInDays} day${t.dueInDays === 1 ? "" : "s"}` : undefined,
-      isNew: true,
-      payload: { title: t.title, dueInDays: t.dueInDays ?? null, priority: t.priority ?? "medium" },
-    });
-  }
+    for (const t of raw.tasks ?? []) {
+      proposals.push({
+        id: nextId(),
+        kind: "task",
+        label: `Task: ${t.title}`,
+        detail: t.dueInDays != null ? `Due in ${t.dueInDays} day${t.dueInDays === 1 ? "" : "s"}` : undefined,
+        isNew: true,
+        payload: { title: t.title, dueInDays: t.dueInDays ?? null, priority: t.priority ?? "medium" },
+      });
+    }
 
-  for (const d of raw.dates ?? []) {
-    proposals.push({
-      id: nextId(),
-      kind: "date",
-      label: d.label,
-      detail: d.inDays != null ? `About ${d.inDays} days out` : "No specific date",
-      isNew: true,
-      payload: { label: d.label, inDays: d.inDays ?? null },
-    });
-  }
+    for (const d of raw.dates ?? []) {
+      proposals.push({
+        id: nextId(),
+        kind: "date",
+        label: d.label,
+        detail: d.inDays != null ? `About ${d.inDays} days out` : "No specific date",
+        isNew: true,
+        payload: { label: d.label, inDays: d.inDays ?? null },
+      });
+    }
 
-  return {
-    summary: raw.summary ?? text.slice(0, 200),
-    sentiment: (raw.sentiment as ClassificationResult["sentiment"]) ?? "neutral",
-    proposals,
-    modelBacked: isModelBacked(),
-  };
+    return {
+      summary: raw.summary ?? text.slice(0, 200),
+      sentiment: (raw.sentiment as ClassificationResult["sentiment"]) ?? "neutral",
+      proposals,
+      modelBacked: isModelBacked(),
+    };
+  });
 }
 
 async function extractWithModel(actor: Actor, text: string): Promise<RawExtraction> {

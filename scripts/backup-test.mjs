@@ -102,6 +102,17 @@ function applySchema() {
   execFileSync("node", ["scripts/apply-sql.mjs", "prisma/postgres/003_deferrable_constraints.sql"], {
     cwd: ROOT, stdio: "ignore", env,
   });
+  // The policy and bootstrap files, so a restored database is a complete one
+  // rather than a schema that happens to hold the rows.
+  for (const file of [
+    "004_workspace_bootstrap.sql",
+    "005_identity_policies.sql",
+    "006_job_claim.sql",
+  ]) {
+    execFileSync("node", ["scripts/apply-sql.mjs", `prisma/postgres/${file}`], {
+      cwd: ROOT, stdio: "ignore", env,
+    });
+  }
 }
 
 /** Streams one table out with COPY, the same path pg_dump uses for data. */

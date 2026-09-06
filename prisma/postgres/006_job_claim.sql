@@ -35,10 +35,26 @@
 
 BEGIN;
 
+-- Time handling, which is where this went wrong twice.
+--
+-- Prisma maps DateTime to `timestamp(3)` WITHOUT time zone and writes the UTC
+-- instant into it. Two comparisons therefore look right and are not:
+--
+--   * `availableAt <= now()` — now() is timestamptz, so PostgreSQL coerces it
+--     to the server's local wall clock. West of UTC every job looks hours in
+--     the future and the queue silently never drains.
+--   * passing a JS Date as a `timestamp` parameter — the driver renders it in
+--     local time, so the same skew reappears in the opposite direction and
+--     jobs run before they are due.
+--
+-- The unambiguous form is to build "now" in the same representation the column
+-- holds: `now() AT TIME ZONE 'UTC'` is a plain timestamp containing the UTC
+-- wall clock, which is exactly what Prisma stored. No timestamp crosses the
+-- driver boundary at all, so no conversion can be applied to it.
 CREATE OR REPLACE FUNCTION app_claim_jobs(
   p_worker text,
   p_limit int,
-  p_claimed_until timestamptz
+  p_claim_ttl_seconds int
 )
 RETURNS TABLE (
   id text,
@@ -58,18 +74,18 @@ AS $$
   UPDATE "DomainEvent" SET
     status = 'processing',
     "claimedBy" = p_worker,
-    "claimedUntil" = p_claimed_until,
+    "claimedUntil" = (now() AT TIME ZONE 'UTC') + make_interval(secs => p_claim_ttl_seconds),
     attempts = attempts + 1
   WHERE id IN (
     SELECT e.id FROM "DomainEvent" e
     WHERE e."deadAt" IS NULL
       AND e."processedAt" IS NULL
-      AND e."availableAt" <= now()
+      AND e."availableAt" <= (now() AT TIME ZONE 'UTC')
       AND (
         e.status = 'pending'
         OR e.status = 'failed'
         -- A claim whose worker died. Reclaimable rather than stranded.
-        OR (e.status = 'processing' AND (e."claimedUntil" IS NULL OR e."claimedUntil" <= now()))
+        OR (e.status = 'processing' AND (e."claimedUntil" IS NULL OR e."claimedUntil" <= (now() AT TIME ZONE 'UTC')))
       )
     ORDER BY e."availableAt" ASC
     LIMIT p_limit
@@ -83,7 +99,9 @@ $$;
 
 -- Only the application role. Not PUBLIC: a SECURITY DEFINER function granted to
 -- PUBLIC is reachable by every role the database will ever have.
-REVOKE ALL ON FUNCTION app_claim_jobs(text, int, timestamptz) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app_claim_jobs(text, int, timestamptz) TO tinycrm_app;
+DROP FUNCTION IF EXISTS app_claim_jobs(text, int, timestamptz);
+DROP FUNCTION IF EXISTS app_claim_jobs(text, int, timestamp, timestamp);
+REVOKE ALL ON FUNCTION app_claim_jobs(text, int, int) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_claim_jobs(text, int, int) TO tinycrm_app;
 
 COMMIT;

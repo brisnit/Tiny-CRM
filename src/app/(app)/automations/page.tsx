@@ -11,6 +11,7 @@ import { db } from "@/lib/db";
 import { parseJson } from "@/lib/json";
 import { timeAgo } from "@/lib/dates";
 import { AUTOMATION_ACTION, AUTOMATION_TRIGGER } from "@/lib/enums";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Automations" };
 
@@ -23,12 +24,14 @@ export default async function AutomationsPage() {
   const workspaces = actor.memberships;
   const workspaceNames = new Map(workspaces.map((w) => [w.id, w.name]));
 
-  const automations = await db.automation.findMany({
-    where: { workspaceId: { in: workspaceIds } },
-    include: {
-      runs: { orderBy: { createdAt: "desc" }, take: 3 },
-    },
-    orderBy: [{ enabled: "desc" }, { name: "asc" }],
+  const automations = await scopedRead(workspaceIds, async () => {
+    return db.automation.findMany({
+      where: { workspaceId: { in: workspaceIds } },
+      include: {
+        runs: { orderBy: { createdAt: "desc" }, take: 3 },
+      },
+      orderBy: [{ enabled: "desc" }, { name: "asc" }],
+    });
   });
 
   const totalRuns = automations.reduce((sum, a) => sum + a.runCount, 0);

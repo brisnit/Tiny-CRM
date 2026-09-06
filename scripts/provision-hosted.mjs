@@ -201,6 +201,9 @@ async function main() {
     "001_search_indexes.sql",
     "002_row_level_security.sql",
     "003_deferrable_constraints.sql",
+    "004_workspace_bootstrap.sql",
+    "005_identity_policies.sql",
+    "006_job_claim.sql",
   ]) {
     const out = run("node", ["scripts/apply-sql.mjs", `prisma/postgres/${file}`], {
       DATABASE_URL: ownerUrl,

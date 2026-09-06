@@ -10,6 +10,7 @@ import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { formatDay } from "@/lib/dates";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Files" };
 
@@ -26,22 +27,24 @@ export default async function FilesPage({ searchParams }: PageProps<"/files">) {
   const { workspaceIds } = await resolveReadScope(await readScope());
   const q = typeof params.q === "string" ? params.q : undefined;
 
-  const files = await db.fileAsset.findMany({
-    where: {
-      workspaceId: { in: workspaceIds },
-      ...(q ? { name: { contains: q } } : {}),
-    },
-    select: {
-      id: true, name: true, mimeType: true, sizeBytes: true, createdAt: true,
-      uploader: { select: { name: true } },
-      contact: { select: { id: true, fullName: true } },
-      company: { select: { id: true, name: true } },
-      deal: { select: { id: true, name: true } },
-      project: { select: { id: true, name: true } },
-      opportunity: { select: { id: true, name: true } },
-    },
-    orderBy: { createdAt: "desc" },
-    take: 200,
+  const files = await scopedRead(workspaceIds, async () => {
+    return db.fileAsset.findMany({
+      where: {
+        workspaceId: { in: workspaceIds },
+        ...(q ? { name: { contains: q } } : {}),
+      },
+      select: {
+        id: true, name: true, mimeType: true, sizeBytes: true, createdAt: true,
+        uploader: { select: { name: true } },
+        contact: { select: { id: true, fullName: true } },
+        company: { select: { id: true, name: true } },
+        deal: { select: { id: true, name: true } },
+        project: { select: { id: true, name: true } },
+        opportunity: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
   });
 
   return (

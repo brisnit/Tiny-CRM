@@ -7,6 +7,7 @@ import { buildRecordContext, buildWorkspaceSnapshot, type ContextScope } from "@
 import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
 import type { Actor } from "@/lib/auth/access";
 import type { AiMessage } from "@/lib/ai/provider";
+import { withTenantContext } from "@/lib/tenant-db";
 
 /**
  * The conversational agent behind ⌘K and the Tiny AI panel.
@@ -64,18 +65,29 @@ export async function* askTinyAi(request: AgentRequest): AsyncIterable<string> {
   await recordUsage(request.actor.identity.id, "ai_requests");
 
   if (request.threadId) {
-    await db.aiMessage.createMany({
-      data: [
-        { threadId: request.threadId, userId: request.actor.identity.id, role: "user", content: request.question },
-        {
-          threadId: request.threadId,
-          role: "assistant",
-          content: full,
-          meta: JSON.stringify({ provider: provider.id, model: provider.model }),
-        },
-      ],
-    });
-    await db.aiThread.update({ where: { id: request.threadId }, data: { updatedAt: new Date() } });
+    // Scoped individually rather than by wrapping the generator: a generator
+    // holds its transaction open for as long as the consumer takes to read the
+    // stream, which on a pooled connection is an unbounded hold. The reads
+    // above establish their own context inside buildRecordContext /
+    // buildWorkspaceSnapshot; this is the only write.
+    const threadId = request.threadId;
+    await withTenantContext(
+      { workspaceIds: request.scope.workspaceIds, userId: request.actor.identity.id },
+      async () => {
+        await db.aiMessage.createMany({
+          data: [
+            { threadId, userId: request.actor.identity.id, role: "user", content: request.question },
+            {
+              threadId,
+              role: "assistant",
+              content: full,
+              meta: JSON.stringify({ provider: provider.id, model: provider.model }),
+            },
+          ],
+        });
+        await db.aiThread.update({ where: { id: threadId }, data: { updatedAt: new Date() } });
+      },
+    );
   }
 }
 
@@ -87,15 +99,19 @@ export async function askTinyAiOnce(request: AgentRequest): Promise<string> {
 }
 
 export async function ensureThread(userId: string, workspaceId: string | null, title?: string) {
-  const existing = await db.aiThread.findFirst({
-    where: { userId, workspaceId },
-    orderBy: { updatedAt: "desc" },
-  });
-  // Continue today's thread rather than starting a new one on every question.
-  if (existing && Date.now() - existing.updatedAt.getTime() < 6 * 60 * 60 * 1000) return existing;
+  // Establishes its own tenant context: reachable from pages and from job
+  // handlers, not only from the action wrapper.
+  return withTenantContext({ workspaceIds: workspaceId ? [workspaceId] : [] }, async () => {
+    const existing = await db.aiThread.findFirst({
+      where: { userId, workspaceId },
+      orderBy: { updatedAt: "desc" },
+    });
+    // Continue today's thread rather than starting a new one on every question.
+    if (existing && Date.now() - existing.updatedAt.getTime() < 6 * 60 * 60 * 1000) return existing;
 
-  return db.aiThread.create({
-    data: { userId, workspaceId, title: title?.slice(0, 80) ?? "New conversation" },
+    return db.aiThread.create({
+      data: { userId, workspaceId, title: title?.slice(0, 80) ?? "New conversation" },
+    });
   });
 }
 

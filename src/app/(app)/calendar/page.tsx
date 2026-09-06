@@ -11,6 +11,7 @@ import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { formatDay, formatTime, timeAgo } from "@/lib/dates";
+import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Calendar" };
 
@@ -19,44 +20,46 @@ export default async function CalendarPage() {
   const { workspaceIds } = await resolveReadScope(await readScope());
   const now = new Date();
 
-  const [upcoming, past, unanswered, integrations] = await Promise.all([
-    db.calendarEvent.findMany({
-      where: { workspaceId: { in: workspaceIds }, startAt: { gte: now } },
-      select: {
-        id: true, title: true, startAt: true, endAt: true, meetingUrl: true, location: true,
-        contact: { select: { id: true, fullName: true } },
-        company: { select: { id: true, name: true } },
-        project: { select: { id: true, name: true } },
-        attendees: { select: { id: true, name: true, email: true } },
-      },
-      orderBy: { startAt: "asc" },
-      take: 40,
-    }),
-    db.calendarEvent.findMany({
-      where: { workspaceId: { in: workspaceIds }, startAt: { lt: now } },
-      select: {
-        id: true, title: true, startAt: true,
-        contact: { select: { id: true, fullName: true } },
-        project: { select: { id: true, name: true } },
-      },
-      orderBy: { startAt: "desc" },
-      take: 10,
-    }),
-    db.emailMessage.findMany({
-      where: { workspaceId: { in: workspaceIds }, needsReply: true },
-      select: {
-        id: true, subject: true, snippet: true, sentAt: true, direction: true,
-        contact: { select: { id: true, fullName: true } },
-      },
-      orderBy: { sentAt: "asc" },
-      take: 10,
-    }),
-    db.integration.findMany({
-      where: { workspaceId: { in: workspaceIds }, userId: actor.identity.id },
-      select: { provider: true, status: true, accountEmail: true, lastSyncAt: true },
-      distinct: ["provider"],
-    }),
-  ]);
+  const [upcoming, past, unanswered, integrations] = await scopedRead(workspaceIds, async () => {
+    return Promise.all([
+      db.calendarEvent.findMany({
+        where: { workspaceId: { in: workspaceIds }, startAt: { gte: now } },
+        select: {
+          id: true, title: true, startAt: true, endAt: true, meetingUrl: true, location: true,
+          contact: { select: { id: true, fullName: true } },
+          company: { select: { id: true, name: true } },
+          project: { select: { id: true, name: true } },
+          attendees: { select: { id: true, name: true, email: true } },
+        },
+        orderBy: { startAt: "asc" },
+        take: 40,
+      }),
+      db.calendarEvent.findMany({
+        where: { workspaceId: { in: workspaceIds }, startAt: { lt: now } },
+        select: {
+          id: true, title: true, startAt: true,
+          contact: { select: { id: true, fullName: true } },
+          project: { select: { id: true, name: true } },
+        },
+        orderBy: { startAt: "desc" },
+        take: 10,
+      }),
+      db.emailMessage.findMany({
+        where: { workspaceId: { in: workspaceIds }, needsReply: true },
+        select: {
+          id: true, subject: true, snippet: true, sentAt: true, direction: true,
+          contact: { select: { id: true, fullName: true } },
+        },
+        orderBy: { sentAt: "asc" },
+        take: 10,
+      }),
+      db.integration.findMany({
+        where: { workspaceId: { in: workspaceIds }, userId: actor.identity.id },
+        select: { provider: true, status: true, accountEmail: true, lastSyncAt: true },
+        distinct: ["provider"],
+      }),
+    ]);
+  });
 
   // Group the schedule by day so it reads as a calendar, not a list.
   const days = new Map<string, typeof upcoming>();

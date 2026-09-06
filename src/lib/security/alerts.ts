@@ -1,8 +1,9 @@
 import "server-only";
 
-import { db } from "@/lib/db";
+import { db, currentTenantClient } from "@/lib/db";
 import { env } from "@/lib/env";
 import { log, redact } from "@/lib/logger";
+import { withTenantContext } from "@/lib/tenant-db";
 
 /**
  * Security alerting.
@@ -155,8 +156,26 @@ export async function raiseAlert(input: AlertInput): Promise<void> {
   const definition = SECURITY_ALERTS[input.kind];
   const severity = input.severity ?? definition.severity;
 
+  // SecurityAlert is gated exactly like the audit log: a row naming a workspace
+  // needs that workspace in context, a row naming only a user needs
+  // app.user_id. Alerts are raised from sign-in throttling, export detection
+  // and configuration checks — most of which run outside any action — so
+  // without this the alert write is refused and the security signal is lost
+  // precisely when something is going wrong.
+  const inContext = currentTenantClient() !== null;
+  const scoped = <T>(fn: () => Promise<T>): Promise<T> =>
+    inContext
+      ? fn()
+      : withTenantContext(
+          {
+            workspaceIds: input.workspaceId ? [input.workspaceId] : [],
+            userId: input.userId ?? null,
+          },
+          fn,
+        );
+
   try {
-    const alert = await db.securityAlert.upsert({
+    const alert = await scoped(() => db.securityAlert.upsert({
       where: { dedupeKey: input.dedupeKey },
       create: {
         kind: input.kind,
@@ -179,7 +198,7 @@ export async function raiseAlert(input: AlertInput): Promise<void> {
         deliveredAt: null,
       },
       select: { id: true, count: true, severity: true },
-    });
+    }));
 
     log.warn("security alert", {
       kind: input.kind,
@@ -189,7 +208,7 @@ export async function raiseAlert(input: AlertInput): Promise<void> {
     });
 
     // Delivery is fire-and-forget. A slow webhook must not slow a sign-in.
-    void deliver(alert.id, input.kind, severity, input.summary, alert.count).catch((error) => {
+    void deliver(alert.id, input.kind, severity, input.summary, alert.count, scoped).catch((error) => {
       log.error("alert delivery failed", { kind: input.kind, error: String(error) });
     });
   } catch (error) {
@@ -221,12 +240,16 @@ async function deliver(
   severity: AlertSeverity,
   summary: string,
   count: number,
+  // The alert's own scope, threaded from raiseAlert. Delivery runs detached
+  // from the request, so it has no ambient context of its own, and the status
+  // write-back is subject to the same policy as the row it updates.
+  scoped: <T>(fn: () => Promise<T>) => Promise<T>,
 ): Promise<void> {
   if (!env.alertWebhookUrl) {
-    await db.securityAlert.update({
+    await scoped(() => db.securityAlert.update({
       where: { id: alertId },
       data: { deliveredAt: new Date() },
-    });
+    }));
     return;
   }
 
@@ -253,17 +276,17 @@ async function deliver(
       signal: AbortSignal.timeout(5_000),
     });
 
-    await db.securityAlert.update({
+    await scoped(() => db.securityAlert.update({
       where: { id: alertId },
       data: response.ok
         ? { deliveredAt: new Date(), deliveryError: null }
         : { deliveryError: `Sink returned ${response.status}` },
-    });
+    }));
   } catch (error) {
-    await db.securityAlert.update({
+    await scoped(() => db.securityAlert.update({
       where: { id: alertId },
       data: { deliveryError: String(error).slice(0, 300) },
-    });
+    }));
   }
 }
 
