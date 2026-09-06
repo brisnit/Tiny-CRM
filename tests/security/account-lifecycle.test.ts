@@ -425,6 +425,9 @@ describe("account lifecycle", () => {
       assert.equal(truncateIp("2001:db8:85a3:8d3:1319:8a2e:370:7348"), "2001:db8:85a3::/48");
       assert.equal(truncateIp("unknown"), null);
       assert.equal(truncateIp(null), null);
+      // Loopback carries no information and renders as nonsense when truncated.
+      assert.equal(truncateIp("::1"), "this machine");
+      assert.equal(truncateIp("127.0.0.1"), "this machine");
     });
 
     test("an expired session is refused even if never revoked", async () => {

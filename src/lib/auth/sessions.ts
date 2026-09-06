@@ -59,6 +59,10 @@ export function hashSessionId(sessionId: string): string {
 export function truncateIp(ip: string | null | undefined): string | null {
   if (!ip || ip === "unknown") return null;
 
+  // Loopback carries no information and renders as nonsense once truncated
+  // ("1::/48" for ::1). Recorded as what it is.
+  if (ip === "::1" || ip === "127.0.0.1" || ip.startsWith("127.")) return "this machine";
+
   if (ip.includes(":")) {
     const groups = ip.split(":").filter(Boolean).slice(0, 3);
     return groups.length ? `${groups.join(":")}::/48` : null;

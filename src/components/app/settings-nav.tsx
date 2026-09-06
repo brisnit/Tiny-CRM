@@ -4,7 +4,8 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Bot, CreditCard, Database, Layers, Plug, SlidersHorizontal, Tag, Target, User, Workflow,
+  Bot, CreditCard, Database, Layers, Plug, ShieldCheck, SlidersHorizontal, Tag, Target,
+  Trash2, User, Workflow,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -14,6 +15,7 @@ const GROUPS: { label: string; items: { href: string; label: string; icon: React
     label: "Account",
     items: [
       { href: "/settings/profile", label: "Profile", icon: User },
+      { href: "/settings/security", label: "Security", icon: ShieldCheck },
       { href: "/settings/billing", label: "Plan & billing", icon: CreditCard },
     ],
   },
@@ -33,6 +35,7 @@ const GROUPS: { label: string; items: { href: string; label: string; icon: React
       { href: "/settings/ai", label: "Tiny AI", icon: Bot },
       { href: "/settings/integrations", label: "Integrations", icon: Plug },
       { href: "/settings/data", label: "Import & export", icon: Database },
+      { href: "/settings/trash", label: "Trash", icon: Trash2 },
     ],
   },
 ];
