@@ -1,6 +1,6 @@
 import "server-only";
 
-import { contains, db } from "@/lib/db";
+import { contains, db, isSearchable } from "@/lib/db";
 import { tagsForEntities } from "@/lib/actions/tags";
 
 const PAGE_SIZE = 50;
@@ -12,7 +12,7 @@ export async function listCompanies(
   const page = Math.max(1, filters.page ?? 1);
   const where: Record<string, unknown> = { workspaceId: { in: workspaceIds }, archivedAt: null };
 
-  if (filters.q) {
+  if (isSearchable(filters.q)) {
     where.OR = [
       { name: contains(filters.q) },
       { domain: contains(filters.q) },

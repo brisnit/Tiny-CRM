@@ -1,6 +1,6 @@
 import "server-only";
 
-import { contains, db } from "@/lib/db";
+import { contains, db, isSearchable } from "@/lib/db";
 import { scoreProjectHealth } from "@/lib/scoring";
 import { tagsForEntities } from "@/lib/actions/tags";
 
@@ -14,7 +14,7 @@ export async function listProjects(
   const page = Math.max(1, filters.page ?? 1);
   const where: Record<string, unknown> = { workspaceId: { in: workspaceIds }, archivedAt: null };
 
-  if (filters.q) {
+  if (isSearchable(filters.q)) {
     where.OR = [
       { name: contains(filters.q) },
       { description: contains(filters.q) },

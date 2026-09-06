@@ -181,11 +181,23 @@ export const zVersion = z.number().int().min(0).optional();
 // Query-string schemas for route handlers
 // ---------------------------------------------------------------------------
 
+/**
+ * A free-text search term.
+ *
+ * Bounded at both ends, and refused when it contains nothing but LIKE
+ * wildcards. Prisma does not escape `%` or `_`, so `?q=%` compiles to
+ * `LIKE '%%%'` and matches every row in the workspace — the cheapest way for a
+ * signed-in user to force the most expensive query in the product. This is not
+ * an isolation problem (the workspace filter still applies), it is a cost one.
+ */
 export const zSearchQuery = z
   .string()
   .trim()
   .min(LIMITS.searchQuery.min)
-  .max(LIMITS.searchQuery.max);
+  .max(LIMITS.searchQuery.max)
+  .refine((value) => /[^%_\s]/.test(value), {
+    message: "Search for a word or part of one.",
+  });
 
 export const zScope = z
   .union([zId, z.literal("all"), z.null(), z.undefined()])

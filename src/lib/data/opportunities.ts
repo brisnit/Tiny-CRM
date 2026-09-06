@@ -1,6 +1,6 @@
 import "server-only";
 
-import { contains, db } from "@/lib/db";
+import { contains, db, isSearchable } from "@/lib/db";
 import { tagsForEntities } from "@/lib/actions/tags";
 
 /**
@@ -152,7 +152,7 @@ export async function listOpportunities(
   const now = new Date();
   const where: Record<string, unknown> = { workspaceId: { in: workspaceIds }, archivedAt: null };
 
-  if (filters.q) {
+  if (isSearchable(filters.q)) {
     where.OR = [
       { name: contains(filters.q) },
       { solicitationNumber: contains(filters.q) },

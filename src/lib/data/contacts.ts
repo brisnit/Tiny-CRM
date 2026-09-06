@@ -1,6 +1,6 @@
 import "server-only";
 
-import { contains, db } from "@/lib/db";
+import { contains, db, isSearchable } from "@/lib/db";
 import { scoreRelationship } from "@/lib/scoring";
 import { tagsForEntities } from "@/lib/actions/tags";
 
@@ -33,7 +33,7 @@ export async function listContacts(workspaceIds: string[], filters: ContactFilte
     archivedAt: null,
   };
 
-  if (filters.q) {
+  if (isSearchable(filters.q)) {
     where.OR = [
       { fullName: contains(filters.q) },
       { email: contains(filters.q) },

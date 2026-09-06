@@ -1,6 +1,6 @@
 // Imported first, for its side effect: it exits before the Prisma client is
 // constructed if this does not look like a development database.
-import "./guard";
+import "./guard-destructive";
 
 import bcrypt from "bcryptjs";
 

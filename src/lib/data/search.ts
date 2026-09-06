@@ -1,6 +1,6 @@
 import "server-only";
 
-import { contains, db } from "@/lib/db";
+import { contains, db, isSearchable } from "@/lib/db";
 import type { EntityType } from "@/lib/enums";
 
 export type SearchHit = {
@@ -31,7 +31,9 @@ export async function searchEverything(
   limitPerType = 5,
 ): Promise<SearchHit[]> {
   const q = query.trim();
-  if (q.length < 1 || workspaceIds.length === 0) return [];
+  // A wildcard-only term matches every row on both engines, so it is treated as
+  // no search rather than as the most expensive query in the product.
+  if (!isSearchable(q) || workspaceIds.length === 0) return [];
 
   const scope = { workspaceId: { in: workspaceIds } };
   const like = contains(q);

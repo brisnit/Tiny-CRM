@@ -61,3 +61,7 @@ test.db-*
 perf.db
 perf.db-*
 build.db
+
+# Embedded PostgreSQL cluster used by the verification runs
+.pgdata/
+.pgdata-run/

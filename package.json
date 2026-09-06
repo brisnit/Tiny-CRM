@@ -22,7 +22,11 @@
     "test": "node scripts/run-tests.mjs",
     "test:security": "node scripts/run-tests.mjs \"tests/security/**/*.test.ts\"",
     "test:perf": "node scripts/run-perf.mjs",
-    "check:config": "tsx scripts/check-config.ts"
+    "check:config": "tsx scripts/check-config.ts",
+    "test:pg": "node scripts/run-tests-pg.mjs",
+    "pg": "node scripts/pg.mjs",
+    "db:differences": "tsx scripts/db-differences.ts",
+    "db:seed:test": "tsx prisma/seed/test-seed.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
@@ -80,6 +84,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "dotenv": "^17.4.2",
+    "embedded-postgres": "^17.10.0-beta.17",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
     "playwright": "^1.63.0",
