@@ -133,7 +133,7 @@ describe("domain events", () => {
     await db.automation.delete({ where: { id: automation.id } });
   });
 
-  test("a poisoned event stops being retried rather than looping forever", async () => {
+  test("a dead-lettered job is never retried automatically", async () => {
     const { dispatchPendingEvents } = await import("../../src/lib/events");
 
     await db.domainEvent.deleteMany({ where: { workspaceId: A.workspaceId, processedAt: null } });
@@ -144,18 +144,148 @@ describe("domain events", () => {
         entityType: "deal",
         entityId: A.dealId,
         payload: JSON.stringify({}),
-        // Already at the retry ceiling.
+        status: "dead",
+        deadAt: new Date(),
         attempts: 5,
       },
     });
 
     const result = await dispatchPendingEvents();
-    assert.equal(result.processed, 0, "an exhausted event was retried");
+    assert.equal(result.processed, 0, "a dead job was picked up again");
 
     const after = await db.domainEvent.findUniqueOrThrow({ where: { id: event.id } });
     assert.equal(after.attempts, 5, "the attempt counter kept climbing");
+    assert.ok(after.deadAt, "the job left the dead-letter state on its own");
 
     await db.domainEvent.delete({ where: { id: event.id } });
+  });
+
+  test("a poisoned job dead-letters instead of blocking the queue", async () => {
+    // The property that matters: one job that always fails must not stop the
+    // jobs behind it from running.
+    const { runJobs } = await import("../../src/lib/jobs");
+    const { registerJobHandlers } = await import("../../src/lib/jobs/handlers");
+    const { registerHandler } = await import("../../src/lib/jobs");
+    registerJobHandlers();
+
+    let goodRuns = 0;
+    registerHandler("note.created", async () => {
+      goodRuns++;
+    });
+    registerHandler("company.created", async () => {
+      throw new Error("this handler always fails");
+    });
+
+    await db.domainEvent.deleteMany({ where: { workspaceId: A.workspaceId, processedAt: null } });
+
+    const poison = await db.domainEvent.create({
+      data: {
+        workspaceId: A.workspaceId, name: "company.created", entityType: "company",
+        entityId: A.companyId, payload: "{}", maxAttempts: 2,
+      },
+    });
+    await db.domainEvent.create({
+      data: {
+        workspaceId: A.workspaceId, name: "note.created", entityType: "note",
+        entityId: A.noteId, payload: "{}",
+      },
+    });
+
+    // Enough passes to exhaust the poisoned job's attempts. Its backoff is
+    // cleared between passes so the test does not wait on real time.
+    for (let i = 0; i < 3; i++) {
+      await runJobs(10);
+      await db.domainEvent.updateMany({
+        where: { status: "failed" },
+        data: { availableAt: new Date(Date.now() - 1000) },
+      });
+    }
+
+    const dead = await db.domainEvent.findUniqueOrThrow({ where: { id: poison.id } });
+    assert.ok(dead.deadAt, "the poisoned job never dead-lettered");
+    assert.equal(dead.status, "dead");
+
+    assert.ok(goodRuns > 0, "a healthy job behind a poisoned one never ran");
+
+    // And the failure history is preserved, not just the latest error.
+    const runs = await db.jobRun.count({ where: { eventId: poison.id } });
+    assert.ok(runs >= 2, "the execution log did not record each attempt");
+  });
+
+  test("a claim whose worker died is reclaimable", async () => {
+    // Without this, a crash mid-job strands the work permanently.
+    const { claimJobs } = await import("../../src/lib/jobs");
+
+    await db.domainEvent.deleteMany({ where: { workspaceId: A.workspaceId, processedAt: null } });
+    const stranded = await db.domainEvent.create({
+      data: {
+        workspaceId: A.workspaceId, name: "note.created", entityType: "note",
+        entityId: A.noteId, payload: "{}",
+        status: "processing",
+        claimedBy: "a-worker-that-died",
+        claimedUntil: new Date(Date.now() - 60_000),
+      },
+    });
+
+    const claimed = await claimJobs(10);
+    assert.ok(
+      claimed.some((job) => job.id === stranded.id),
+      "a job whose claim expired was never reclaimed",
+    );
+
+    await db.domainEvent.deleteMany({ where: { id: stranded.id } });
+  });
+
+  test("a live claim is not stolen by another worker", async () => {
+    const { claimJobs } = await import("../../src/lib/jobs");
+
+    await db.domainEvent.deleteMany({ where: { workspaceId: A.workspaceId, processedAt: null } });
+    const held = await db.domainEvent.create({
+      data: {
+        workspaceId: A.workspaceId, name: "note.created", entityType: "note",
+        entityId: A.noteId, payload: "{}",
+        status: "processing",
+        claimedBy: "a-worker-that-is-alive",
+        claimedUntil: new Date(Date.now() + 300_000),
+      },
+    });
+
+    const claimed = await claimJobs(10);
+    assert.ok(
+      !claimed.some((job) => job.id === held.id),
+      "a job being worked on was claimed by a second worker",
+    );
+
+    await db.domainEvent.deleteMany({ where: { id: held.id } });
+  });
+
+  test("a failure backs off rather than retrying immediately", async () => {
+    const { runJobs, registerHandler } = await import("../../src/lib/jobs");
+    const { registerJobHandlers } = await import("../../src/lib/jobs/handlers");
+    registerJobHandlers();
+    registerHandler("task.created", async () => {
+      throw new Error("transient");
+    });
+
+    await db.domainEvent.deleteMany({ where: { workspaceId: A.workspaceId, processedAt: null } });
+    const job = await db.domainEvent.create({
+      data: {
+        workspaceId: A.workspaceId, name: "task.created", entityType: "task",
+        entityId: A.taskId, payload: "{}",
+      },
+    });
+
+    const before = Date.now();
+    await runJobs(10);
+
+    const after = await db.domainEvent.findUniqueOrThrow({ where: { id: job.id } });
+    assert.equal(after.status, "failed");
+    assert.ok(
+      after.availableAt.getTime() > before,
+      "a failed job was immediately available again — a hot retry loop",
+    );
+
+    await db.domainEvent.deleteMany({ where: { id: job.id } });
   });
 
   test("automations only fire for their own workspace", async () => {

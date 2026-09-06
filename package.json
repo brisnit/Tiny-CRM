@@ -27,7 +27,8 @@
     "pg": "node scripts/pg.mjs",
     "db:differences": "tsx scripts/db-differences.ts",
     "db:seed:test": "tsx prisma/seed/test-seed.ts",
-    "test:backup": "node scripts/backup-test.mjs"
+    "test:backup": "node scripts/backup-test.mjs",
+    "worker": "NODE_OPTIONS=\"--require ./scripts/allow-server-modules.cjs\" tsx scripts/worker.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

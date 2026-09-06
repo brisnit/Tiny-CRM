@@ -79,56 +79,25 @@ export async function emitEvent(
  * after a request's transaction commits (best effort) and is safe to run
  * concurrently because each event is claimed by an atomic conditional update.
  */
+/**
+ * Drains the outbox.
+ *
+ * Kept as the name the application already calls, but the work now happens in
+ * `src/lib/jobs.ts` — with atomic claiming, expiring claims, exponential
+ * backoff, a dead-letter state and a per-attempt execution log. This is the
+ * seam that made that replaceable without touching a single write path.
+ */
 export async function dispatchPendingEvents(limit = 25): Promise<{ processed: number; failed: number }> {
-  const { runAutomations } = await import("@/lib/automations");
+  const { runJobs } = await import("@/lib/jobs");
+  const { registerJobHandlers } = await import("@/lib/jobs/handlers");
+  registerJobHandlers();
 
-  const pending = await db.domainEvent.findMany({
-    where: { processedAt: null, attempts: { lt: 5 } },
-    orderBy: { createdAt: "asc" },
-    take: Math.min(limit, 100),
-  });
-
-  let processed = 0;
-  let failed = 0;
-
-  for (const event of pending) {
-    // Claim the event: only one worker can move attempts from n to n+1 for a
-    // still-unprocessed row, which gives at-least-once without a lock table.
-    const claimed = await db.domainEvent.updateMany({
-      where: { id: event.id, processedAt: null, attempts: event.attempts },
-      data: { attempts: event.attempts + 1 },
-    });
-    if (claimed.count === 0) continue;
-
-    try {
-      await runAutomations({
-        workspaceId: event.workspaceId,
-        userId: event.actorId ?? "system",
-        trigger: TRIGGER_FOR_EVENT[event.name as DomainEventName] ?? event.name,
-        entityType: event.entityType as "deal" | "project" | "contact" | "opportunity" | "task",
-        entityId: event.entityId,
-        context: JSON.parse(event.payload) as Record<string, string | number | boolean | null>,
-      });
-      await db.domainEvent.update({
-        where: { id: event.id },
-        data: { processedAt: new Date(), lastError: null },
-      });
-      processed++;
-    } catch (error) {
-      failed++;
-      await db.domainEvent.update({
-        where: { id: event.id },
-        data: { lastError: String(error).slice(0, 500) },
-      });
-      log.error("event dispatch failed", { event: event.name, id: event.id, error: String(error) });
-    }
-  }
-
-  return { processed, failed };
+  const result = await runJobs(limit);
+  return { processed: result.processed, failed: result.failed + result.dead };
 }
 
 /** Maps event names onto the automation trigger vocabulary. */
-const TRIGGER_FOR_EVENT: Partial<Record<DomainEventName, string>> = {
+export const TRIGGER_FOR_EVENT: Partial<Record<DomainEventName, string>> = {
   "deal.stage.changed": "deal_stage_changed",
   "project.status.changed": "project_status_changed",
   "contact.created": "contact_created",
@@ -139,9 +108,12 @@ const TRIGGER_FOR_EVENT: Partial<Record<DomainEventName, string>> = {
 /**
  * Fire-and-forget dispatch after a write.
  *
- * Deliberately not awaited by callers: automation execution must never make a
- * user's save slower or fail it. Unprocessed events remain in the outbox for a
- * scheduled worker to pick up.
+ * Deliberately not awaited: automation execution must never make a user's save
+ * slower or fail it. This is an optimisation, not the delivery mechanism — a
+ * request that dies before draining leaves its events in the outbox, and
+ * `npm run worker` (or a cron hitting the same function) is what guarantees they
+ * are eventually run. Before the worker existed, this *was* the mechanism, which
+ * is why a dead request meant a lost automation.
  */
 export function dispatchSoon(): void {
   void dispatchPendingEvents().catch((error) => {
