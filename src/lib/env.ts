@@ -111,6 +111,11 @@ export const env = {
   /** Shared secret a billing provider signs its webhooks with. */
   billingWebhookSecret: optional("BILLING_WEBHOOK_SECRET"),
 
+  // Shared secret for /api/cron/jobs. On a platform with no long-lived process
+  // this endpoint *is* the worker, so an unset value means the outbox silently
+  // stops draining — see the production warning below.
+  cronSecret: optional("CRON_SECRET"),
+
   /** Optional Redis-compatible rate-limit backend. Falls back to in-memory. */
   /**
    * Rate limiting. `auto` picks Redis when a URL is configured, otherwise
@@ -259,6 +264,15 @@ export function productionWarnings(): string[] {
       warnings.push(
         "No mail provider is configured — password reset and email verification " +
           "cannot deliver. Set MAIL_PROVIDER_URL and MAIL_PROVIDER_TOKEN.",
+      );
+    }
+
+    if (!env.cronSecret) {
+      warnings.push(
+        "CRON_SECRET is not set — /api/cron/jobs will refuse to run. On a platform " +
+          "with no long-lived process this is the only job runner, so automations, " +
+          "scheduled workspace deletions and retention sweeps will not happen. " +
+          "Either set it and schedule the endpoint, or run `npm run worker`.",
       );
     }
 

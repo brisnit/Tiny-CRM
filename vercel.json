@@ -1,0 +1,32 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+
+  "//": [
+    "buildCommand deliberately does NOT run `prisma migrate deploy`.",
+    "",
+    "A build runs on every push, including every preview deployment, and a",
+    "preview inherits whatever DATABASE_URL its environment supplies. Migrating",
+    "from the build step would mean an in-flight branch could alter a schema that",
+    "production is serving. Migrations are a deliberate, separately-credentialed",
+    "step — see docs/VERCEL-DEPLOYMENT.md. The runtime role (tinycrm_app) has no",
+    "DDL grant, so this would fail anyway; not relying on that is the point.",
+    "",
+    "`prisma generate` is required: the client is generated into src/generated",
+    "and is gitignored, so it does not exist in a fresh checkout."
+  ],
+  "buildCommand": "prisma generate && next build",
+
+  "crons": [
+    {
+      "//": "The job runner. Replaces `npm run worker`, which cannot exist here.",
+      "path": "/api/cron/jobs",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "//": "Retention sweep: expired sessions, spent tokens, completed events.",
+      "path": "/api/cron/jobs?sweep=1",
+      "schedule": "17 4 * * *"
+    }
+  ]
+}

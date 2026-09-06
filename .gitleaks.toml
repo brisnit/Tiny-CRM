@@ -1,0 +1,36 @@
+# Gitleaks configuration.
+#
+# The full default ruleset is kept. The allowlist below is deliberately narrow:
+# it matches four *specific literal strings* that exist only so the test and CI
+# harnesses can satisfy the production configuration gate, which requires an
+# AUTH_SECRET of at least 32 characters.
+#
+# The values are matched exactly. They are not path exclusions — a real secret
+# committed to any of these same files still fails the scan, which is the point.
+# Widening this to `paths` would turn the scanner off for the scripts most
+# likely to hold a credential.
+#
+# Both values are inert by construction: `assertProductionEnv()` in src/lib/env.ts
+# refuses any AUTH_SECRET under 32 characters and refuses the development secret
+# by name, and tests/security/config.test.ts asserts that behaviour.
+
+title = "Tiny CRM"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Test-harness AUTH_SECRET literals. Self-describing, inert, and required by the production config gate's own length check."
+regexTarget = "secret"
+regexes = [
+  '''^test-secret-that-is-at-least-32-characters-long$''',
+  '''^ci-secret-that-is-at-least-32-characters-long$''',
+]
+
+[[allowlists]]
+description = "Throwaway loopback PostgreSQL used by the local verification cluster and the CI service container. Never reachable off-host, holds no real data, and is recreated by every run."
+regexTarget = "match"
+regexes = [
+  '''postgresql://tinycrm:tinycrm@(127\.0\.0\.1|localhost)''',
+  '''postgresql://tinycrm_app:tinycrm_app@(127\.0\.0\.1|localhost)''',
+]

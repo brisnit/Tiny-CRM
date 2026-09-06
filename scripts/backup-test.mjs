@@ -197,12 +197,44 @@ async function checkReferentialIntegrity(client) {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether something is already accepting connections on the target port.
+ *
+ * Deliberately a real connection rather than a port probe: a port that is open
+ * but not PostgreSQL, or one that rejects these credentials, must fall through
+ * to starting the embedded cluster rather than failing later with a confusing
+ * error halfway through the drill.
+ */
+async function serverIsReachable() {
+  const client = new Client({ connectionString: ADMIN_URL, connectionTimeoutMillis: 3000 });
+  try {
+    await client.connect();
+    await client.query("SELECT 1");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
 async function main() {
   console.log("Backup and restore verification\n" + "=".repeat(60));
 
   // -------------------------------------------------------------------------
   step(1, "Build a representative database");
-  execFileSync("node", ["scripts/pg.mjs", "start"], { cwd: ROOT, stdio: "ignore" });
+
+  // Only start the embedded cluster if no server is already listening. CI
+  // supplies a real `postgres:17` service container, and this script used to
+  // start the embedded cluster on top of it unconditionally — which fails on
+  // the runner and is redundant when a server is already there. Reusing a
+  // provided server is also what makes this runnable against any PostgreSQL,
+  // which is what docs/POSTGRES-VERIFICATION.md tells the reader to do.
+  if (await serverIsReachable()) {
+    ok(`using the PostgreSQL already listening on port ${PORT}`);
+  } else {
+    execFileSync("node", ["scripts/pg.mjs", "start"], { cwd: ROOT, stdio: "ignore" });
+  }
   await recreateDatabase();
   applySchema();
 

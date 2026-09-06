@@ -1,6 +1,5 @@
 import "server-only";
 
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "@/generated/prisma/client";
@@ -15,6 +14,13 @@ import { env, isPostgres, isProduction } from "@/lib/env";
  *
  * Both adapters are listed in `serverExternalPackages` (next.config.ts) so their
  * native bindings are loaded at runtime instead of being bundled.
+ *
+ * The SQLite adapter is required lazily rather than imported at the top of this
+ * module, because importing it eagerly pulls better-sqlite3's native `.node`
+ * binary into the require cache on every cold start — including in a serverless
+ * production deployment that only ever speaks PostgreSQL. Verified: requiring
+ * `@prisma/adapter-better-sqlite3` loads better-sqlite3 as a side effect. This
+ * keeps a native module that production never uses off the cold-start path.
  */
 function createAdapter() {
   if (isPostgres) {
@@ -26,6 +32,10 @@ function createAdapter() {
       connectionTimeoutMillis: 10_000,
     });
   }
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { PrismaBetterSqlite3 } = require("@prisma/adapter-better-sqlite3") as
+    typeof import("@prisma/adapter-better-sqlite3");
   return new PrismaBetterSqlite3({ url: env.databaseUrl });
 }
 
