@@ -96,7 +96,11 @@ describe("row-level security", { skip: enabled ? false : "PostgreSQL with RLS_AP
       const unprotected = rows.map((r) => r.relname as string).sort();
 
       // The deliberate exclusions, each justified in docs/RLS.md.
-      const expected = ["AuthToken", "IdempotencyKey", "UsageCounter", "User", "_prisma_migrations"];
+      const expected = [
+        "AuthToken", "IdempotencyKey", "MfaCredential", "MfaRecoveryCode",
+        "RateLimitCounter", "UsageCounter", "User", "UserSession",
+        "_prisma_migrations",
+      ];
       assert.deepEqual(
         unprotected,
         expected,

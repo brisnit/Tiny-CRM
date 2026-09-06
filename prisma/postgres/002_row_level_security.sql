@@ -214,6 +214,27 @@ CREATE POLICY tenant_isolation ON "AuditLog"
     END
   );
 
+-- Security alerts name a workspace, a user and what happened. Gated the same way
+-- as the audit log: an alert with no workspace is visible only to the user it
+-- concerns, so "someone exported everything from Acme" does not become readable
+-- by every other tenant.
+ALTER TABLE "SecurityAlert" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "SecurityAlert" FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON "SecurityAlert";
+CREATE POLICY tenant_isolation ON "SecurityAlert"
+  USING (
+    CASE
+      WHEN "workspaceId" IS NOT NULL THEN app_can_see_workspace("workspaceId")
+      ELSE "userId" IS NOT NULL AND "userId" = app_user_id()
+    END
+  )
+  WITH CHECK (
+    CASE
+      WHEN "workspaceId" IS NOT NULL THEN app_can_see_workspace("workspaceId")
+      ELSE "userId" IS NULL OR "userId" = app_user_id()
+    END
+  );
+
 -- FeatureFlag rows are configuration, not customer data. A workspace override is
 -- gated; a global row (NULL) is readable by anyone, which is what makes a flag
 -- evaluable before a workspace is known.
@@ -281,6 +302,14 @@ CREATE POLICY tenant_isolation ON "AiMessage"
   USING (EXISTS (SELECT 1 FROM "AiThread" t WHERE t.id = "threadId" AND (t."workspaceId" IS NULL OR app_can_see_workspace(t."workspaceId"))))
   WITH CHECK (EXISTS (SELECT 1 FROM "AiThread" t WHERE t.id = "threadId" AND (t."workspaceId" IS NULL OR app_can_see_workspace(t."workspaceId"))));
 
+-- A job's execution log, reached through the event it belongs to.
+ALTER TABLE "JobRun" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "JobRun" FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON "JobRun";
+CREATE POLICY tenant_isolation ON "JobRun"
+  USING (EXISTS (SELECT 1 FROM "DomainEvent" e WHERE e.id = "eventId" AND app_can_see_workspace(e."workspaceId")))
+  WITH CHECK (EXISTS (SELECT 1 FROM "DomainEvent" e WHERE e.id = "eventId" AND app_can_see_workspace(e."workspaceId")));
+
 ALTER TABLE "EventAttendee" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "EventAttendee" FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON "EventAttendee";
@@ -308,16 +337,25 @@ CREATE POLICY tenant_isolation ON "Workspace"
 -- ---------------------------------------------------------------------------
 -- Deliberately NOT under RLS
 --
---   User            Authentication happens before any workspace is known: the
---                   sign-in path must read a user row with no tenant context to
---                   set. Rows contain no tenant data, and the application never
---                   exposes another user's row.
---   AuthToken       Password-reset and verification tokens, looked up by hash
---                   before a session exists. Same reason.
---   UsageCounter    Keyed to a user, not a workspace; consulted while
---                   establishing entitlements, before context exists.
---   IdempotencyKey  Written by the billing webhook, which is authenticated by
---                   signature and has no user or workspace context.
+--   User             Authentication happens before any workspace is known: the
+--                    sign-in path must read a user row with no tenant context to
+--                    set. Rows contain no tenant data, and the application never
+--                    exposes another user's row.
+--   AuthToken        Password-reset and verification tokens, looked up by hash
+--                    before a session exists. Same reason.
+--   UserSession      Read on every request to decide whether a session is still
+--                    live — necessarily before any workspace is established, and
+--                    for a user who may belong to none. Scoped by userId in
+--                    every query (src/lib/auth/sessions.ts).
+--   MfaCredential    Read while authenticating, for the same reason. Contains an
+--   MfaRecoveryCode  encrypted secret and bcrypt hashes, no tenant data.
+--   UsageCounter     Keyed to a user, not a workspace; consulted while
+--                    establishing entitlements, before context exists.
+--   IdempotencyKey   Written by the billing webhook, which is authenticated by
+--                    signature and has no user or workspace context.
+--   RateLimitCounter Keys are keyed digests and the values are integers. There
+--                    is no tenant data to isolate, and the limiter runs before
+--                    authentication on the paths that need it most.
 --
 -- Each is listed in docs/RLS.md with the reasoning, so "not covered" is a
 -- decision on the record rather than an omission.
