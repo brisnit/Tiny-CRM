@@ -74,16 +74,44 @@ async function main() {
   if (major >= 17) pass("PostgreSQL 17 or newer", version);
   else fail("PostgreSQL 17 or newer", `found ${version}`);
 
-  const ssl = (await app.query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")).rows[0];
+  // TLS must be judged from the CLIENT socket, not from pg_stat_ssl.
+  //
+  // pg_stat_ssl describes the connection as the *backend* sees it. Neon,
+  // Supabase's pooler, and any PgBouncer deployment terminate TLS in a proxy and
+  // reach the database over a private hop, so pg_stat_ssl.ssl is false there even
+  // though the client's own connection is fully encrypted. Trusting it produced a
+  // false FAIL against a correctly-configured Neon database. The socket this
+  // process actually holds is the leg that can be intercepted, so that is the one
+  // to check.
+  const socket = app.connection?.stream;
+  const isTls = typeof socket?.getCipher === "function";
   const host = /@([^:/?]+)/.exec(APP_DB)?.[1] ?? "";
   const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(host);
-  if (ssl?.ssl) {
-    pass("connection is encrypted (TLS)");
+
+  if (isTls) {
+    const protocol = socket.getProtocol?.() ?? "unknown";
+    const cipher = socket.getCipher?.().name ?? "unknown";
+    // `authorized` is false when the certificate chain did not verify — which
+    // is exactly the case sslmode=require (without verify) would let through.
+    if (socket.authorized) {
+      pass("connection is encrypted and the certificate verified", `${protocol}, ${cipher}`);
+    } else {
+      fail(
+        "connection is encrypted but the certificate did NOT verify",
+        `${protocol} — ${socket.authorizationError ?? "unknown error"}. Use sslmode=verify-full.`,
+      );
+    }
+    const backendSsl = (
+      await app.query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
+    ).rows[0]?.ssl;
+    if (!backendSsl) {
+      console.log(
+        "        note: the backend reports no TLS, which is normal for a proxied\n" +
+          "        provider (Neon, PgBouncer) — the proxy-to-database hop is private.",
+      );
+    }
   } else if (isLoopback) {
-    // A loopback cluster never leaves the machine, so cleartext is not a
-    // finding. Reported as a skip rather than a pass: this run has not
-    // demonstrated anything about the hosted deployment's transport.
-    skip("connection is encrypted (TLS)", `${host} is loopback — nothing to intercept, but this proves nothing about the hosted database`);
+    skip("connection is encrypted (TLS)", `${host} is loopback — nothing to intercept, but this proves nothing about a hosted database`);
   } else {
     fail("connection is encrypted (TLS)", "this connection to a remote host is in cleartext — add ?sslmode=require");
   }
