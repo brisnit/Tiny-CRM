@@ -18,14 +18,12 @@ import { useSyncedState } from "@/lib/hooks";
 export function AiSummaryCard({
   entityType,
   entityId,
-  workspaceId,
   body,
   generatedAt,
   providerLabel,
 }: {
   entityType: "contact" | "company" | "deal" | "project" | "opportunity";
   entityId: string;
-  workspaceId: string;
   body: string;
   generatedAt: string;
   providerLabel: string;
@@ -37,7 +35,7 @@ export function AiSummaryCard({
 
   function refresh() {
     startTransition(async () => {
-      const result = await refreshRecordSummary(entityType, entityId, workspaceId);
+      const result = await refreshRecordSummary(entityType, entityId);
       if (result.ok && result.data) {
         setContent(result.data.body);
         setStamp(new Date().toISOString());
@@ -45,7 +43,7 @@ export function AiSummaryCard({
       } else if (!result.ok) {
         toast.error(result.error, {
           action:
-            result.code === "limit"
+            result.category === "plan_limit"
               ? { label: "Upgrade", onClick: () => router.push("/settings/billing") }
               : undefined,
         });

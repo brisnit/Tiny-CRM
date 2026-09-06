@@ -1,13 +1,13 @@
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { TagManager } from "@/components/app/tag-manager";
-import { requireUser, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 
 export const metadata = { title: "Tags" };
 
 export default async function TagSettings() {
-  const user = await requireUser();
-  const workspaces = await getUserWorkspaces(user.id);
+  const actor = await requireActor();
+  const workspaces = actor.memberships;
 
   const tags = await db.tag.findMany({
     where: { workspaceId: { in: workspaces.map((w) => w.id) } },

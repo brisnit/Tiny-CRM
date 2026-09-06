@@ -4,7 +4,8 @@ import { db } from "@/lib/db";
 import { getProvider, isModelBacked } from "@/lib/ai/provider";
 import { SYSTEM_PROMPTS } from "@/lib/ai/prompts";
 import { parseJson } from "@/lib/json";
-import { recordUsage, assertWithinLimit, type SessionUser } from "@/lib/auth/session";
+import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
+import type { Actor } from "@/lib/auth/access";
 
 /**
  * Auto-categorisation.
@@ -47,12 +48,12 @@ type RawExtraction = {
 };
 
 export async function classifyText(
-  user: SessionUser,
+  actor: Actor,
   workspaceIds: string[],
   text: string,
 ): Promise<ClassificationResult> {
   const raw = isModelBacked()
-    ? await extractWithModel(user, text)
+    ? await extractWithModel(actor, text)
     : extractHeuristically(text);
 
   const proposals: Proposal[] = [];
@@ -149,8 +150,8 @@ export async function classifyText(
   };
 }
 
-async function extractWithModel(user: SessionUser, text: string): Promise<RawExtraction> {
-  await assertWithinLimit(user, "aiRequestsPerMonth");
+async function extractWithModel(actor: Actor, text: string): Promise<RawExtraction> {
+  await assertWithinLimit(actor, "aiRequestsPerMonth");
   const provider = getProvider();
   const result = await provider.complete({
     purpose: "classification",
@@ -159,7 +160,7 @@ async function extractWithModel(user: SessionUser, text: string): Promise<RawExt
     maxTokens: 1400,
     messages: [{ role: "user", content: text }],
   });
-  await recordUsage(user.id, "ai_requests");
+  await recordUsage(actor.identity.id, "ai_requests");
 
   // Models occasionally wrap JSON in a fence despite instructions.
   const cleaned = result.text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();

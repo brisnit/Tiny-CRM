@@ -3,7 +3,7 @@ import { Calendar, Mail, Plug } from "lucide-react";
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { requireUser, resolveScope } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { timeAgo } from "@/lib/dates";
@@ -18,11 +18,11 @@ const PROVIDERS = [
 ];
 
 export default async function IntegrationSettings() {
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
 
   const connected = await db.integration.findMany({
-    where: { workspaceId: { in: workspaceIds }, userId: user.id },
+    where: { workspaceId: { in: workspaceIds }, userId: actor.identity.id },
     select: { provider: true, status: true, accountEmail: true, lastSyncAt: true },
     distinct: ["provider"],
   });

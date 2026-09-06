@@ -8,7 +8,7 @@ import { StatRow, StatTile } from "@/components/app/stat-tile";
 import { EmptyState } from "@/components/ui/empty-state";
 import { TaskRow } from "@/components/app/task-row";
 import { NewRecordButton } from "@/components/app/new-record-button";
-import { requireUser, resolveScope } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readProjectFocus, readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { TASK_PRIORITY } from "@/lib/enums";
@@ -33,8 +33,8 @@ export default async function TasksPage({ searchParams }: PageProps<"/tasks">) {
 
 async function TaskList({ searchParams }: { searchParams: PageProps<"/tasks">["searchParams"] }) {
   const params = await searchParams;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const projectFocus = await readProjectFocus();
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 

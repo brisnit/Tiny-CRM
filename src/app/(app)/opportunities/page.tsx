@@ -9,7 +9,7 @@ import { StatRow, StatTile } from "@/components/app/stat-tile";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { NewRecordButton } from "@/components/app/new-record-button";
-import { requireUser, resolveScope } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { listOpportunities } from "@/lib/data/opportunities";
 import { formatCompact, formatMoney } from "@/lib/money";
@@ -41,8 +41,8 @@ async function OpportunityList({
   searchParams: PageProps<"/opportunities">["searchParams"];
 }) {
   const params = await searchParams;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 
   const opportunities = await listOpportunities(workspaceIds, {

@@ -4,7 +4,8 @@ import { Panel, PanelHeader } from "@/components/ui/surface";
 import { Progress } from "@/components/ui/controls";
 import { Badge } from "@/components/ui/badge";
 import { PlanPicker } from "@/components/app/plan-picker";
-import { requireUser, getPlanUsage } from "@/lib/auth/session";
+import { requireActor } from "@/lib/auth/access";
+import { getPlanUsage } from "@/lib/entitlements";
 import { LIMIT_NOUN, UNLIMITED, planFor, type LimitKey } from "@/lib/plans";
 import { db } from "@/lib/db";
 import { formatDate } from "@/lib/dates";
@@ -17,11 +18,11 @@ const TRACKED: LimitKey[] = [
 ];
 
 export default async function BillingSettings() {
-  const user = await requireUser();
+  const actor = await requireActor();
   const [usage, account] = await Promise.all([
-    getPlanUsage(user),
+    getPlanUsage(actor),
     db.user.findUniqueOrThrow({
-      where: { id: user.id },
+      where: { id: actor.identity.id },
       select: { plan: true, planStatus: true, planRenewsAt: true },
     }),
   ]);

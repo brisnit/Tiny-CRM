@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/ui/empty-state";
 import { TaskRow } from "@/components/app/task-row";
-import { requireUser, resolveScope, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readProjectFocus, readScope } from "@/lib/scope";
 import { getDashboard } from "@/lib/data/dashboard";
 import { getDailyBrief } from "@/lib/ai/summaries";
@@ -28,15 +28,15 @@ import { PROJECT_HEALTH, SUBMISSION_STATUS, TONE } from "@/lib/enums";
 export const metadata = { title: "Home" };
 
 export default async function HomePage() {
-  const user = await requireUser();
+  const actor = await requireActor();
   const scopeCookie = await readScope();
   const projectFocus = await readProjectFocus();
-  const { workspaceIds, isAll } = await resolveScope(user.id, scopeCookie);
+  const { workspaceIds, isAll } = await resolveReadScope(scopeCookie);
   const scope = isAll ? "all" : (workspaceIds[0] ?? "all");
 
-  const [dashboard, workspaces, todayTasks] = await Promise.all([
+  const workspaces = actor.memberships;
+  const [dashboard, todayTasks] = await Promise.all([
     getDashboard(workspaceIds, projectFocus),
-    getUserWorkspaces(user.id),
     db.task.findMany({
       where: {
         workspaceId: { in: workspaceIds },
@@ -66,7 +66,7 @@ export default async function HomePage() {
     <PageShell wide>
       <PageHeader
         eyebrow={scopeLabel}
-        title={`${greeting()}, ${user.name.split(" ")[0]}`}
+        title={`${greeting()}, ${actor.identity.name.split(" ")[0]}`}
         description="Everything that needs you, in one place."
         actions={
           <>
@@ -473,10 +473,10 @@ export default async function HomePage() {
  * should wait for it.
  */
 async function BriefBlock({ scope, scopeCookie }: { scope: string; scopeCookie: string }) {
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, scopeCookie);
-  const workspaces = await getUserWorkspaces(user.id);
-  const brief = await getDailyBrief(user, {
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(scopeCookie);
+  const workspaces = actor.memberships;
+  const brief = await getDailyBrief(actor, {
     workspaceIds,
     workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])),
   });

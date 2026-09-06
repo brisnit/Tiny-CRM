@@ -21,7 +21,7 @@ import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
 import { RecordActions } from "@/components/app/record-actions";
 import { ProjectStatusPicker, NextActionEditor, MilestoneList } from "@/components/app/project-controls";
-import { requireUser, resolveScope, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getProject } from "@/lib/data/projects";
 import { getRecordSummary } from "@/lib/ai/summaries";
@@ -32,22 +32,22 @@ import { PROJECT_HEALTH, PROJECT_PRIORITY, PROJECT_TYPE, SUBMISSION_STATUS } fro
 
 export async function generateMetadata({ params }: PageProps<"/projects/[id]">) {
   const { id } = await params;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const project = await getProject(workspaceIds, id);
   return { title: project?.name ?? "Project" };
 }
 
 export default async function ProjectPage({ params }: PageProps<"/projects/[id]">) {
   const { id } = await params;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const project = await getProject(workspaceIds, id);
   if (!project) notFound();
 
-  const workspaces = await getUserWorkspaces(user.id);
+  const workspaces = actor.memberships;
   const summary = await getRecordSummary(
-    user,
+    actor,
     { workspaceIds, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
     "project",
     id,
@@ -183,7 +183,6 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
             <AiSummaryCard
               entityType="project"
               entityId={project.id}
-              workspaceId={project.workspaceId}
               body={summary.body}
               generatedAt={summary.generatedAt.toISOString()}
               providerLabel={describeProvider().label}

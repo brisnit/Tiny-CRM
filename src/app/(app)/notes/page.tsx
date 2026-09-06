@@ -8,7 +8,7 @@ import { Panel, Skeleton } from "@/components/ui/surface";
 import { EmptyState } from "@/components/ui/empty-state";
 import { NewRecordButton } from "@/components/app/new-record-button";
 import { CaptureWithAi } from "@/components/app/capture-with-ai";
-import { requireUser, resolveScope } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { formatDay, timeAgo } from "@/lib/dates";
@@ -33,8 +33,8 @@ export default async function NotesPage({ searchParams }: PageProps<"/notes">) {
 
 async function NotesList({ searchParams }: { searchParams: PageProps<"/notes">["searchParams"] }) {
   const params = await searchParams;
-  const user = await requireUser();
-  const { workspaceIds, workspaceId } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds, workspaceId } = await resolveReadScope(await readScope());
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 
   const where: Record<string, unknown> = { workspaceId: { in: workspaceIds } };

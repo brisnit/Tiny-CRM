@@ -6,7 +6,7 @@ import { Panel } from "@/components/ui/surface";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CellStack, TBody, TD, TH, THead, TR, Table } from "@/components/ui/data-table";
 import { FilterBar } from "@/components/app/filter-bar";
-import { requireUser, resolveScope } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { formatDay } from "@/lib/dates";
@@ -22,8 +22,8 @@ const ICONS: { test: RegExp; icon: typeof FileText }[] = [
 
 export default async function FilesPage({ searchParams }: PageProps<"/files">) {
   const params = await searchParams;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const q = typeof params.q === "string" ? params.q : undefined;
 
   const files = await db.fileAsset.findMany({

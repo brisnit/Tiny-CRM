@@ -2,16 +2,16 @@ import { Database, Download, Upload } from "lucide-react";
 
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { ImportExport } from "@/components/app/import-export";
-import { requireUser, getUserWorkspaces, resolveScope } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 
 export const metadata = { title: "Import & export" };
 
 export default async function DataSettings() {
-  const user = await requireUser();
-  const workspaces = await getUserWorkspaces(user.id);
-  const { workspaceIds, workspaceId } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const workspaces = actor.memberships;
+  const { workspaceIds, workspaceId } = await resolveReadScope(await readScope());
   const where = { workspaceId: { in: workspaceIds } };
 
   const [contacts, companies, deals, projects, opportunities, tasks] = await Promise.all([

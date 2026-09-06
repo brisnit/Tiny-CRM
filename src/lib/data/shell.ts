@@ -1,7 +1,7 @@
 import "server-only";
 
 import { db } from "@/lib/db";
-import { getUserWorkspaces, type SessionUser } from "@/lib/auth/session";
+import type { Actor } from "@/lib/auth/access";
 import { describeProvider, isModelBacked } from "@/lib/ai/provider";
 import { colorForKey } from "@/lib/utils";
 import type { ShellData } from "@/components/app/shell";
@@ -12,12 +12,12 @@ import type { ShellData } from "@/components/app/shell";
  * a cascade of round-trips.
  */
 export async function getShellData(
-  user: SessionUser,
+  actor: Actor,
   scope: string,
   workspaceIds: string[],
   projectFocus: string | null,
 ): Promise<ShellData> {
-  const workspaces = await getUserWorkspaces(user.id);
+  const workspaces = actor.memberships;
   const where = { workspaceId: { in: workspaceIds } };
   const now = new Date();
   const endOfToday = new Date(now);
@@ -45,7 +45,7 @@ export async function getShellData(
         take: 40,
       }),
       db.notification.findMany({
-        where: { userId: user.id },
+        where: { userId: actor.identity.id },
         orderBy: { createdAt: "desc" },
         take: 30,
         select: {
@@ -54,7 +54,7 @@ export async function getShellData(
           workspace: { select: { name: true } },
         },
       }),
-      db.notification.count({ where: { userId: user.id, readAt: null } }),
+      db.notification.count({ where: { userId: actor.identity.id, readAt: null } }),
       db.pipeline.findMany({
         where: { ...where, kind: "deal" },
         select: {
@@ -75,11 +75,11 @@ export async function getShellData(
 
   return {
     user: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      avatarUrl: user.avatarUrl,
-      plan: user.plan,
+      id: actor.identity.id,
+      name: actor.identity.name,
+      email: actor.identity.email,
+      avatarUrl: actor.identity.avatarUrl,
+      plan: actor.identity.plan,
     },
     workspaces,
     projects: projects.map((p) => ({

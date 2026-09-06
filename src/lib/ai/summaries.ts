@@ -6,8 +6,8 @@ import { db } from "@/lib/db";
 import { getProvider } from "@/lib/ai/provider";
 import { SYSTEM_PROMPTS, withContext } from "@/lib/ai/prompts";
 import { buildRecordContext, buildWorkspaceSnapshot, type ContextScope } from "@/lib/ai/context";
-import { recordUsage, type SessionUser } from "@/lib/auth/session";
-import { assertWithinLimit } from "@/lib/auth/session";
+import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
+import type { Actor } from "@/lib/auth/access";
 
 export type SummaryKind = "summary" | "brief" | "deal_score";
 
@@ -21,7 +21,7 @@ function fingerprint(text: string) {
 }
 
 export async function getRecordSummary(
-  user: SessionUser,
+  actor: Actor,
   scope: ContextScope,
   entityType: "contact" | "company" | "deal" | "project" | "opportunity",
   entityId: string,
@@ -42,7 +42,7 @@ export async function getRecordSummary(
     }
   }
 
-  await assertWithinLimit(user, "aiRequestsPerMonth");
+  await assertWithinLimit(actor, "aiRequestsPerMonth");
 
   const provider = getProvider();
   const result = await provider.complete({
@@ -53,7 +53,7 @@ export async function getRecordSummary(
     messages: [{ role: "user", content: withContext("Summarise this record.", context.text) }],
   });
 
-  await recordUsage(user.id, "ai_requests");
+  await recordUsage(actor.identity.id, "ai_requests");
 
   const workspaceId = options.workspaceId || (await resolveWorkspaceId(entityType, entityId));
   if (!workspaceId) return { body: result.text, cached: false, model: result.model, generatedAt: new Date() };
@@ -77,7 +77,7 @@ export async function getRecordSummary(
 }
 
 export async function getDailyBrief(
-  user: SessionUser,
+  actor: Actor,
   scope: ContextScope,
   options: { force?: boolean } = {},
 ): Promise<{ body: string; cached: boolean; model: string | null; generatedAt: Date }> {
@@ -87,7 +87,7 @@ export async function getDailyBrief(
 
   if (!options.force) {
     const cached = await db.aiInsight.findFirst({
-      where: { kind: "brief", entityType: "user", entityId: `${user.id}:${scopeKey}`, fingerprint: print },
+      where: { kind: "brief", entityType: "user", entityId: `${actor.identity.id}:${scopeKey}`, fingerprint: print },
       orderBy: { createdAt: "desc" },
     });
     // Briefs also expire on the hour so "today" stays meaningful even when
@@ -97,7 +97,7 @@ export async function getDailyBrief(
     }
   }
 
-  await assertWithinLimit(user, "aiRequestsPerMonth");
+  await assertWithinLimit(actor, "aiRequestsPerMonth");
 
   const provider = getProvider();
   const result = await provider.complete({
@@ -109,26 +109,26 @@ export async function getDailyBrief(
       {
         role: "user",
         content: withContext(
-          `Write my brief. Today is ${new Date().toDateString()}. My name is ${user.name.split(" ")[0]}.`,
+          `Write my brief. Today is ${new Date().toDateString()}. My name is ${actor.identity.name.split(" ")[0]}.`,
           snapshot.text,
         ),
       },
     ],
   });
 
-  await recordUsage(user.id, "ai_requests");
+  await recordUsage(actor.identity.id, "ai_requests");
 
   const workspaceId = scope.workspaceIds[0];
   if (workspaceId) {
     await db.aiInsight.deleteMany({
-      where: { kind: "brief", entityType: "user", entityId: `${user.id}:${scopeKey}` },
+      where: { kind: "brief", entityType: "user", entityId: `${actor.identity.id}:${scopeKey}` },
     });
     await db.aiInsight.create({
       data: {
         workspaceId,
         kind: "brief",
         entityType: "user",
-        entityId: `${user.id}:${scopeKey}`,
+        entityId: `${actor.identity.id}:${scopeKey}`,
         title: "Daily brief",
         body: result.text,
         model: `${result.provider}:${result.model}`,

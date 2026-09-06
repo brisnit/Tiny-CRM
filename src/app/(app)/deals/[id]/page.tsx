@@ -19,7 +19,7 @@ import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
 import { RecordActions } from "@/components/app/record-actions";
 import { StageSelector } from "@/components/app/stage-selector";
-import { requireUser, resolveScope, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getDeal } from "@/lib/data/deals";
 import { getRecordSummary } from "@/lib/ai/summaries";
@@ -30,22 +30,22 @@ import { LEAD_SOURCE, TONE } from "@/lib/enums";
 
 export async function generateMetadata({ params }: PageProps<"/deals/[id]">) {
   const { id } = await params;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const deal = await getDeal(workspaceIds, id);
   return { title: deal?.name ?? "Deal" };
 }
 
 export default async function DealPage({ params }: PageProps<"/deals/[id]">) {
   const { id } = await params;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const deal = await getDeal(workspaceIds, id);
   if (!deal) notFound();
 
-  const workspaces = await getUserWorkspaces(user.id);
+  const workspaces = actor.memberships;
   const summary = await getRecordSummary(
-    user,
+    actor,
     { workspaceIds, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
     "deal",
     id,
@@ -162,7 +162,6 @@ export default async function DealPage({ params }: PageProps<"/deals/[id]">) {
             <AiSummaryCard
               entityType="deal"
               entityId={deal.id}
-              workspaceId={deal.workspaceId}
               body={summary.body}
               generatedAt={summary.generatedAt.toISOString()}
               providerLabel={describeProvider().label}

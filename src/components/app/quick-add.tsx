@@ -93,7 +93,7 @@ export function QuickAddDialog({
       } else {
         toast.error(result.error, {
           action:
-            result.code === "limit"
+            result.category === "plan_limit"
               ? { label: "Upgrade", onClick: () => router.push("/settings/billing") }
               : undefined,
         });
@@ -411,7 +411,9 @@ async function runCreate(
     case "deal": {
       const pipeline = context.pipelines.find((p) => p.workspaceId === workspaceId);
       const stageId = s("stageId") ?? pipeline?.stages[0]?.id;
-      if (!pipeline || !stageId) return { ok: false, error: "This workspace has no deal pipeline yet." };
+      if (!pipeline || !stageId) {
+        return { ok: false, error: "This workspace has no deal pipeline yet.", category: "validation" as const };
+      }
       return createDeal({
         workspaceId, name: s("name") ?? "", pipelineId: pipeline.id, stageId,
         valueCents: s("valueCents"), expectedCloseAt: s("expectedCloseAt"),

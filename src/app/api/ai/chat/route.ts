@@ -1,66 +1,143 @@
-import { getCurrentUser, getUserWorkspaces, resolveScope } from "@/lib/auth/session";
+import { z } from "zod";
+
+import { getActor, requireWorkspaceAccess, resolveReadScope } from "@/lib/auth/access";
+import { can } from "@/lib/auth/permissions";
 import { askTinyAi, ensureThread } from "@/lib/ai/crm-agent";
-import { PlanLimitError } from "@/lib/plans";
+import { requireFlag } from "@/lib/flags";
+import { AppError, toAppError } from "@/lib/errors";
+import { log, newRequestId, runWithContext } from "@/lib/logger";
+import { enforceRateLimit } from "@/lib/rate-limit";
+import { LIMITS } from "@/lib/validation/limits";
+import { zId, zScope } from "@/lib/validation/common";
+
+/**
+ * Tiny AI chat.
+ *
+ * The authorization order here is the point of the whole AI design:
+ *
+ *   authenticate → authorise the workspace → retrieve permitted context →
+ *   minimise it → send to the model
+ *
+ * The model never chooses what it may read. If a `focus` record is supplied it
+ * is resolved through `requireWorkspaceAccess`, so a caller cannot point the
+ * assistant at another tenant's record and have it summarised back to them.
+ */
 
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
+
+const bodySchema = z.object({
+  question: z.string().trim().min(1, "Ask a question").max(LIMITS.maxAiQuestion),
+  scope: zScope.optional(),
+  history: z
+    .array(
+      z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string().max(LIMITS.maxAiQuestion),
+      }),
+    )
+    .max(LIMITS.maxAiHistoryTurns)
+    .optional(),
+  focus: z
+    .object({
+      type: z.enum(["contact", "company", "deal", "project", "opportunity"]),
+      id: zId,
+    })
+    .nullish(),
+});
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser();
-  if (!user) return new Response("Unauthorized", { status: 401 });
+  const requestId = newRequestId();
 
-  const body = (await request.json()) as {
-    question?: string;
-    scope?: string;
-    history?: { role: "user" | "assistant"; content: string }[];
-    focus?: { type: "contact" | "company" | "deal" | "project" | "opportunity"; id: string } | null;
-  };
+  return runWithContext({ requestId, route: "api.ai.chat" }, async () => {
+    try {
+      const actor = await getActor();
+      if (!actor) return new Response("Unauthorized", { status: 401 });
 
-  const question = body.question?.trim();
-  if (!question) return new Response("Ask a question", { status: 400 });
+      // Two windows: a burst limit and an hourly ceiling. AI requests cost real
+      // money, so an authenticated user must not be able to spend without bound.
+      await enforceRateLimit("ai", actor.identity.id);
+      await enforceRateLimit("aiHourly", actor.identity.id);
 
-  const { workspaceIds } = await resolveScope(user.id, body.scope);
-  const workspaces = await getUserWorkspaces(user.id);
-  const scope = {
-    workspaceIds,
-    workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])),
-  };
+      const body = bodySchema.parse(await request.json());
 
-  const thread = await ensureThread(user.id, workspaceIds.length === 1 ? workspaceIds[0]! : null, question);
+      const { workspaceIds, memberships } = await resolveReadScope(body.scope ?? "all");
 
-  // Streamed as plain text so the client can append tokens directly; the
-  // provider abstraction makes the same route work for every backend.
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      try {
-        for await (const chunk of askTinyAi({
-          user,
-          scope,
-          question,
-          history: body.history,
-          focus: body.focus ?? null,
-          threadId: thread.id,
-        })) {
-          controller.enqueue(encoder.encode(chunk));
-        }
-      } catch (error) {
-        const message =
-          error instanceof PlanLimitError
-            ? `\n\n⚠ ${error.message}`
-            : "\n\n⚠ Tiny AI could not finish that request. Please try again.";
-        if (!(error instanceof PlanLimitError)) console.error("[ai/chat]", error);
-        controller.enqueue(encoder.encode(message));
-      } finally {
-        controller.close();
+      // Only workspaces where this role may use AI contribute context.
+      const permitted = memberships.filter((m) => can(m.role, "ai:use")).map((m) => m.id);
+      const readable = workspaceIds.filter((id) => permitted.includes(id));
+      if (readable.length === 0) {
+        throw new AppError("forbidden", "Your role cannot use Tiny AI.");
       }
-    },
-  });
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-store",
-      "X-Accel-Buffering": "no",
-    },
+      // A focused record is authorised on its own terms before retrieval.
+      if (body.focus) {
+        const { requireRecordAccess } = await import("@/lib/auth/access");
+        const { workspaceId } = await requireRecordAccess(body.focus.type, body.focus.id, {
+          permission: "ai:use",
+        });
+        await requireFlag("ai", workspaceId);
+      } else {
+        await requireFlag("ai", readable.length === 1 ? readable[0] : null);
+      }
+
+      const scope = {
+        workspaceIds: readable,
+        workspaceNames: new Map(memberships.map((m) => [m.id, m.name])),
+      };
+
+      const thread = await ensureThread(
+        actor.identity.id,
+        readable.length === 1 ? readable[0]! : null,
+        body.question,
+      );
+
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          try {
+            for await (const chunk of askTinyAi({
+              actor,
+              scope,
+              question: body.question,
+              history: body.history,
+              focus: body.focus ?? null,
+              threadId: thread.id,
+            })) {
+              controller.enqueue(encoder.encode(chunk));
+            }
+          } catch (raw) {
+            // The stream has already begun, so errors are appended as text
+            // rather than as a status code — but they are still the safe,
+            // categorised message, never an internal one.
+            const error = toAppError(raw);
+            if (error.category === "internal") {
+              log.error("ai stream failed", { error: String(error.internal) });
+            }
+            controller.enqueue(encoder.encode(`\n\n⚠ ${error.message}`));
+          } finally {
+            controller.close();
+          }
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+          "X-Accel-Buffering": "no",
+          "x-request-id": requestId,
+        },
+      });
+    } catch (raw) {
+      const error = toAppError(raw);
+      if (error.category === "internal") {
+        log.error("ai chat failed", { error: String(error.internal) });
+      }
+      return Response.json(
+        { error: error.message, category: error.category, requestId },
+        { status: error.status, headers: { "x-request-id": requestId } },
+      );
+    }
   });
 }

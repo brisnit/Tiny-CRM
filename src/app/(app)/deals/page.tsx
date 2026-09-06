@@ -6,7 +6,7 @@ import { PipelinePicker } from "@/components/app/pipeline-picker";
 import { StatRow, StatTile } from "@/components/app/stat-tile";
 import { Panel, Skeleton } from "@/components/ui/surface";
 import { NewRecordButton } from "@/components/app/new-record-button";
-import { requireUser, resolveScope } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readProjectFocus, readScope } from "@/lib/scope";
 import { getPipelineBoard } from "@/lib/data/deals";
 import { formatCompact } from "@/lib/money";
@@ -30,8 +30,8 @@ export default async function DealsPage({ searchParams }: PageProps<"/deals">) {
 
 async function Board({ searchParams }: { searchParams: PageProps<"/deals">["searchParams"] }) {
   const params = await searchParams;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const projectFocus = await readProjectFocus();
 
   const board = await getPipelineBoard(workspaceIds, {

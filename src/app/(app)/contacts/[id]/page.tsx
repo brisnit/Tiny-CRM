@@ -17,7 +17,7 @@ import { AskAiButton } from "@/components/app/ask-ai-button";
 import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
 import { RecordActions } from "@/components/app/record-actions";
-import { requireUser, resolveScope, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getContact } from "@/lib/data/contacts";
 import { getRecordSummary } from "@/lib/ai/summaries";
@@ -28,22 +28,22 @@ import { LEAD_SOURCE, RELATIONSHIP_STRENGTH, RELATIONSHIP_TYPE } from "@/lib/enu
 
 export async function generateMetadata({ params }: PageProps<"/contacts/[id]">) {
   const { id } = await params;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const contact = await getContact(workspaceIds, id);
   return { title: contact?.fullName ?? "Contact" };
 }
 
 export default async function ContactPage({ params }: PageProps<"/contacts/[id]">) {
   const { id } = await params;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const contact = await getContact(workspaceIds, id);
   if (!contact) notFound();
 
-  const workspaces = await getUserWorkspaces(user.id);
+  const workspaces = actor.memberships;
   const summary = await getRecordSummary(
-    user,
+    actor,
     { workspaceIds, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
     "contact",
     id,
@@ -114,7 +114,6 @@ export default async function ContactPage({ params }: PageProps<"/contacts/[id]"
             <AiSummaryCard
               entityType="contact"
               entityId={contact.id}
-              workspaceId={contact.workspaceId}
               body={summary.body}
               generatedAt={summary.generatedAt.toISOString()}
               providerLabel={describeProvider().label}

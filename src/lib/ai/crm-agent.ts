@@ -4,7 +4,8 @@ import { db } from "@/lib/db";
 import { getProvider } from "@/lib/ai/provider";
 import { SYSTEM_PROMPTS, withContext } from "@/lib/ai/prompts";
 import { buildRecordContext, buildWorkspaceSnapshot, type ContextScope } from "@/lib/ai/context";
-import { assertWithinLimit, recordUsage, type SessionUser } from "@/lib/auth/session";
+import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
+import type { Actor } from "@/lib/auth/access";
 import type { AiMessage } from "@/lib/ai/provider";
 
 /**
@@ -17,7 +18,7 @@ import type { AiMessage } from "@/lib/ai/provider";
  */
 
 export type AgentRequest = {
-  user: SessionUser;
+  actor: Actor;
   scope: ContextScope;
   question: string;
   history?: AiMessage[];
@@ -27,7 +28,7 @@ export type AgentRequest = {
 };
 
 export async function* askTinyAi(request: AgentRequest): AsyncIterable<string> {
-  await assertWithinLimit(request.user, "aiRequestsPerMonth");
+  await assertWithinLimit(request.actor, "aiRequestsPerMonth");
 
   const context = request.focus
     ? await buildRecordContext(request.scope, request.focus.type, request.focus.id)
@@ -51,12 +52,12 @@ export async function* askTinyAi(request: AgentRequest): AsyncIterable<string> {
     yield chunk;
   }
 
-  await recordUsage(request.user.id, "ai_requests");
+  await recordUsage(request.actor.identity.id, "ai_requests");
 
   if (request.threadId) {
     await db.aiMessage.createMany({
       data: [
-        { threadId: request.threadId, userId: request.user.id, role: "user", content: request.question },
+        { threadId: request.threadId, userId: request.actor.identity.id, role: "user", content: request.question },
         {
           threadId: request.threadId,
           role: "assistant",

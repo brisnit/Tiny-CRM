@@ -3,7 +3,8 @@ import { Bot, Check, Sparkles, X } from "lucide-react";
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/controls";
-import { requireUser, getPlanUsage } from "@/lib/auth/session";
+import { requireActor } from "@/lib/auth/access";
+import { getPlanUsage } from "@/lib/entitlements";
 import { describeProvider, isModelBacked } from "@/lib/ai/provider";
 import { planFor, UNLIMITED } from "@/lib/plans";
 
@@ -21,11 +22,11 @@ const CAPABILITIES = [
 ];
 
 export default async function AiSettings() {
-  const user = await requireUser();
-  const usage = await getPlanUsage(user);
+  const actor = await requireActor();
+  const usage = await getPlanUsage(actor);
   const provider = describeProvider();
   const modelBacked = isModelBacked();
-  const plan = planFor(user.plan);
+  const plan = planFor(actor.identity.plan);
 
   const limit = plan.limits.aiRequestsPerMonth;
   const pct = limit === UNLIMITED ? 0 : Math.min(100, Math.round((usage.aiRequestsPerMonth / limit) * 100));

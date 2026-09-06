@@ -5,7 +5,7 @@ import { PageHeader, PageShell } from "@/components/app/page-header";
 import { Panel } from "@/components/ui/surface";
 import { Badge } from "@/components/ui/badge";
 import { NoteEditor } from "@/components/app/note-editor";
-import { requireUser, resolveScope } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { formatDateTime } from "@/lib/dates";
@@ -13,8 +13,8 @@ import { tagsForEntities } from "@/lib/actions/tags";
 
 export async function generateMetadata({ params }: PageProps<"/notes/[id]">) {
   const { id } = await params;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const note = await db.note.findFirst({
     where: { id, workspaceId: { in: workspaceIds } },
     select: { title: true },
@@ -24,8 +24,8 @@ export async function generateMetadata({ params }: PageProps<"/notes/[id]">) {
 
 export default async function NotePage({ params }: PageProps<"/notes/[id]">) {
   const { id } = await params;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
 
   const note = await db.note.findFirst({
     where: { id, workspaceId: { in: workspaceIds } },

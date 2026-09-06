@@ -1,15 +1,15 @@
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { Badge } from "@/components/ui/badge";
 import { PipelineManager } from "@/components/app/pipeline-manager";
-import { requireUser, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 import { PIPELINE_KIND } from "@/lib/enums";
 
 export const metadata = { title: "Pipelines" };
 
 export default async function PipelineSettings() {
-  const user = await requireUser();
-  const workspaces = await getUserWorkspaces(user.id);
+  const actor = await requireActor();
+  const workspaces = actor.memberships;
 
   const pipelines = await db.pipeline.findMany({
     where: { workspaceId: { in: workspaces.map((w) => w.id) } },

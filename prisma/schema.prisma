@@ -42,6 +42,16 @@ model User {
 
   onboardedAt DateTime?
   lastSeenAt  DateTime?
+
+  /// Set when an account is disabled. Checked on every request, so a
+  /// deactivated user loses access immediately even while holding a valid JWT.
+  deactivatedAt DateTime?
+  emailVerifiedAt DateTime?
+
+  /// Brute-force state. Reset on a successful sign-in.
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -62,8 +72,11 @@ model User {
   integrations    Integration[]
   aiMessages      AiMessage[]
   usage           UsageCounter[]
+  auditEvents     AuditLog[]        @relation("AuditActor")
+  authTokens      AuthToken[]
 
   @@index([plan])
+  @@index([deactivatedAt])
 }
 
 model Workspace {
@@ -103,6 +116,9 @@ model Workspace {
   events         CalendarEvent[]
   integrations   Integration[]
   aiThreads      AiThread[]
+  auditLogs      AuditLog[]
+  domainEvents   DomainEvent[]
+  featureFlags   FeatureFlag[]
 
   @@unique([ownerId, slug])
   @@index([ownerId, archivedAt])
@@ -160,6 +176,7 @@ model Company {
   primaryContactId   String?   @unique
   lastActivityAt     DateTime?
   archivedAt         DateTime?
+  version    Int       @default(0)
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -209,6 +226,7 @@ model Contact {
   lastContactedAt DateTime?
   nextFollowUpAt  DateTime?
   archivedAt      DateTime?
+  version    Int       @default(0)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -284,6 +302,7 @@ model Project {
 
   lastActivityAt DateTime?
   archivedAt     DateTime?
+  version    Int       @default(0)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -356,6 +375,8 @@ model Pipeline {
   deals         Deal[]
   opportunities Opportunity[]
 
+  // A pipeline name is unique within a workspace, never globally.
+  @@unique([workspaceId, name])
   @@index([workspaceId, kind, order])
 }
 
@@ -401,6 +422,7 @@ model Deal {
   lostReason     String?
 
   archivedAt DateTime?
+  version    Int       @default(0)
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
@@ -473,6 +495,7 @@ model Opportunity {
   ownerId             String?
 
   archivedAt DateTime?
+  version    Int       @default(0)
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
@@ -535,16 +558,19 @@ model Task {
   projectId     String?
   opportunityId String?
 
+  archivedAt DateTime?
+  version    Int      @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   owner       User?        @relation("TaskOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  company     Company?     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  project     Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
 
   activities Activity[]
 
@@ -574,16 +600,19 @@ model Note {
   projectId     String?
   opportunityId String?
 
+  archivedAt DateTime?
+  version    Int      @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   author      User?        @relation("NoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
-  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  company     Company?     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  project     Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
 
   activities Activity[]
 
@@ -624,11 +653,11 @@ model Activity {
 
   workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   actor       User?        @relation("ActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
-  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  company     Company?     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  project     Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
   task        Task?        @relation(fields: [taskId], references: [id], onDelete: SetNull)
   note        Note?        @relation(fields: [noteId], references: [id], onDelete: SetNull)
 
@@ -662,11 +691,11 @@ model FileAsset {
 
   workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   uploader    User?        @relation("FileUploader", fields: [uploaderId], references: [id], onDelete: SetNull)
-  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  company     Company?     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  project     Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, createdAt])
   @@index([projectId])
@@ -778,6 +807,7 @@ model SavedView {
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, entityType, name])
   @@index([userId, entityType, order])
   @@index([workspaceId, entityType])
 }
@@ -807,6 +837,7 @@ model Automation {
   workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   runs      AutomationRun[]
 
+  @@unique([workspaceId, name])
   @@index([workspaceId, enabled, trigger])
 }
 
@@ -1027,4 +1058,132 @@ model EventAttendee {
 
   @@unique([eventId, email])
   @@index([contactId])
+}
+
+// ---------------------------------------------------------------------------
+// Security, audit and operational models
+// ---------------------------------------------------------------------------
+
+/// Append-only record of security- and data-significant actions.
+///
+/// Nothing in the application updates or deletes rows here — src/lib/audit.ts
+/// exposes a write and a scoped read, and no server action offers an edit. The
+/// database cannot enforce immutability on its own, so production should
+/// additionally grant the application role INSERT and SELECT only on this table
+/// (see docs/SECURITY.md).
+model AuditLog {
+  id          String   @id @default(cuid())
+  workspaceId String?
+  actorId     String?
+  /// Denormalised so the entry stays readable after a user is deleted.
+  actorEmail  String?
+
+  /// Dotted action name, e.g. "contact.deleted", "member.role_changed".
+  action      String
+  entityType  String?
+  entityId    String?
+  summary     String
+
+  /// JSON blob of before/after values, already redacted.
+  metadata    String?
+  ip          String?
+  userAgent   String?
+  requestId   String?
+
+  createdAt   DateTime @default(now())
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor     User?      @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, action, createdAt])
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+}
+
+/// Single-use, expiring tokens for password reset and email verification.
+///
+/// Only a hash of the token is stored, so a database disclosure does not hand an
+/// attacker working reset links. `usedAt` makes each token single-use.
+model AuthToken {
+  id        String   @id @default(cuid())
+  userId    String
+  /// password_reset | email_verification
+  purpose   String
+  /// SHA-256 of the token that was emailed. The token itself is never stored.
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+  requestIp String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, expiresAt])
+  @@index([expiresAt])
+}
+
+/// Deduplication for operations that must not run twice.
+///
+/// Imports, webhooks and AI batch approvals record a caller-supplied key here
+/// inside the same transaction as their effect, so a retry returns the original
+/// outcome instead of duplicating work.
+model IdempotencyKey {
+  id          String   @id @default(cuid())
+  scope       String
+  key         String
+  workspaceId String?
+  userId      String?
+  /// JSON result of the first successful execution.
+  result      String?
+  status      String   @default("in_progress")
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@unique([scope, key])
+  @@index([expiresAt])
+}
+
+/// Domain events emitted by business operations.
+///
+/// Writes emit events rather than calling automations directly. Today a
+/// dispatcher drains this table in-process; moving to a queue means changing the
+/// consumer, not the producers. `processedAt` and `attempts` give a worker
+/// at-least-once delivery with retry.
+model DomainEvent {
+  id          String   @id @default(cuid())
+  workspaceId String
+  /// e.g. "deal.stage.changed", "task.completed", "contact.created"
+  name        String
+  entityType  String
+  entityId    String
+  actorId     String?
+  /// JSON payload.
+  payload     String   @default("{}")
+
+  processedAt DateTime?
+  attempts    Int      @default(0)
+  lastError   String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([processedAt, createdAt])
+  @@index([workspaceId, name, createdAt])
+}
+
+/// Server-side feature flags, optionally scoped to one workspace.
+model FeatureFlag {
+  id          String   @id @default(cuid())
+  key         String
+  /// Null means the flag applies globally.
+  workspaceId String?
+  enabled     Boolean  @default(false)
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([key, workspaceId])
+  @@index([key])
 }

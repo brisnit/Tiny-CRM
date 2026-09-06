@@ -1,7 +1,7 @@
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { Badge } from "@/components/ui/badge";
 import { FieldManager } from "@/components/app/field-manager";
-import { requireUser, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 import { parseJson } from "@/lib/json";
 import { CUSTOM_FIELD_TYPE, ENTITY_LABEL, type EntityType } from "@/lib/enums";
@@ -9,8 +9,8 @@ import { CUSTOM_FIELD_TYPE, ENTITY_LABEL, type EntityType } from "@/lib/enums";
 export const metadata = { title: "Custom fields" };
 
 export default async function FieldSettings() {
-  const user = await requireUser();
-  const workspaces = await getUserWorkspaces(user.id);
+  const actor = await requireActor();
+  const workspaces = actor.memberships;
 
   const fields = await db.customFieldDef.findMany({
     where: { workspaceId: { in: workspaces.map((w) => w.id) } },

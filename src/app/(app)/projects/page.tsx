@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/controls";
 import { EmptyState } from "@/components/ui/empty-state";
 import { NewRecordButton } from "@/components/app/new-record-button";
-import { requireUser, resolveScope } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { listProjects } from "@/lib/data/projects";
 import { formatCompact } from "@/lib/money";
@@ -39,8 +39,8 @@ async function ProjectList({
   searchParams: PageProps<"/projects">["searchParams"];
 }) {
   const params = await searchParams;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 
   const { projects, statuses, total, page, pageCount } = await listProjects(workspaceIds, {

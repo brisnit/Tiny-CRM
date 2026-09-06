@@ -5,7 +5,7 @@ import { Panel, PanelHeader } from "@/components/ui/surface";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { AutomationToggle } from "@/components/app/automation-toggle";
-import { requireUser, resolveScope, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { parseJson } from "@/lib/json";
@@ -18,9 +18,9 @@ type Action = { type: string; title?: string; message?: string; items?: string[]
 type Condition = { field: string; op: string; value: unknown };
 
 export default async function AutomationsPage() {
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
-  const workspaces = await getUserWorkspaces(user.id);
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
+  const workspaces = actor.memberships;
   const workspaceNames = new Map(workspaces.map((w) => [w.id, w.name]));
 
   const automations = await db.automation.findMany({

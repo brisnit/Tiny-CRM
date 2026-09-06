@@ -1,7 +1,7 @@
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { Avatar } from "@/components/ui/avatar";
 import { ProfileForm } from "@/components/app/settings-forms";
-import { requireUser, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 import { formatDate } from "@/lib/dates";
 import { WORKSPACE_ROLE } from "@/lib/enums";
@@ -10,13 +10,13 @@ import { Badge } from "@/components/ui/badge";
 export const metadata = { title: "Profile" };
 
 export default async function ProfileSettings() {
-  const user = await requireUser();
-  const [full, workspaces] = await Promise.all([
+  const actor = await requireActor();
+  const workspaces = actor.memberships;
+  const [full] = await Promise.all([
     db.user.findUniqueOrThrow({
-      where: { id: user.id },
+      where: { id: actor.identity.id },
       select: { id: true, name: true, email: true, jobTitle: true, timezone: true, createdAt: true },
     }),
-    getUserWorkspaces(user.id),
   ]);
 
   return (

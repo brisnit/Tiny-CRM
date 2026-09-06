@@ -18,7 +18,7 @@ import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
 import { RecordActions } from "@/components/app/record-actions";
 import { StageSelector } from "@/components/app/stage-selector";
-import { requireUser, resolveScope, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getOpportunity } from "@/lib/data/opportunities";
 import { getRecordSummary } from "@/lib/ai/summaries";
@@ -31,22 +31,22 @@ import {
 
 export async function generateMetadata({ params }: PageProps<"/opportunities/[id]">) {
   const { id } = await params;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const opportunity = await getOpportunity(workspaceIds, id);
   return { title: opportunity?.name ?? "Opportunity" };
 }
 
 export default async function OpportunityPage({ params }: PageProps<"/opportunities/[id]">) {
   const { id } = await params;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const opportunity = await getOpportunity(workspaceIds, id);
   if (!opportunity) notFound();
 
-  const workspaces = await getUserWorkspaces(user.id);
+  const workspaces = actor.memberships;
   const summary = await getRecordSummary(
-    user,
+    actor,
     { workspaceIds, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
     "opportunity",
     id,
@@ -170,7 +170,6 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
             <AiSummaryCard
               entityType="opportunity"
               entityId={opportunity.id}
-              workspaceId={opportunity.workspaceId}
               body={summary.body}
               generatedAt={summary.generatedAt.toISOString()}
               providerLabel={describeProvider().label}

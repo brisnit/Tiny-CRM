@@ -89,7 +89,7 @@ export function FieldManager({ workspaceId }: { workspaceId: string }) {
               } else {
                 toast.error(result.error, {
                   action:
-                    result.code === "limit"
+                    result.category === "plan_limit"
                       ? { label: "Upgrade", onClick: () => router.push("/settings/billing") }
                       : undefined,
                 });

@@ -10,7 +10,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CellStack, TBody, TD, TH, THead, TR, Table } from "@/components/ui/data-table";
 import { NewRecordButton } from "@/components/app/new-record-button";
-import { requireUser, resolveScope } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { listContacts } from "@/lib/data/contacts";
 import { db } from "@/lib/db";
@@ -40,8 +40,8 @@ async function ContactsTable({
   searchParams: PageProps<"/contacts">["searchParams"];
 }) {
   const params = await searchParams;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
 
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 

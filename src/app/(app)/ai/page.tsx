@@ -8,7 +8,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { AskAiButton } from "@/components/app/ask-ai-button";
 import { CleanupList } from "@/components/app/cleanup-list";
 import { CaptureWithAi } from "@/components/app/capture-with-ai";
-import { requireUser, resolveScope, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { findRecommendations } from "@/lib/ai/recommendations";
 import { describeProvider, isModelBacked } from "@/lib/ai/provider";
@@ -17,9 +17,9 @@ import { SUGGESTED_QUESTIONS } from "@/lib/ai/crm-agent";
 export const metadata = { title: "Tiny AI" };
 
 export default async function AiPage() {
-  const user = await requireUser();
-  const { workspaceIds, workspaceId } = await resolveScope(user.id, await readScope());
-  const workspaces = await getUserWorkspaces(user.id);
+  const actor = await requireActor();
+  const { workspaceIds, workspaceId } = await resolveReadScope(await readScope());
+  const workspaces = actor.memberships;
 
   const recommendations = await findRecommendations({
     workspaceIds,

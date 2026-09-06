@@ -44,7 +44,7 @@ export function DailyBrief({
       } else {
         toast.error(result.error, {
           action:
-            result.code === "limit"
+            result.category === "plan_limit"
               ? { label: "Upgrade", onClick: () => router.push("/settings/billing") }
               : undefined,
         });

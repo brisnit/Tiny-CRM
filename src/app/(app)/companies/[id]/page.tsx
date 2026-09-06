@@ -18,7 +18,7 @@ import { AskAiButton } from "@/components/app/ask-ai-button";
 import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
 import { RecordActions } from "@/components/app/record-actions";
-import { requireUser, resolveScope, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getCompany } from "@/lib/data/companies";
 import { getRecordSummary } from "@/lib/ai/summaries";
@@ -31,22 +31,22 @@ import {
 
 export async function generateMetadata({ params }: PageProps<"/companies/[id]">) {
   const { id } = await params;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const company = await getCompany(workspaceIds, id);
   return { title: company?.name ?? "Company" };
 }
 
 export default async function CompanyPage({ params }: PageProps<"/companies/[id]">) {
   const { id } = await params;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
   const company = await getCompany(workspaceIds, id);
   if (!company) notFound();
 
-  const workspaces = await getUserWorkspaces(user.id);
+  const workspaces = actor.memberships;
   const summary = await getRecordSummary(
-    user,
+    actor,
     { workspaceIds, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
     "company",
     id,
@@ -119,7 +119,6 @@ export default async function CompanyPage({ params }: PageProps<"/companies/[id]
             <AiSummaryCard
               entityType="company"
               entityId={company.id}
-              workspaceId={company.workspaceId}
               body={summary.body}
               generatedAt={summary.generatedAt.toISOString()}
               providerLabel={describeProvider().label}

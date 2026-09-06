@@ -7,7 +7,7 @@ import { RangePicker } from "@/components/app/range-picker";
 import {
   DealFlowTrend, HeroNumber, MagnitudeBars, PipelineFunnel, RevenueTrend,
 } from "@/components/app/charts";
-import { requireUser, resolveScope } from "@/lib/auth/session";
+import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getAnalytics, type AnalyticsRange } from "@/lib/data/analytics";
 import { formatCompact, formatMoney } from "@/lib/money";
@@ -32,8 +32,8 @@ export default async function AnalyticsPage({ searchParams }: PageProps<"/analyt
 
 async function Report({ searchParams }: { searchParams: PageProps<"/analytics">["searchParams"] }) {
   const params = await searchParams;
-  const user = await requireUser();
-  const { workspaceIds } = await resolveScope(user.id, await readScope());
+  const actor = await requireActor();
+  const { workspaceIds } = await resolveReadScope(await readScope());
 
   const rangeParam = Number(typeof params.range === "string" ? params.range : 90);
   const range = ([30, 90, 180, 365].includes(rangeParam) ? rangeParam : 90) as AnalyticsRange;

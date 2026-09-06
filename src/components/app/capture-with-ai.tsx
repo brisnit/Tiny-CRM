@@ -74,7 +74,11 @@ export function CaptureWithAi({
     if (!result || !target) return;
     const chosen = result.proposals.filter((p) => selected.has(p.id));
     startApply(async () => {
-      const response = await applyProposals(target, chosen, text);
+      const response = await applyProposals(
+        target,
+        chosen.map((p) => ({ ...p, matchId: p.matchId ?? null })),
+        text,
+      );
       if (!response.ok) {
         toast.error(response.error);
         return;

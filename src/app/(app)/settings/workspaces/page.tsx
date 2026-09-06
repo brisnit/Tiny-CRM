@@ -2,7 +2,7 @@ import { Panel, PanelHeader } from "@/components/ui/surface";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { NewWorkspaceForm } from "@/components/app/workspace-forms";
-import { requireUser, getUserWorkspaces } from "@/lib/auth/session";
+import { requireActor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 import { planFor, UNLIMITED } from "@/lib/plans";
 import { WORKSPACE_ROLE } from "@/lib/enums";
@@ -10,9 +10,9 @@ import { WORKSPACE_ROLE } from "@/lib/enums";
 export const metadata = { title: "Workspaces" };
 
 export default async function WorkspacesSettings() {
-  const user = await requireUser();
-  const workspaces = await getUserWorkspaces(user.id);
-  const plan = planFor(user.plan);
+  const actor = await requireActor();
+  const workspaces = actor.memberships;
+  const plan = planFor(actor.identity.plan);
 
   const details = await db.workspace.findMany({
     where: { id: { in: workspaces.map((w) => w.id) } },
