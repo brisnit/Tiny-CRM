@@ -8,6 +8,8 @@ import {
   type Identity, type WorkspaceMembership,
 } from "@/lib/auth/context";
 import { can, canAssignRole, type Permission, type Role } from "@/lib/auth/permissions";
+import { assertVerified, verificationEnforced } from "@/lib/auth/verification";
+import { mailConfigured } from "@/lib/mail";
 
 /**
  * Server-side authorization.
@@ -70,6 +72,15 @@ export async function requireWorkspaceAccess(
 
   if (permission && !can(membership.role, permission)) {
     throw forbidden(`Your role (${membership.role}) cannot ${describe(permission)}.`);
+  }
+
+  // Checked *after* the permission, deliberately. The other order tells an
+  // under-privileged user that confirming their email would help, which is not
+  // true and sends them down the wrong path.
+  if (permission) {
+    assertVerified(actor.identity, permission, {
+      enforced: verificationEnforced(mailConfigured()),
+    });
   }
 
   enrichContext({ workspaceId });

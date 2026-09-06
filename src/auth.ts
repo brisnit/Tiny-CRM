@@ -9,7 +9,7 @@ import { cookieName, cookieOptions } from "@/lib/auth/cookies";
 import { PASSWORD_HASH_COST, needsRehash } from "@/lib/auth/password";
 import { recordAudit } from "@/lib/audit";
 import { log } from "@/lib/logger";
-import { checkRateLimit, resetRateLimit } from "@/lib/rate-limit";
+import { checkRateLimit, clientAddress, resetRateLimit } from "@/lib/rate-limit";
 
 /**
  * Authentication.
@@ -46,9 +46,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   secret: env.authSecret,
   trustHost: true,
 
-  // JWT sessions keep page renders free of a session-table round-trip. The
-  // trade-off — revocation is not immediate — is mitigated by re-reading the
-  // user on every request in getIdentity(), which checks `deactivatedAt`.
+  // JWT sessions, made revocable.
+  //
+  // The token carries a session id and an epoch. `getIdentity()` checks both on
+  // every request: the id must match a live `UserSession` row, and the epoch
+  // must not be behind the user's current one. That turns a self-contained token
+  // into one that can be ended — individually, or everywhere at once — which is
+  // what the previous hardening report identified as missing.
   session: { strategy: "jwt", maxAge: 60 * 60 * 24 * 14, updateAge: 60 * 60 },
 
   // 14 days rather than 30, and the JWT is re-issued hourly so a plan or status
@@ -70,7 +74,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
-      async authorize(raw) {
+      async authorize(raw, request) {
         const parsed = credentialsSchema.safeParse(raw);
         if (!parsed.success) return null;
 
@@ -179,12 +183,25 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           summary: "Signed in",
         });
 
+        // A server-side session record, so this sign-in can later be listed and
+        // revoked. The id goes into the token; only its hash is stored.
+        const { createSession } = await import("@/lib/auth/sessions");
+        // Metadata for the session list, so a user can recognise their own
+        // devices. Best-effort: a missing request object must not fail sign-in.
+        const requestHeaders = request?.headers;
+        const session = await createSession(user.id, {
+          ip: requestHeaders ? clientAddress(requestHeaders) : null,
+          userAgent: requestHeaders?.get("user-agent") ?? null,
+        });
+
         return {
           id: user.id,
           email: user.email,
           name: user.name,
           image: user.avatarUrl,
           plan: user.plan,
+          sessionId: session.sessionId,
+          epoch: session.epoch,
         };
       },
     }),
@@ -195,6 +212,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (user) {
         token.uid = user.id;
         token.plan = (user as { plan?: string }).plan ?? "free";
+        // Carried for the lifetime of the token and checked on every request.
+        token.sid = (user as { sessionId?: string }).sessionId ?? null;
+        token.epoch = (user as { epoch?: number }).epoch ?? 0;
       }
       if (trigger === "update") token.refreshPlan = true;
       return token;
@@ -204,6 +224,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // The plan on the token is a UI hint only. Every entitlement check reads
       // the stored plan from the database, so a forged token cannot grant one.
       session.user.plan = (token.plan as string) ?? "free";
+
+      // Surfaced for src/lib/auth/context.ts, which does the actual validation.
+      // Nothing here is trusted; these are claims to be checked, not facts.
+      const carrier = session as unknown as Record<string, unknown>;
+      carrier.sessionId = (token.sid as string | null) ?? null;
+      carrier.epoch = (token.epoch as number | null) ?? null;
+      carrier.issuedAt = (token.iat as number | null) ?? null;
       return session;
     },
   },
@@ -211,13 +238,25 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   events: {
     async signOut(message) {
       const token = "token" in message ? message.token : null;
-      if (token?.uid) {
-        await recordAudit({
-          actorId: token.uid as string,
-          action: "auth.signed_out",
-          summary: "Signed out",
+      if (!token?.uid) return;
+
+      // Revoke the row as well as clearing the cookie. Without this, a token
+      // copied before signing out stays valid for its full lifetime — the
+      // cookie is deleted from one browser, not from the internet.
+      const sessionId = token.sid as string | null;
+      if (sessionId) {
+        const { hashSessionId } = await import("@/lib/auth/sessions");
+        await db.userSession.updateMany({
+          where: { tokenHash: hashSessionId(sessionId), revokedAt: null },
+          data: { revokedAt: new Date(), revokedReason: "signed_out" },
         });
       }
+
+      await recordAudit({
+        actorId: token.uid as string,
+        action: "auth.signed_out",
+        summary: "Signed out",
+      });
     },
   },
 

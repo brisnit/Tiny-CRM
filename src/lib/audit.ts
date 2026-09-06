@@ -20,6 +20,9 @@ import type { Prisma } from "@/generated/prisma/client";
 export type AuditAction =
   | "auth.signed_in" | "auth.sign_in_failed" | "auth.signed_up" | "auth.signed_out"
   | "auth.password_reset_requested" | "auth.password_reset_completed" | "auth.locked_out"
+  | "auth.verification_requested" | "auth.email_verified"
+  | "auth.session_revoked" | "auth.sessions_revoked"
+  | "auth.mfa_enabled" | "auth.mfa_disabled" | "auth.mfa_recovery_regenerated"
   | "member.invited" | "member.role_changed" | "member.removed"
   | "workspace.created" | "workspace.updated" | "workspace.archived" | "workspace.deleted"
   | "record.created" | "record.updated" | "record.archived" | "record.restored" | "record.deleted"
@@ -27,7 +30,9 @@ export type AuditAction =
   | "data.exported" | "data.imported"
   | "ai.suggestion_applied" | "ai.suggestion_rejected"
   | "billing.plan_changed"
-  | "security.config_changed";
+  | "security.config_changed" | "security.alert_acknowledged"
+  | "workspace.deletion_requested" | "workspace.deletion_cancelled"
+  | "ai.privacy_changed";
 
 export type AuditEntry = {
   workspaceId?: string | null;

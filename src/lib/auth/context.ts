@@ -26,6 +26,12 @@ export type Identity = {
   avatarUrl: string | null;
   plan: string;
   onboardedAt: Date | null;
+  /// Null until the address has been confirmed. Gates the capabilities listed
+  /// in src/lib/auth/verification.ts.
+  emailVerifiedAt: Date | null;
+  /// The session this identity was resolved from, when there is one. Null for
+  /// the in-process test identity, which has no session row.
+  sessionId: string | null;
 };
 
 export type WorkspaceMembership = {
@@ -36,8 +42,20 @@ export type WorkspaceMembership = {
   role: Role;
 };
 
-/** What an auth provider must supply. Everything else is derived from the database. */
-export type SessionClaims = { userId: string };
+/**
+ * What an auth provider must supply. Everything else is derived from the
+ * database.
+ *
+ * `sessionId` and `epoch` are what make a JWT revocable: the id must match a
+ * live `UserSession` row, and the epoch must not be behind the user's current
+ * one. Both are optional in the type because the test identity has neither.
+ */
+export type SessionClaims = {
+  userId: string;
+  sessionId?: string | null;
+  epoch?: number | null;
+  issuedAt?: Date | null;
+};
 
 /**
  * Test-only identity override.
@@ -65,7 +83,20 @@ async function resolveSession(): Promise<SessionClaims | null> {
   }
   const session = await auth();
   const userId = session?.user?.id;
-  return userId ? { userId } : null;
+  if (!userId) return null;
+
+  const claims = session as unknown as {
+    sessionId?: string | null;
+    epoch?: number | null;
+    issuedAt?: number | null;
+  };
+
+  return {
+    userId,
+    sessionId: claims.sessionId ?? null,
+    epoch: claims.epoch ?? null,
+    issuedAt: claims.issuedAt ? new Date(claims.issuedAt * 1000) : null,
+  };
 }
 
 /**
@@ -80,7 +111,7 @@ export const getIdentity = cache(async (): Promise<Identity | null> => {
     where: { id: claims.userId },
     select: {
       id: true, email: true, name: true, avatarUrl: true, plan: true, onboardedAt: true,
-      deactivatedAt: true,
+      deactivatedAt: true, emailVerifiedAt: true,
     },
   });
   // A deactivated account must lose access immediately, even while holding a
@@ -88,10 +119,27 @@ export const getIdentity = cache(async (): Promise<Identity | null> => {
   // database rather than trusted from the token alone.
   if (!user || user.deactivatedAt) return null;
 
+  // The session must still be live. A JWT is self-contained and would otherwise
+  // remain usable for its full lifetime after a sign-out, a password change or a
+  // "sign out everywhere" — which is exactly what the previous hardening report
+  // flagged. The in-process test identity carries no session and skips this.
+  let sessionId: string | null = null;
+  if (!(isTest && testIdentity.getStore())) {
+    const { validateSession, touchSession } = await import("@/lib/auth/sessions");
+    const check = await validateSession(user.id, claims.sessionId, claims.epoch, claims.issuedAt);
+    if (!check.valid) {
+      enrichContext({ userId: user.id });
+      return null;
+    }
+    sessionId = check.sessionId;
+    void touchSession(check.sessionId);
+  }
+
   enrichContext({ userId: user.id });
   return {
     id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl,
     plan: user.plan, onboardedAt: user.onboardedAt,
+    emailVerifiedAt: user.emailVerifiedAt, sessionId,
   };
 });
 

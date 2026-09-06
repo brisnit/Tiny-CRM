@@ -30,6 +30,8 @@ export type Tenant = {
   ownerId: string;
   memberId: string;
   viewerId: string;
+  /** A member whose email address has never been confirmed. */
+  unverifiedId: string;
   contactId: string;
   companyId: string;
   dealId: string;
@@ -52,14 +54,35 @@ const unique = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${count
 export async function createTenant(label: string): Promise<Tenant> {
   const password = await bcrypt.hash("correct-horse-battery", 4);
 
+  // Verified by default: an unverified account cannot export, invite or connect
+  // an integration, so leaving these unverified would make most tests assert the
+  // verification gate rather than the thing they are named for.
+  const verified = new Date();
+
   const owner = await db.user.create({
-    data: { email: `${unique(`${label}-owner`)}@test.local`, name: `${label} Owner`, passwordHash: password },
+    data: {
+      email: `${unique(`${label}-owner`)}@test.local`, name: `${label} Owner`,
+      passwordHash: password, emailVerifiedAt: verified,
+    },
   });
   const member = await db.user.create({
-    data: { email: `${unique(`${label}-member`)}@test.local`, name: `${label} Member`, passwordHash: password },
+    data: {
+      email: `${unique(`${label}-member`)}@test.local`, name: `${label} Member`,
+      passwordHash: password, emailVerifiedAt: verified,
+    },
   });
   const viewer = await db.user.create({
-    data: { email: `${unique(`${label}-viewer`)}@test.local`, name: `${label} Viewer`, passwordHash: password },
+    data: {
+      email: `${unique(`${label}-viewer`)}@test.local`, name: `${label} Viewer`,
+      passwordHash: password, emailVerifiedAt: verified,
+    },
+  });
+  // Deliberately unverified, so the gate itself can be tested.
+  const unverified = await db.user.create({
+    data: {
+      email: `${unique(`${label}-unverified`)}@test.local`, name: `${label} Unverified`,
+      passwordHash: password,
+    },
   });
 
   const workspace = await db.workspace.create({
@@ -72,6 +95,9 @@ export async function createTenant(label: string): Promise<Tenant> {
           { userId: owner.id, role: "owner" },
           { userId: member.id, role: "member" },
           { userId: viewer.id, role: "viewer" },
+          // Given a high-privilege role on purpose: the gate must stop them
+          // regardless of role, and a viewer could not export anyway.
+          { userId: unverified.id, role: "admin" },
         ],
       },
       projectStatuses: {
@@ -153,6 +179,7 @@ export async function createTenant(label: string): Promise<Tenant> {
     ownerId: owner.id,
     memberId: member.id,
     viewerId: viewer.id,
+    unverifiedId: unverified.id,
     contactId: contact.id,
     companyId: company.id,
     dealId: deal.id,
@@ -174,7 +201,9 @@ export async function cleanupTenants(tenants: Tenant[]) {
   for (const tenant of tenants) {
     await db.workspace.deleteMany({ where: { id: tenant.workspaceId } });
     await db.user.deleteMany({
-      where: { id: { in: [tenant.ownerId, tenant.memberId, tenant.viewerId] } },
+      where: {
+        id: { in: [tenant.ownerId, tenant.memberId, tenant.viewerId, tenant.unverifiedId] },
+      },
     });
   }
 }

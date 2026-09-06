@@ -73,6 +73,22 @@ export const env = {
    * server, so they are never a literal inside a client component and therefore
    * never compiled into the browser bundle.
    */
+  /** Outbound email. Without a provider, no reset or verification can be sent. */
+  mailAdapter: (optional("MAIL_ADAPTER") ?? "auto") as "auto" | "sink" | "log",
+  mailProviderUrl: optional("MAIL_PROVIDER_URL"),
+  mailProviderToken: optional("MAIL_PROVIDER_TOKEN"),
+  mailFrom: optional("MAIL_FROM") ?? "Tiny CRM <no-reply@localhost>",
+
+  /** Security alerting. Without a webhook, alerts are recorded and logged only. */
+  alertWebhookUrl: optional("ALERT_WEBHOOK_URL"),
+  alertMinSeverity: (optional("ALERT_MIN_SEVERITY") ?? "warning") as
+    | "info" | "warning" | "critical",
+
+  /** Observability. Adapters are provider-independent; see src/lib/observability.ts. */
+  sentryDsn: optional("SENTRY_DSN"),
+  otelEndpoint: optional("OTEL_EXPORTER_OTLP_ENDPOINT"),
+  logDrainUrl: optional("LOG_DRAIN_URL"),
+
   demoEmail: optional("DEMO_EMAIL") ?? "owner@tinycrm.app",
   demoPassword: optional("DEMO_PASSWORD") ?? "tinycrm",
 
@@ -229,6 +245,13 @@ export function productionWarnings(): string[] {
     if (!env.billingWebhookSecret) {
       warnings.push("BILLING_WEBHOOK_SECRET is not set — plan changes cannot be applied by a provider.");
     }
+    if (!env.mailProviderUrl || !env.mailProviderToken) {
+      warnings.push(
+        "No mail provider is configured — password reset and email verification " +
+          "cannot deliver. Set MAIL_PROVIDER_URL and MAIL_PROVIDER_TOKEN.",
+      );
+    }
+
     if (!usingSharedRateLimitStore()) {
       warnings.push(
         "Rate limiting is in-process — counters are per-instance and reset on deploy.",
