@@ -16,6 +16,7 @@ import { emitEvent } from "@/lib/events";
 import { raiseAlert } from "@/lib/security/alerts";
 import { AppError } from "@/lib/errors";
 import { provisionWorkspace } from "@/lib/workspaces/provision";
+import { WORKSPACE_DELETION_GRACE_DAYS } from "@/lib/workspaces/policy";
 import { LIMITS } from "@/lib/validation/limits";
 import { zId, zOptionalText, zShortText } from "@/lib/validation/common";
 
@@ -147,9 +148,6 @@ export async function updateWorkspace(
     ),
   );
 }
-
-/** How long a workspace sits scheduled before it is actually destroyed. */
-export const WORKSPACE_DELETION_GRACE_DAYS = 7;
 
 /**
  * Schedules a workspace for deletion.

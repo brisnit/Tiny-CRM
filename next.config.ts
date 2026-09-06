@@ -1,43 +1,23 @@
 import type { NextConfig } from "next";
 
+import { STATIC_CSP } from "./src/lib/csp";
+
 const isProduction = process.env.NODE_ENV === "production";
 
 /**
- * Content-Security-Policy.
+ * Security headers.
  *
- * The two loosenings are deliberate and documented, not oversights:
+ * The Content-Security-Policy is **not** here. It carries a per-request nonce
+ * and is set in `src/proxy.ts` from `src/lib/csp.ts`; a static header cannot
+ * carry a nonce, and without one `script-src 'self'` blocks Next's own inline
+ * bootstrap and breaks hydration. Everything below is request-independent and
+ * belongs in a static header.
  *
- *  - `'unsafe-inline'` on style-src: Next injects inline `<style>` for CSS-in-JS
- *    and Tailwind's critical CSS, and there is no nonce plumbing for it. Style
- *    injection is a defacement risk rather than a script-execution one.
- *  - `'unsafe-inline'` on script-src in development only: React refresh and the
- *    dev overlay need it. Production omits it entirely.
- *
- * Production keeps `'unsafe-eval'` off, so `eval` and `new Function` cannot run
- * even if an injection reaches the page. `frame-ancestors 'none'` and
- * `object-src 'none'` close clickjacking and plugin-based execution.
- *
- * `connect-src` includes the AI providers because Tiny AI calls them from the
- * server; browser calls only ever go to same-origin routes, so this could be
- * tightened to `'self'` once no client-side provider call is possible.
+ * Responses that never pass through the proxy — API routes, static assets —
+ * get the restrictive `STATIC_CSP` instead, since they contain no script.
  */
-const csp = [
-  "default-src 'self'",
-  `script-src 'self'${isProduction ? "" : " 'unsafe-inline' 'unsafe-eval'"}`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "worker-src 'self' blob:",
-  ...(isProduction ? ["upgrade-insecure-requests"] : []),
-].join("; ");
 
 const securityHeaders = [
-  { key: "Content-Security-Policy", value: csp },
   // Legacy equivalent of frame-ancestors, for browsers that predate CSP 2.
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -88,9 +68,14 @@ const nextConfig: NextConfig = {
     return [
       { source: "/:path*", headers: securityHeaders },
       {
-        // Nothing under /api should ever be cached by a shared cache.
+        // Nothing under /api should ever be cached by a shared cache. These
+        // responses are JSON and never contain script, so they get the
+        // restrictive policy rather than the nonced one.
         source: "/api/:path*",
-        headers: [{ key: "Cache-Control", value: "no-store, max-age=0" }],
+        headers: [
+          { key: "Cache-Control", value: "no-store, max-age=0" },
+          { key: "Content-Security-Policy", value: STATIC_CSP },
+        ],
       },
     ];
   },

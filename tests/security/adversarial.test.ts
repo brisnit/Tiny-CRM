@@ -685,6 +685,21 @@ describe("the server-action surface", () => {
     }
   });
 
+  test("every export of a \"use server\" module is an async function", () => {
+    // Next refuses to build otherwise, because each export of such a module is a
+    // callable HTTP endpoint and a constant cannot be one. Caught here so the
+    // failure arrives in a second rather than at the end of a production build.
+    for (const file of actionModules()) {
+      const exports = [...file.text.matchAll(/^export\s+(?!type\b|async function\b)(\w+)/gm)];
+      for (const match of exports) {
+        assert.fail(
+          `${file.name} has a non-async export (\`export ${match[1]}\`). ` +
+            "Move it to a module without the \"use server\" directive.",
+        );
+      }
+    }
+  });
+
   test("no action writes an ownership column from the request", () => {
     // Ownership and authorship come from the session. Writing `ownerId` from a
     // parsed payload lets a caller create records attributed to someone else.
