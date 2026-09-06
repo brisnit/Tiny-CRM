@@ -68,3 +68,5 @@ build.db
 
 # Development mail sink
 .mail/
+
+.backup-test/
