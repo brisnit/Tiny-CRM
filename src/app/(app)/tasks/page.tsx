@@ -33,7 +33,7 @@ export default async function TasksPage({ searchParams }: PageProps<"/tasks">) {
 
 async function TaskList({ searchParams }: { searchParams: PageProps<"/tasks">["searchParams"] }) {
   const params = await searchParams;
-  const actor = await requireActor();
+  await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
   const projectFocus = await readProjectFocus();
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);

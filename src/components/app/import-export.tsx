@@ -31,17 +31,37 @@ export function ImportExport({
   workspaces: { id: string; name: string }[];
   defaultWorkspaceId: string | null;
 }) {
-  if (mode === "export") return <ExportPanel counts={counts} />;
+  if (mode === "export") {
+    return (
+      <ExportPanel counts={counts} workspaces={workspaces} defaultWorkspaceId={defaultWorkspaceId} />
+    );
+  }
   return <ImportPanel workspaces={workspaces} defaultWorkspaceId={defaultWorkspaceId} />;
 }
 
-function ExportPanel({ counts }: { counts: Record<string, number> }) {
+/**
+ * Export is per-workspace by design, not per-scope: one file never mixes two
+ * clients' data, and the server refuses any workspace the caller is not a
+ * member of with export rights.
+ */
+function ExportPanel({
+  counts,
+  workspaces,
+  defaultWorkspaceId,
+}: {
+  counts: Record<string, number>;
+  workspaces: { id: string; name: string }[];
+  defaultWorkspaceId: string | null;
+}) {
   const [pending, setPending] = React.useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = React.useState(
+    defaultWorkspaceId ?? workspaces[0]?.id ?? "",
+  );
 
   async function download(entity: ExportEntity) {
     setPending(entity);
     try {
-      const result = await exportCsv(entity);
+      const result = await exportCsv(entity, workspaceId);
       if (!result.ok || !result.data) {
         toast.error(result.ok ? "Nothing to export." : result.error);
         return;
@@ -60,12 +80,23 @@ function ExportPanel({ counts }: { counts: Record<string, number> }) {
   }
 
   return (
-    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="space-y-3">
+      {workspaces.length > 1 ? (
+        <Field label="Export from">
+          <OptionSelect
+            value={workspaceId}
+            onValueChange={setWorkspaceId}
+            options={workspaces.map((w) => ({ value: w.id, label: w.name }))}
+          />
+        </Field>
+      ) : null}
+
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
       {ENTITIES.map((entity) => (
         <button
           key={entity.value}
           onClick={() => download(entity.value)}
-          disabled={pending !== null || counts[entity.value] === 0}
+          disabled={pending !== null || !workspaceId || counts[entity.value] === 0}
           className="flex items-center gap-2.5 rounded-lg border border-hairline px-3 py-2.5 text-left transition-colors hover:border-hairline-strong hover:bg-sunken/60 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {pending === entity.value ? (
@@ -81,6 +112,7 @@ function ExportPanel({ counts }: { counts: Record<string, number> }) {
           </span>
         </button>
       ))}
+      </div>
     </div>
   );
 }
@@ -107,7 +139,7 @@ function ImportPanel({
     setCsv(text);
     setFilename(file.name);
 
-    const result = await previewImport(entity, text);
+    const result = await previewImport(entity, text, workspaceId);
     if (result.ok) setPreview(result.data);
     else {
       toast.error(result.error);

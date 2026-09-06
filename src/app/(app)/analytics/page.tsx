@@ -32,7 +32,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps<"/analyt
 
 async function Report({ searchParams }: { searchParams: PageProps<"/analytics">["searchParams"] }) {
   const params = await searchParams;
-  const actor = await requireActor();
+  await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
 
   const rangeParam = Number(typeof params.range === "string" ? params.range : 90);

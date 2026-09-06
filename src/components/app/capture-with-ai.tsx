@@ -76,7 +76,7 @@ export function CaptureWithAi({
     startApply(async () => {
       const response = await applyProposals(
         target,
-        chosen.map((p) => ({ ...p, matchId: p.matchId ?? null })),
+        chosen,
         text,
       );
       if (!response.ok) {

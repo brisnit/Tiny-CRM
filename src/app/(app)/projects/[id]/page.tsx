@@ -32,7 +32,7 @@ import { PROJECT_HEALTH, PROJECT_PRIORITY, PROJECT_TYPE, SUBMISSION_STATUS } fro
 
 export async function generateMetadata({ params }: PageProps<"/projects/[id]">) {
   const { id } = await params;
-  const actor = await requireActor();
+  await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
   const project = await getProject(workspaceIds, id);
   return { title: project?.name ?? "Project" };

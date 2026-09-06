@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { getActor, requireWorkspaceAccess, resolveReadScope } from "@/lib/auth/access";
+import { getActor, resolveReadScope } from "@/lib/auth/access";
 import { can } from "@/lib/auth/permissions";
 import { askTinyAi, ensureThread } from "@/lib/ai/crm-agent";
 import { requireFlag } from "@/lib/flags";

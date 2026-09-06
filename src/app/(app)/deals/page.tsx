@@ -30,7 +30,7 @@ export default async function DealsPage({ searchParams }: PageProps<"/deals">) {
 
 async function Board({ searchParams }: { searchParams: PageProps<"/deals">["searchParams"] }) {
   const params = await searchParams;
-  const actor = await requireActor();
+  await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
   const projectFocus = await readProjectFocus();
 

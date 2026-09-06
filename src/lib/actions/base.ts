@@ -352,6 +352,30 @@ export function revalidateRecord(paths: string[]): void {
 }
 
 /**
+ * Revalidates a single path, or the whole layout tree.
+ *
+ * Same contract as `revalidateRecord`: cache invalidation is a hint, and
+ * `revalidatePath` throws outside a request scope (background dispatch, tests,
+ * scripts). A failure here must never turn a committed write into a reported
+ * failure.
+ */
+export function revalidateLayout(path = "/"): void {
+  try {
+    revalidatePath(path, "layout");
+  } catch {
+    // Not in a request scope; nothing to revalidate.
+  }
+}
+
+export function revalidatePathSafely(path: string): void {
+  try {
+    revalidatePath(path);
+  } catch {
+    // Not in a request scope; nothing to revalidate.
+  }
+}
+
+/**
  * Optimistic concurrency guard.
  *
  * The expected version travels in the WHERE clause, so a concurrent save makes

@@ -48,17 +48,6 @@ export async function getEntitlements(actor: Actor): Promise<Entitlements> {
   };
 }
 
-const LIMIT_MODEL = {
-  contacts: "contact",
-  companies: "company",
-  deals: "deal",
-  projects: "project",
-  opportunities: "opportunity",
-  tasks: "task",
-  automations: "automation",
-  customFields: "customFieldDef",
-} as const;
-
 /**
  * Counts current usage and throws if one more would exceed the plan.
  *

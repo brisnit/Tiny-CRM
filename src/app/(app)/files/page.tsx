@@ -22,7 +22,7 @@ const ICONS: { test: RegExp; icon: typeof FileText }[] = [
 
 export default async function FilesPage({ searchParams }: PageProps<"/files">) {
   const params = await searchParams;
-  const actor = await requireActor();
+  await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
   const q = typeof params.q === "string" ? params.q : undefined;
 

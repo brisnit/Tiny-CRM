@@ -89,8 +89,10 @@ export const getIdentity = cache(async (): Promise<Identity | null> => {
   if (!user || user.deactivatedAt) return null;
 
   enrichContext({ userId: user.id });
-  const { deactivatedAt: _deactivatedAt, ...identity } = user;
-  return identity;
+  return {
+    id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl,
+    plan: user.plan, onboardedAt: user.onboardedAt,
+  };
 });
 
 export async function requireIdentity(): Promise<Identity> {

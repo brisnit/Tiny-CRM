@@ -31,7 +31,7 @@ import {
 
 export async function generateMetadata({ params }: PageProps<"/companies/[id]">) {
   const { id } = await params;
-  const actor = await requireActor();
+  await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
   const company = await getCompany(workspaceIds, id);
   return { title: company?.name ?? "Company" };

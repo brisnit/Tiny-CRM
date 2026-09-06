@@ -13,7 +13,7 @@ import { tagsForEntities } from "@/lib/actions/tags";
 
 export async function generateMetadata({ params }: PageProps<"/notes/[id]">) {
   const { id } = await params;
-  const actor = await requireActor();
+  await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
   const note = await db.note.findFirst({
     where: { id, workspaceId: { in: workspaceIds } },
@@ -24,7 +24,7 @@ export async function generateMetadata({ params }: PageProps<"/notes/[id]">) {
 
 export default async function NotePage({ params }: PageProps<"/notes/[id]">) {
   const { id } = await params;
-  const actor = await requireActor();
+  await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
 
   const note = await db.note.findFirst({

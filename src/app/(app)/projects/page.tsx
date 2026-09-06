@@ -39,7 +39,7 @@ async function ProjectList({
   searchParams: PageProps<"/projects">["searchParams"];
 }) {
   const params = await searchParams;
-  const actor = await requireActor();
+  await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 

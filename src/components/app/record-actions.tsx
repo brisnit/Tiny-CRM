@@ -156,8 +156,8 @@ export function RecordActions({
           </DialogHeader>
           <DialogBody className="space-y-4">
             <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 text-[12.5px] leading-relaxed text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-              Tasks and notes attached to this record are deleted with it. Timeline activity and
-              files are kept and detached, so the history of what happened is not lost.
+              Everything attached to this record — tasks, notes, timeline activity and files — is
+              kept and detached rather than deleted, so the history of what happened is not lost.
             </div>
 
             <Field

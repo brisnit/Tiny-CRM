@@ -33,7 +33,7 @@ export default async function NotesPage({ searchParams }: PageProps<"/notes">) {
 
 async function NotesList({ searchParams }: { searchParams: PageProps<"/notes">["searchParams"] }) {
   const params = await searchParams;
-  const actor = await requireActor();
+  await requireActor();
   const { workspaceIds, workspaceId } = await resolveReadScope(await readScope());
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 

@@ -30,7 +30,7 @@ import { LEAD_SOURCE, TONE } from "@/lib/enums";
 
 export async function generateMetadata({ params }: PageProps<"/deals/[id]">) {
   const { id } = await params;
-  const actor = await requireActor();
+  await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
   const deal = await getDeal(workspaceIds, id);
   return { title: deal?.name ?? "Deal" };

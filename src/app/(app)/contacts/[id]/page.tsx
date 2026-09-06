@@ -28,7 +28,7 @@ import { LEAD_SOURCE, RELATIONSHIP_STRENGTH, RELATIONSHIP_TYPE } from "@/lib/enu
 
 export async function generateMetadata({ params }: PageProps<"/contacts/[id]">) {
   const { id } = await params;
-  const actor = await requireActor();
+  await requireActor();
   const { workspaceIds } = await resolveReadScope(await readScope());
   const contact = await getContact(workspaceIds, id);
   return { title: contact?.fullName ?? "Contact" };

@@ -1,12 +1,12 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
 import {
-  action, audit, guard, readWorkspaceId, recordAction, revalidateRecord, transaction,
-  workspaceAction, type ActionResult,
+  action, audit, guard, readWorkspaceId, recordAction, revalidateLayout,
+  revalidatePathSafely, revalidateRecord, transaction, workspaceAction,
+  type ActionResult,
 } from "@/lib/actions/base";
 import { assertCanAssignRole, requireRole } from "@/lib/auth/access";
 import { ROLES } from "@/lib/auth/permissions";
@@ -64,7 +64,7 @@ export async function updateProfile(
             ...(data.timezone !== undefined ? { timezone: data.timezone } : {}),
           },
         });
-        revalidatePath("/", "layout");
+        revalidateLayout();
         return { ok: true as const };
       },
       { rateLimit: "mutation" },
@@ -103,7 +103,7 @@ export async function createWorkspace(
           summary: `Created workspace ${workspace.name}`,
         });
 
-        revalidatePath("/", "layout");
+        revalidateLayout();
         return { id: workspace.id, name: workspace.name };
       },
       { rateLimit: "mutation" },
@@ -139,7 +139,7 @@ export async function updateWorkspace(
           metadata: data,
         });
 
-        revalidatePath("/", "layout");
+        revalidateLayout();
         return { id: actor.workspaceId };
       },
     ),
@@ -180,7 +180,7 @@ export async function deleteWorkspace(
 
         await db.workspace.delete({ where: { id: actor.workspaceId } });
 
-        revalidatePath("/", "layout");
+        revalidateLayout();
         return { id: actor.workspaceId };
       },
     ),
@@ -249,7 +249,7 @@ export async function changeMemberRole(
           metadata: { from: target.role, to: data.role },
         });
 
-        revalidatePath("/", "layout");
+        revalidateLayout();
         return { userId: data.userId, role: data.role };
       },
     ),
@@ -294,7 +294,7 @@ export async function removeMember(
           summary: "Removed a member from the workspace",
         });
 
-        revalidatePath("/", "layout");
+        revalidateLayout();
         return { userId: targetId };
       },
     ),
@@ -338,8 +338,8 @@ export async function createProjectStatus(
           select: { id: true },
         });
 
-        revalidatePath("/settings/statuses");
-        revalidatePath("/projects");
+        revalidatePathSafely("/settings/statuses");
+        revalidatePathSafely("/projects");
         return { id: status.id };
       },
     ),
@@ -361,7 +361,7 @@ export async function deleteProjectStatus(id: string): Promise<ActionResult<{ id
           );
         }
         await db.projectStatus.delete({ where: { id: recordId } });
-        revalidatePath("/settings/statuses");
+        revalidatePathSafely("/settings/statuses");
         return { id: recordId };
       },
     ),
@@ -416,8 +416,8 @@ export async function createPipeline(
           entityId: pipeline.id, summary: `Created pipeline ${data.name}`,
         });
 
-        revalidatePath("/settings/pipelines");
-        revalidatePath("/deals");
+        revalidatePathSafely("/settings/pipelines");
+        revalidatePathSafely("/deals");
         return { id: pipeline.id };
       },
     ),
@@ -458,8 +458,8 @@ export async function createPipelineStage(
           entityId: recordId, summary: `Added stage ${data.name}`,
         });
 
-        revalidatePath("/settings/pipelines");
-        revalidatePath("/deals");
+        revalidatePathSafely("/settings/pipelines");
+        revalidatePathSafely("/deals");
         return { id: stage.id };
       },
     ),
@@ -513,7 +513,7 @@ export async function createCustomField(
           entityId: field.id, summary: `Created custom field ${data.label}`,
         });
 
-        revalidatePath("/settings/fields");
+        revalidatePathSafely("/settings/fields");
         return { id: field.id };
       },
     ),
@@ -529,7 +529,7 @@ export async function deleteCustomField(id: string): Promise<ActionResult<{ id: 
           workspaceId, action: "field.changed", entityType: "customField",
           entityId: recordId, summary: "Deleted a custom field",
         });
-        revalidatePath("/settings/fields");
+        revalidatePathSafely("/settings/fields");
         return { id: recordId };
       },
     ),
@@ -560,7 +560,7 @@ export async function createTag(
           select: { id: true },
         });
 
-        revalidatePath("/settings/tags");
+        revalidatePathSafely("/settings/tags");
         return { id: tag.id };
       },
     ),
@@ -580,7 +580,7 @@ export async function deleteTag(id: string): Promise<ActionResult<{ id: string }
           await tx.tag.delete({ where: { id: recordId } });
         });
 
-        revalidatePath("/settings/tags");
+        revalidatePathSafely("/settings/tags");
         revalidateRecord(["/contacts", "/companies"]);
         return { id: recordId };
       },

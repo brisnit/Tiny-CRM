@@ -9,6 +9,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Field } from "@/components/ui/label";
 import {
   Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -43,6 +44,10 @@ export function NoteEditor({
   const [dirty, setDirty] = React.useState(false);
   const [isPinned, setIsPinned] = React.useState(pinned);
   const [confirming, setConfirming] = React.useState(false);
+  // Deleting a note destroys the only copy of its text, so a titled note asks
+  // for its title back. The server checks this too — the dialog is a courtesy,
+  // not the control.
+  const [confirmation, setConfirmation] = React.useState("");
   const [pending, startTransition] = React.useTransition();
 
   // Set the initial HTML once; React must not own this subtree afterwards or it
@@ -153,7 +158,10 @@ export function NoteEditor({
             <FolderKanban className="size-3.5" />
             To project
           </Button>
-          <Button size="xs" variant="ghost" onClick={() => setConfirming(true)}>
+          <Button size="xs" variant="ghost" onClick={() => {
+              setConfirmation("");
+              setConfirming(true);
+            }}>
             <Trash2 className="size-3.5" />
           </Button>
           <Button size="xs" variant={dirty ? "brand" : "subtle"} onClick={save} loading={pending} disabled={!dirty}>
@@ -194,9 +202,30 @@ export function NoteEditor({
         <DialogContent width="sm">
           <DialogHeader>
             <DialogTitle>Delete this note?</DialogTitle>
-            <DialogDescription>This cannot be undone.</DialogDescription>
+            <DialogDescription>
+              This cannot be undone. The note text is not kept anywhere else.
+            </DialogDescription>
           </DialogHeader>
-          <DialogBody className="py-0" />
+          <DialogBody className={title ? "space-y-2" : "py-0"}>
+            {title ? (
+              <Field
+                label={
+                  <span>
+                    Type <span className="font-mono font-semibold">{title}</span> to confirm
+                  </span>
+                }
+                htmlFor="note-delete-confirmation"
+              >
+                <Input
+                  id="note-delete-confirmation"
+                  value={confirmation}
+                  onChange={(e) => setConfirmation(e.target.value)}
+                  autoComplete="off"
+                  placeholder={title}
+                />
+              </Field>
+            ) : null}
+          </DialogBody>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setConfirming(false)}>
               Cancel
@@ -204,9 +233,13 @@ export function NoteEditor({
             <Button
               variant="danger"
               loading={pending}
+              disabled={
+                Boolean(title) &&
+                confirmation.trim().toLowerCase() !== title!.trim().toLowerCase()
+              }
               onClick={() =>
                 startTransition(async () => {
-                  const result = await deleteNote(noteId);
+                  const result = await deleteNote(noteId, confirmation);
                   if (result.ok) {
                     toast.success("Note deleted");
                     router.push("/notes");

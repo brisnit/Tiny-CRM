@@ -1,11 +1,10 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
 import {
-  action, audit, emitEvent, guard, readWorkspaceId, recordAction, revalidateRecord,
+  action, audit, emitEvent, guard, recordAction, revalidatePathSafely, revalidateRecord,
   transaction, workspaceAction, type ActionResult, type Actor,
 } from "@/lib/actions/base";
 import { assertRelations, requireActor, resolveReadScope } from "@/lib/auth/access";
@@ -53,7 +52,7 @@ export async function refreshDailyBrief(scopeParam?: string | null) {
       async () => {
         const { actor, scope } = await scopeFor(scopeParam);
         const brief = await getDailyBrief(actor, scope, { force: true });
-        revalidatePath("/home");
+        revalidatePathSafely("/home");
         return brief;
       },
       { rateLimit: "ai" },
@@ -91,7 +90,7 @@ export async function refreshRecordSummary(
           force: true,
           workspaceId,
         });
-        revalidatePath(`/${kind}s/${recordId}`);
+        revalidatePathSafely(`/${kind}s/${recordId}`);
         return summary;
       },
     );
@@ -416,7 +415,7 @@ export async function dismissInsight(id: string): Promise<ActionResult<{ id: str
           where: { id: recordId, workspaceId },
           data: { status: "dismissed" },
         });
-        revalidatePath("/home");
+        revalidatePathSafely("/home");
         return { id: recordId };
       },
     ),

@@ -1,9 +1,7 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-
 import { db } from "@/lib/db";
-import { action, guard, type ActionResult } from "@/lib/actions/base";
+import { action, guard, type ActionResult, revalidateLayout } from "@/lib/actions/base";
 import { zId } from "@/lib/validation/common";
 
 /**
@@ -20,7 +18,7 @@ export async function markNotificationRead(id: string): Promise<ActionResult<{ i
           where: { id: notificationId, userId: actor.identity.id },
           data: { readAt: new Date() },
         });
-        revalidatePath("/", "layout");
+        revalidateLayout();
         return { id: notificationId };
       },
       { rateLimit: "mutation" },
@@ -36,7 +34,7 @@ export async function markAllNotificationsRead(): Promise<ActionResult<{ count: 
           where: { userId: actor.identity.id, readAt: null },
           data: { readAt: new Date() },
         });
-        revalidatePath("/", "layout");
+        revalidateLayout();
         return { count: result.count };
       },
       { rateLimit: "mutation" },
