@@ -30,25 +30,48 @@ that no amount of correct deployment will substitute for.
       money as integer cents — so nothing else changes.
 - [ ] **BLOCKER** Apply migrations: `npx prisma migrate deploy`.
       Never `migrate dev` against production; it can drop data.
-- [ ] **BLOCKER** Apply the PostgreSQL-only search indexes:
+- [ ] **BLOCKER** Apply all three PostgreSQL-only SQL files, in order:
       ```bash
       psql "$DATABASE_URL" -f prisma/postgres/001_search_indexes.sql
+      psql "$DATABASE_URL" -f prisma/postgres/002_row_level_security.sql
+      psql "$DATABASE_URL" -f prisma/postgres/003_deferrable_constraints.sql
       ```
-      Substring search compiles to `ILIKE '%term%'` on PostgreSQL, which a btree
-      index cannot serve. Without the `pg_trgm` GIN indexes, search degrades to a
-      sequential scan once a workspace passes a few thousand rows. `CREATE INDEX
-      CONCURRENTLY` cannot run inside a transaction — use `psql -f`, not a
-      migration runner.
+      None is optional:
+
+      **001** — substring search compiles to `ILIKE '%term%'`, which a btree index
+      cannot serve. Without the `pg_trgm` GIN indexes it degrades to a sequential
+      scan past a few thousand rows. `CREATE INDEX CONCURRENTLY` cannot run
+      inside a transaction, so use `psql -f`, not a migration runner.
+
+      **002** — row-level security, the second tenant-isolation layer. Without it
+      a query that forgets its workspace filter returns every tenant's rows.
+
+      **003** — deferrable foreign keys. `Company` and `Contact` reference each
+      other, so **without this a logical restore is impossible** — no table
+      ordering satisfies a cycle. This was found by running the restore drill,
+      not by reading the schema.
+
+- [ ] **BLOCKER** Connect the application as the RLS-restricted role, not the
+      owner:
+      ```bash
+      psql "$DATABASE_URL" -c "ALTER ROLE tinycrm_app WITH LOGIN PASSWORD '<from your secret manager>';"
+      psql "$DATABASE_URL" -c "GRANT CONNECT ON DATABASE <db> TO tinycrm_app;"
+      ```
+      Then point `DATABASE_URL` at `tinycrm_app`. **A superuser bypasses
+      row-level security even on a table marked FORCE** — a deployment connected
+      as one has the policies fully installed and no second layer at all. The
+      startup log says `row-level security active` when it is working, and logs
+      at error level when it is not. See `docs/RLS.md`.
 - [ ] **BLOCKER** Do **not** run `npm run db:seed`. It creates demo workspaces,
       demo companies and a known account. It refuses to run in production
       without `SEED_ALLOW_PRODUCTION`, and the startup gate refuses to boot if
       that variable is set — both guards should stay untouched.
-- [ ] Grant the application role `INSERT` and `SELECT` only on `AuditLog`:
+- [ ] The audit log is already append-only for the application role —
+      `002_row_level_security.sql` revokes `UPDATE` and `DELETE` on `AuditLog`.
+      Confirm it survived:
       ```sql
-      REVOKE UPDATE, DELETE ON "AuditLog" FROM tinycrm_app;
+      SELECT has_table_privilege('tinycrm_app', '"AuditLog"', 'UPDATE');  -- false
       ```
-      The application never updates or deletes audit rows; this makes that
-      enforceable rather than merely intended.
 - [ ] Set `DATABASE_POOL_MAX` to match your host's connection limit divided by
       the number of instances. The default is 10 per instance.
 - [ ] Confirm the database is not reachable from the public internet.
@@ -105,11 +128,22 @@ that no amount of correct deployment will substitute for.
 
 ## 5. Rate limiting
 
-- [ ] **BLOCKER for more than one instance** Set `RATE_LIMIT_REDIS_URL`.
-      The default store is in-memory: per-instance, and it resets on every
-      deploy. On a horizontally scaled deployment an attacker gets N times the
-      limit. `RateLimitStore` in `src/lib/rate-limit.ts` is the seam; a Redis
-      store is a drop-in replacement.
+- [ ] **Declare `APP_INSTANCES`.** A process cannot see its siblings, and this is
+      what decides whether an in-process limiter is a control or a decoration.
+      **The production gate refuses to start with `APP_INSTANCES > 1` and no
+      shared store**, so getting this wrong fails loudly rather than silently.
+
+- [ ] **BLOCKER for more than one instance** Pick a shared backend:
+      - `RATE_LIMIT_REDIS_URL` + `RATE_LIMIT_REDIS_TOKEN` — preferred. No write
+        load on the primary, and it stays cheap under an attack.
+      - `RATE_LIMIT_BACKEND=postgres` — a genuinely distributed limiter using the
+        database you already have, at the cost of a write per check. This is the
+        one this repository's tests verify.
+
+- [ ] Note the deliberate choice: a store outage **fails open** and logs at error
+      level. Locking every customer out because Redis blinked is worse than the
+      window it opens, and account lockout is an independent control that does
+      not depend on this store.
 
 ## 6. Backup and recovery
 
@@ -118,6 +152,19 @@ that no amount of correct deployment will substitute for.
 - [ ] **BLOCKER** Restore one, into a scratch database, and sign in against it.
       An untested backup is a hypothesis. Write down how long it took; that is
       your real RTO.
+
+      `npm run test:backup` performs this drill against a local PostgreSQL and
+      checks row counts, a content fingerprint, every foreign key, a
+      contact → company → deal → stage → workspace walk, cross-tenant bleed and
+      the tenant-isolation suite. **It has never been run against a managed
+      provider's PITR or `pg_dump` format** — that is the part only you can do,
+      and it is the single highest-value hour before launch.
+
+      A logical restore must defer constraints, because of the circular foreign
+      key described in §1:
+      ```sql
+      BEGIN; SET CONSTRAINTS ALL DEFERRED; \i dump.sql COMMIT;
+      ```
 - [ ] Record the targets you can actually meet, not aspirational ones:
       - **RPO** (data you can afford to lose): with PITR on a managed host,
         typically under 5 minutes.
@@ -138,18 +185,45 @@ that no amount of correct deployment will substitute for.
       `/api/ready` (readiness, touches the database). Use `/api/ready` for
       load-balancer health so an instance with a broken database connection is
       taken out of rotation.
-- [ ] Alert on: sign-in failure spikes, lockouts, `data.exported` audit events,
-      `member.role_changed`, `workspace.deleted`, and 5xx rate. **None of these
-      alerts exist yet** — the audit events they would read from do.
+- [ ] **BLOCKER before customers** Set `ALERT_WEBHOOK_URL`. The alert *kinds*
+      exist and fire — repeated sign-in failures, lockouts, role escalation,
+      owner change, mass export, workspace deletion, webhook signature failures,
+      dead-lettered jobs — and without a sink they are written to a table and
+      logged, and nobody is woken. Slack, Discord, PagerDuty and Opsgenie all
+      accept the JSON POST it sends.
+
+      The payload carries a kind, a severity, a count and an id — never CRM
+      content. Whoever receives it looks the rest up somewhere with access
+      control; an alerting channel usually has none.
+
+- [ ] Set `ALERT_MIN_SEVERITY`. `warning` is the sensible floor; `info` will
+      include routine password resets.
 
 ## 8. Background work
 
-- [ ] Schedule `dispatchPendingEvents()` (`src/lib/events.ts`). Today events are
-      drained in-process after each request on a best-effort basis; a request
-      that fails to drain leaves its events in the outbox. A cron every minute
-      is enough, and the function is written to be safe to run concurrently.
-- [ ] Schedule cleanup of expired `IdempotencyKey` rows and, once retention is
-      defined, of old `DomainEvent` rows.
+- [ ] **Deploy the worker.** Without one, automations fire only when a request
+      happens to drain the outbox, and nothing sweeps expired sessions, tokens,
+      rate-limit counters or scheduled workspace deletions.
+
+      Three shapes, documented with their trade-offs at the top of
+      `scripts/worker.ts`:
+      - **Dedicated** — `npm run worker` as a long-running process. Lowest
+        latency, simplest to reason about, costs an idle process. The right
+        default for a small SaaS.
+      - **Cron** — `npm run worker -- --once` on a schedule. No idle process;
+        latency bounded by the interval.
+      - **A queue provider** — worth it once polling the database is itself load,
+        not before.
+
+      Several workers are safe: jobs are claimed atomically and a claim expires,
+      so two never take the same job and a crash strands nothing.
+
+- [ ] Check the queue after the first day:
+      ```sql
+      SELECT status, count(*) FROM "DomainEvent" WHERE "processedAt" IS NULL GROUP BY status;
+      SELECT name, "lastError" FROM "DomainEvent" WHERE "deadAt" IS NOT NULL;
+      ```
+      A dead-lettered job is silent work that stopped happening.
 
 ## 9. Verify the deploy
 
@@ -171,9 +245,17 @@ Run these against the deployed instance, not locally.
 These are not deployment steps; they are the things that make a multi-user
 deployment defensible.
 
-- [ ] Password reset. The `AuthToken` model exists; the flow does not. Without
-      it, a forgotten password means manual intervention.
-- [ ] Email verification. Same.
+- [ ] **Configure a mail provider** (`MAIL_PROVIDER_URL`, `MAIL_PROVIDER_TOKEN`).
+      Without one there is no password reset and no email verification — and the
+      verification gate is *not enforced*, because enforcing a check nobody can
+      satisfy would lock every account out of exports and invitations.
+- [ ] Send yourself a reset and a verification link, and confirm both arrive.
+      The no-provider fallback deliberately logs that a message *would* have been
+      sent **without the link**, so a broken configuration is quiet rather than
+      dangerous.
+- [ ] Understand that **MFA is not enforced at sign-in**. Enrolment works;
+      the sign-in challenge does not exist. Do not tell customers they have
+      two-factor protection.
 - [ ] A security contact in `SECURITY.md` at the repository root, with a
       response-time commitment you can meet.
 - [ ] A privacy notice covering what is stored, for how long, and the fact that
@@ -199,7 +281,10 @@ NODE_ENV=production npm run check:config
 npm ci
 npm run typecheck
 npm run lint
-npm test
+npm test                        # SQLite
+npm run test:pg                 # real PostgreSQL, including row-level security
+npm run test:backup             # back up, destroy, restore, verify
+npm run audit:deps              # installed vs loaded, with evidence
 npm run build
 
 # 4. Optional but recommended before a release
@@ -222,7 +307,13 @@ curl -sI https://your-domain/deals   # expect 307 -> /login
 | `DATABASE_URL` | **Yes** | Must be `postgresql://` in production; the gate refuses SQLite |
 | `AUTH_SECRET` | **Yes** | ≥32 characters, not the development value |
 | `APP_URL` | **Yes** | Canonical HTTPS origin; the gate refuses HTTP and localhost |
-| `RATE_LIMIT_REDIS_URL` | Strongly recommended | Without it, rate limiting is per-instance |
+| `APP_INSTANCES` | Yes, if > 1 | The gate refuses an in-process limiter above one instance |
+| `RATE_LIMIT_REDIS_URL` | Strongly recommended | Or `RATE_LIMIT_BACKEND=postgres`. Without either, limiting is per-instance |
+| `MAIL_PROVIDER_URL` / `_TOKEN` | Before inviting anyone | Without them: no password reset, no verification, and the verification gate is off |
+| `ALERT_WEBHOOK_URL` | Before customers | Without it, alerts are recorded and nobody is woken |
+| `SENTRY_DSN` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `LOG_DRAIN_URL` | Recommended | Without any, exceptions go to logs only |
+| `AI_ENTERPRISE_AGREEMENT` | Only if true | Never inferred. "Private model only" workspaces fail closed until set |
+| `REQUIRE_MALWARE_SCAN` | If uploads are enabled | Fails uploads closed until a scanner exists |
 | `BILLING_WEBHOOK_SECRET` | If selling plans | Without it, no plan change can be applied |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | If AI is enabled | Absent → the offline engine; no CRM content leaves the deployment |
 | `AI_PROVIDER` | No | `anthropic` (default) \| `openai` \| `offline` |

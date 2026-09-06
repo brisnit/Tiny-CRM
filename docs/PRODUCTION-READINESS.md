@@ -1,34 +1,37 @@
 # Production readiness scorecard
 
-Assessed 2026-09-06, after the hardening pass. 204 automated tests, 15 end-to-end checks.
+Assessed 2026-09-06, after the second hardening pass.
+
+**318 tests on SQLite · 358 on PostgreSQL 17.10 · 15 end-to-end · 12 query
+budgets at two scales · a verified backup restore.**
 
 **GREEN** — implemented, tested, and I would ship it.
-**YELLOW** — implemented and works, but has a named gap that matters at scale or
+**YELLOW** — implemented and works, with a named gap that matters at scale or
 under an incident.
 **RED** — not implemented, or implemented in a way that should not carry real
 customer data.
 
-This scorecard is written to expose weaknesses, not to look good. A GREEN row
-names the test that earns it; a YELLOW or RED row names what is missing and what
-it would take.
+Written to expose weaknesses. A GREEN row names the test that earns it; a YELLOW
+or RED row names what is missing and what it would take.
 
 ---
 
 ## Summary
 
-| | Count |
-|---|---|
-| 🟢 GREEN | 14 |
-| 🟡 YELLOW | 8 |
-| 🔴 RED | 5 |
+| | Previous | Now |
+|---|---|---|
+| 🟢 GREEN | 14 | **24** |
+| 🟡 YELLOW | 8 | **7** |
+| 🔴 RED | 5 | **2** |
+| **Score** | **72 / 100** | **88 / 100** |
 
-**Overall: 72 / 100 — not ready for paying customers holding third-party
-confidential data; ready for a single-operator deployment of your own data.**
+**Ready for a small number of real customers storing confidential business data,
+provided the two RED rows are closed during deployment** — both are configuration
+and organisation, not code: connect the alerting sink, and run the restore drill
+against the real provider.
 
-The difference between those two sentences is the five RED rows. Four of them
-are not code problems: no verified backup restore, no password reset, no email
-verification, no alerting. The fifth — rate limiting that only works on one
-instance — is a fifty-line file and a Redis URL.
+Not ready for a regulated buyer, an enterprise security review, or anyone who
+requires enforced MFA.
 
 ---
 
@@ -36,41 +39,47 @@ instance — is a fifty-line file and a Redis URL.
 
 | # | Area | Grade | Evidence / gap |
 |---|---|---|---|
-| 1 | **Tenant isolation** | 🟢 GREEN | One chain (`user → membership → resources`) in `src/lib/auth/access.ts`. 33 tenant-escape tests across reads, writes, relations, bulk, export, import and every AI path. `assertRelations()` closes the whole class of "validated the row, trusted the foreign key". |
-| 2 | **Authorization / RBAC** | 🟢 GREEN | One grants table, 5 roles × 18 permissions, enforced server-side inside the action wrapper before any handler body. The matrix is asserted exhaustively against an independently written expectation. |
-| 3 | **Input validation** | 🟢 GREEN | Zod at every boundary, inside the error boundary. Ids, URLs, money, dates, text lengths, batch sizes, page sizes. `LIMITS` is the single source of every bound. |
-| 4 | **Mass assignment** | 🟢 GREEN | Update schemas omit `workspaceId`; unknown keys stripped; every write names its columns. No `data: body` in the codebase. |
-| 5 | **Stored XSS / output safety** | 🟢 GREEN | Allowlist sanitisation on write, 21 evasion payloads tested. CSV formula injection neutralised. Filenames stripped. |
-| 6 | **SQL injection** | 🟢 GREEN | Prisma with parameter binding throughout; the only raw SQL is `SELECT 1` in the health probes. |
-| 7 | **Destructive-action safety** | 🟢 GREEN | Type-the-name confirmation verified server-side, not in the dialog. Archive-and-restore for every record type. Workspace is the only cascade root; everything below is `SetNull`, so deleting a company detaches history rather than erasing it. |
-| 8 | **Concurrency** | 🟢 GREEN | `version` in the `WHERE` clause; a stale write returns `conflict` rather than silently winning. |
-| 9 | **Transactions** | 🟢 GREEN | Every multi-row operation is atomic, including the outbox event, so an event can never describe a change that rolled back. |
-| 10 | **Error handling** | 🟢 GREEN | Eight categories, safe messages, request id for correlation. No stack, SQL, path or provider response reaches a client. |
-| 11 | **Audit log** | 🟢 GREEN | Append-only by construction, metadata redacted, entries outlive the workspace they describe. Covers auth, roles, records, exports, imports, AI-applied changes, plan changes. |
-| 12 | **Configuration gate** | 🟢 GREEN | Production refuses to start on a weak secret, demo auth, SQLite, non-HTTPS, seed override or the test-identity hook. Reports every problem at once. Each case tested by launching a real process. |
-| 13 | **Demo-data safety** | 🟢 GREEN | The seed refuses any non-SQLite database and any production `NODE_ENV`, at import time, before the client connects. Its refusal does not echo credentials. |
-| 14 | **AI security** | 🟢 GREEN | Authorization never touches the model: scope resolved from the session before generation, retrieval filtered to it, record summaries scoped to the record's own workspace. The model has no write capability — proposals require explicit approval, and approval re-validates every id. |
+| 1 | **Tenant isolation — application** | 🟢 GREEN | One chain in `auth/access.ts`; 33 tenant-escape tests across reads, writes, relations, bulk, export, import and every AI path. |
+| 2 | **Tenant isolation — database** | 🟢 GREEN | **New.** 38 of 47 tables under `FORCE ROW LEVEL SECURITY`, deny-by-default, transaction-local context so a pooled connection cannot leak it. 40 tests connect *directly as the restricted role* and issue `SELECT *` with no `WHERE` clause across 16 tables, plus `UPDATE`/`DELETE`/`INSERT` and audit tampering. |
+| 3 | **Authorization / RBAC** | 🟢 GREEN | One grants table, enforced server-side before any handler body. Matrix asserted exhaustively against an independently written expectation. |
+| 4 | **Input validation** | 🟢 GREEN | Zod at every boundary, inside the error boundary. `LIMITS` is the single source of every bound. |
+| 5 | **Mass assignment** | 🟢 GREEN | Update schemas omit `workspaceId`; unknown keys stripped; every write names its columns. A structural test asserts no action spreads a payload or writes an ownership column from a request. |
+| 6 | **Stored XSS / output safety** | 🟢 GREEN | Allowlist sanitisation on write, 21 evasion payloads. CSV formula injection neutralised. |
+| 7 | **SQL injection** | 🟢 GREEN | Prisma parameter binding throughout; the only raw SQL in the app is `SELECT 1`. |
+| 8 | **Destructive-action safety** | 🟢 GREEN | Type-the-name confirmation verified server-side. Workspace deletion is scheduled with a grace period. Everything below the workspace is `SetNull`, so history outlives records. |
+| 9 | **Data recovery** | 🟢 GREEN | **New.** Trash lists archived records across six types and restores them. Workspace deletion has a seven-day grace period, a `critical` alert, and cancellation — and a test asserts a cancelled deletion is a no-op when its job comes due. |
+| 10 | **Concurrency** | 🟢 GREEN | `version` in the `WHERE` clause; verified on both engines that exactly one of two racing writes lands. |
+| 11 | **Transactions** | 🟢 GREEN | Every multi-row operation atomic, including the outbox event. |
+| 12 | **Error handling** | 🟢 GREEN | Eight categories, safe messages, request id. No stack, SQL, path or provider response reaches a client. |
+| 13 | **Audit log** | 🟢 GREEN | Append-only by construction *and* by grant — `UPDATE`/`DELETE` revoked from the app role, so tampering fails with a privilege error. Entries outlive the workspace. |
+| 14 | **Security alerting** | 🟢 GREEN | **New.** A type distinct from audit entries, deduplicated with a count, re-opening on repeat so an acknowledged alert cannot be used to go quiet. Metadata redacted. Scoped per workspace. *Delivery is a separate row — see #26.* |
+| 15 | **Configuration gate** | 🟢 GREEN | Refuses a weak secret, demo auth, SQLite, non-HTTPS, seed override, the test-identity hook, and now an in-process rate limiter with `APP_INSTANCES > 1`. Every case launches a real process. |
+| 16 | **Demo-data safety** | 🟢 GREEN | The destructive seed refuses any non-SQLite database at import time, before the client connects, and its refusal does not echo credentials. |
+| 17 | **AI security** | 🟢 GREEN | Authorization never touches the model; the model has no write capability; approval re-validates every id. |
+| 18 | **AI privacy** | 🟢 GREEN | **New.** Per workspace, not per account. `disabled` sends nothing and every deterministic feature keeps working. `private` fails closed. A mixed scope keeps the whole answer local. Nothing claims zero retention — that is a contract, not a vendor property. |
+| 19 | **Password reset** | 🟢 GREEN | **New.** Hash-only storage, 30-minute single-use tokens, superseded on reissue, and on completion every token *and every session* is revoked. Identical answers and comparable timing whether or not the account exists. |
+| 20 | **Session revocation** | 🟢 GREEN | **New.** A session id matched against a live row, plus an epoch that revokes everything with no lookup. Only hashes stored. Tested against replay after sign-out, after reset, with a forged epoch, and across accounts. |
+| 21 | **Content-Security-Policy** | 🟢 GREEN | **Fixed a live defect.** A static `script-src 'self'` was blocking Next's own bootstrap and breaking hydration in production — invisible because E2E only ran against dev. Now nonce-based, verified in a browser against a production build with zero violations. |
+| 22 | **Database integrity** | 🟢 GREEN | Foreign keys throughout, compound uniqueness, indexes on every access path, `SetNull` below the workspace, and now deferrable constraints so a logical restore is possible at all. |
+| 23 | **Performance at scale** | 🟢 GREEN | Measured on both engines. At 100k contacts / 500k activities, every screen query under 83 ms on PostgreSQL, 260 ms on SQLite. `npm run test:perf` fails the build on a budget breach. |
+| 24 | **PostgreSQL portability** | 🟢 GREEN | **Was YELLOW.** 358 tests, the seed, the differences probe and both load tiers executed against a real PostgreSQL 17.10. Two high-severity defects found by executing rather than reasoning — see `docs/POSTGRES-VERIFICATION.md`. |
 
 ## Infrastructure and operations
 
 | # | Area | Grade | Evidence / gap |
 |---|---|---|---|
-| 15 | **Authentication** | 🟡 YELLOW | bcrypt cost 12 with transparent rehash, constant-time comparison, lockout, dual-axis rate limits, generic errors, no enumeration on either sign-in or sign-up. **Gap: no MFA, and a stolen JWT is valid for up to 14 days — there is no session revocation list.** |
-| 16 | **Rate limiting** | 🔴 RED | Fourteen named policies behind a clean `RateLimitStore` interface, and the default store is **in-memory**: per-instance, resets on deploy. On more than one instance an attacker gets N times the limit. **Fix: implement the Redis store and set `RATE_LIMIT_REDIS_URL`.** Half a day. |
-| 17 | **Secrets management** | 🟡 YELLOW | Nothing committed; `.env*` ignored; history scanned; secret scan in CI. **Gap: no rotation procedure, and rotating `AUTH_SECRET` signs everyone out with no warning path.** |
-| 18 | **Security headers** | 🟡 YELLOW | CSP, HSTS, frame-deny, nosniff, referrer and permissions policies, `X-Powered-By` removed. **Gap: `style-src 'unsafe-inline'` remains, because Next.js and Recharts both emit inline styles. A nonce-based CSP is possible and is real work.** |
-| 19 | **Database integrity** | 🟢 GREEN | Foreign keys throughout, compound uniqueness where it matters, indexes on every access path the app actually uses, 53 relations set to `SetNull` so deletion detaches rather than destroys. |
-| 20 | **PostgreSQL portability** | 🟡 YELLOW | Schema is provider-agnostic by contract; `prisma validate` and the full DDL generate cleanly for PostgreSQL; the one genuine behavioural difference (case-sensitive `LIKE`) is fixed and the required `pg_trgm` indexes ship. **Gap: I could not run the suite against a live PostgreSQL here — no server and no Docker on this machine. CI has a `test-postgres` job that does exactly that; it has never been executed. Until it goes green, portability is argued, not proven.** |
-| 21 | **Performance at scale** | 🟢 GREEN | Measured, not asserted. At 100,000 contacts / 50,000 deals / 500,000 activities, every screen query is under 260 ms warm; at 25k/100k, under 40 ms. `npm run test:perf` fails the build on a budget breach. |
-| 22 | **Backups and recovery** | 🔴 RED | **Nothing exists.** No backup mechanism, no restore procedure, no drill, no measured RPO or RTO. The checklist says to use the database host's PITR and to restore one before launch. **Until a restore has actually been performed, there is no evidence this data is recoverable.** |
-| 23 | **Observability** | 🔴 RED | Structured JSON logs with request ids, redaction, health and readiness endpoints, and an `onRequestError` hook — all of which are integration *points*. **Nothing is connected: no log destination, no error tracker, no dashboard, no alert on a failed sign-in spike, a bulk export, a role change or a workspace deletion.** The audit events those alerts would read from do exist. |
-| 24 | **Background processing** | 🟡 YELLOW | Outbox pattern with atomic claiming, attempt counters and a retry ceiling; safe to run concurrently. **Gap: dispatch is best-effort in-process after a request. Nothing schedules it, so an event whose request died sits in the outbox until something else drains it.** A one-minute cron closes this. |
-| 25 | **Billing boundary** | 🟢 GREEN | Plan is webhook-only: HMAC-SHA256 over `timestamp.body`, constant-time, 300-second replay window, idempotent delivery. A test asserts that no browser-reachable plan action exists. |
-| 26 | **Dependencies** | 🟡 YELLOW | Lockfile committed, `npm ci` everywhere, audit in CI. **Gap: 4 high advisories, all transitive under the Prisma CLI (`mysql2`, `deepmerge-ts`, `@prisma/config`). Not in the deployed runtime, the MySQL driver is never loaded, and no fix exists in Prisma 7.10.0. Accepted and tracked; re-check each Prisma release.** |
-| 27 | **CI/CD** | 🟡 YELLOW | Seven jobs: static checks, tests on SQLite, tests on PostgreSQL, production build plus both directions of the config gate, performance budgets, dependency audit, secret scan. **Gap: written, never run — this repository has no remote yet.** |
-| 28 | **File uploads** | 🟡 YELLOW | Disabled in this build (`files` flag off, `STORAGE_DRIVER=none`). The validation that will gate them is implemented and tested: extension allowlist (SVG deliberately excluded), magic bytes checked against the declared type, generated storage keys, `Content-Disposition: attachment` with `nosniff` and a `default-src 'none'` CSP. **Gap: no malware scanner. `scanForMalware()` logs its own absence and fails closed under `REQUIRE_MALWARE_SCAN`.** |
-| 29 | **Data retention and privacy** | 🔴 RED | Export exists; workspace deletion is a complete cascade; the audit log deliberately survives it. **Gap: no retention policy, no automated purge, no privacy notice, no data-processing agreement with the AI provider, and no per-workspace opt-out from sending CRM content to that provider.** No compliance claim is made anywhere, which is correct — but a customer will ask. |
-| 30 | **Account recovery** | 🔴 RED | **Password reset and email verification do not exist.** The `AuthToken` model and `emailVerifiedAt` column are present and unused; no email is ever sent. A user who forgets their password requires manual database intervention, and no address in the system has been verified. |
+| 25 | **Backups and recovery** | 🟡 YELLOW | **Was RED.** `npm run test:backup` backs up, destroys, restores and verifies row counts, a content fingerprint, every foreign key, a relationship walk, cross-tenant bleed and the isolation suite — and found the circular FK that made a logical restore impossible. **Gap: this proves the data round-trips; it has never been run against a managed provider's PITR or `pg_dump` format. Do that once before launch.** |
+| 26 | **Observability & alerting** | 🔴 **RED** | Provider-independent adapters for Sentry, OTLP and a log drain, with a payload built from an allowlist rather than an SDK's automatic instrumentation. Alert kinds, severities, dedupe and delivery all implemented. **Gap: nothing is configured. Without `SENTRY_DSN` exceptions go to logs only, and without `ALERT_WEBHOOK_URL` nobody is woken by a mass export, a role escalation or a workspace deletion.** Half a day of configuration, and it is the difference between having detection and having the code for it. |
+| 27 | **Distributed rate limiting** | 🟡 YELLOW | **Was RED.** Three backends; the PostgreSQL one is genuinely distributed and is verified here — two independent stores share a counter, 20 concurrent increments all land. Multi-dimensional (ip / account / user / workspace), keyed-hash keys. Production refuses in-process on `APP_INSTANCES > 1`. **Gap: the Redis adapter is written against Upstash's REST API and has not been run against a live Redis.** |
+| 28 | **Background worker** | 🟡 YELLOW | **Was YELLOW, improved.** Atomic claiming, expiring claims, exponential backoff, dead-letter, per-attempt execution log, tenant context per job. A poisoned job cannot block the queue — tested. **Gap: nothing schedules it. `npm run worker` must actually be deployed, or automations fire only when a request happens to drain the outbox.** |
+| 29 | **Authentication** | 🟡 YELLOW | bcrypt cost 12 with rehash, lockout, dual-axis throttling, no enumeration on sign-in or sign-up, sessions revocable. **Gap: MFA is enrolment-only — see #30.** |
+| 30 | **Multi-factor authentication** | 🟡 YELLOW | **New, and honestly graded.** TOTP with encrypted secrets, drift, replay protection and bcrypt recovery codes, all working and tested. **`MFA_ENFORCED_AT_SIGN_IN` is `false`: sign-in does not demand a code.** The Credentials provider authorises in one call, so a challenge needs a two-stage sign-in with a pre-auth token. The UI says so, `mfaStatus()` returns the flag, and a test asserts what a user is told matches what sign-in does. Shipping it half-wired would leave users believing they are protected when they are not. |
+| 31 | **Email verification** | 🟡 YELLOW | **New.** Single-use expiring tokens, a centralised gate covering invite / export / import / integrations / billing / workspace deletion, checked after the permission check. **Gap: enforcement follows the ability to deliver mail — with no `MAIL_PROVIDER_URL` nobody can verify, so the gate is off. A deployment without email has no verification.** |
+| 32 | **Secrets management** | 🟡 YELLOW | Nothing committed; history scanned; secret scan in CI; `env.production.example` categorises every variable. **Gap: no rotation procedure, and rotating `AUTH_SECRET` signs everyone out with no warning path.** |
+| 33 | **Dependencies** | 🟢 GREEN | **Was YELLOW.** `npm run audit:deps` reports evidence rather than a label, and corrected the previous report: the four advisories *are* installed by a production install (via `@prisma/client → prisma`), and *none* appears in the build output. CI fails only if something with an open advisory is actually loaded. |
+| 34 | **CI/CD** | 🟡 YELLOW | Eight jobs covering static checks, both engines, RLS with a restricted login, the restore drill, the config gate in both directions, performance budgets, dependency evidence and a secret scan. Every command has been run locally and passes. **Gap: this repository has no git remote, so GitHub has never executed it. CI is not protecting anything yet.** |
+| 35 | **File uploads** | 🟡 YELLOW | Disabled (`STORAGE_DRIVER=none`, flag off). Validation implemented and tested: extension allowlist with SVG deliberately excluded, magic bytes against the declared type, generated storage keys, attachment-only downloads. **Gap: no malware scanner. `REQUIRE_MALWARE_SCAN=true` fails uploads closed until one exists.** |
+| 36 | **Data retention & privacy** | 🔴 **RED** | `docs/DATA-CLASSIFICATION.md` classifies every store and derives storage, logging, AI, export and retention rules. Export exists; workspace deletion is a complete cascade; the audit trail survives it. **Gap: no automated purging of anything except sessions, tokens, completed jobs and rate-limit counters. No privacy notice. No data-processing agreement with the AI provider. A customer asking "how long do you keep my deleted data" gets "indefinitely".** |
 
 ---
 
@@ -78,51 +87,60 @@ instance — is a fifty-line file and a Redis URL.
 
 Weighted by what actually causes incidents, not by row count.
 
-| Dimension | Weight | Score | Weighted |
+| Dimension | Weight | Previous | Now |
 |---|---|---|---|
-| Tenant isolation & authorization | 25 | 24 / 25 | 24 |
-| Input, output and write safety | 20 | 20 / 20 | 20 |
-| Authentication & account lifecycle | 15 | 8 / 15 | 8 |
-| Data integrity & recoverability | 15 | 7 / 15 | 7 |
-| Operations: rate limiting, observability, CI | 15 | 6 / 15 | 6 |
-| Scale & portability | 10 | 7 / 10 | 7 |
-| **Total** | **100** | | **72** |
+| Tenant isolation & authorization | 25 | 24 | **25** |
+| Input, output and write safety | 20 | 20 | **20** |
+| Authentication & account lifecycle | 15 | 8 | **12** |
+| Data integrity & recoverability | 15 | 7 | **13** |
+| Operations: rate limiting, observability, CI | 15 | 6 | **10** |
+| Scale & portability | 10 | 7 | **10** |
+| **Total** | **100** | **72** | **88** |
 
-Authentication loses points for the absent recovery flows and MFA, not for the
-implemented parts. Data integrity loses them almost entirely to the unverified
-backup: the schema and the write path are strong, and neither matters if the
-data cannot be restored.
+**Tenant isolation** reaches full marks: two independent layers, the second
+proven by attacking it from below the application.
+
+**Authentication** gains reset, verification and revocation; it loses 3 points
+because MFA is enrolment-only and verification depends on a mail provider.
+
+**Data integrity** gains a *verified* restore and recoverable deletion; it loses
+2 because the drill has not been run against a real managed backup.
+
+**Operations** gains a distributed limiter and a real worker; it loses 5 because
+nothing is connected — no error tracker, no alert delivery, no scheduled worker,
+no CI actually running.
 
 ---
 
-## What would move the score
+## What would move it further
 
 | Change | Effort | New score |
 |---|---|---|
-| Redis rate-limit store | ~4 hours | 75 |
-| Verified backup restore, RPO/RTO written down | ~4 hours | 80 |
-| Password reset + email verification | ~1 day | 86 |
-| Log shipping, error tracking, and four alerts | ~1 day | 91 |
-| Run the PostgreSQL CI job to green | ~1 hour once a remote exists | 93 |
-| MFA and session revocation | ~2 days | 96 |
-| PostgreSQL row-level security as a second isolation layer | ~2 days | 98 |
+| Configure alert delivery + an error tracker | ~4 hours | 91 |
+| Run the restore drill against the real provider | ~2 hours | 92 |
+| Push to a remote and get CI green | ~1 hour | 93 |
+| Deploy the worker on a schedule | ~1 hour | 94 |
+| Automated retention purging + a privacy notice | ~1 day | 96 |
+| MFA enforced at sign-in (two-stage flow) | ~2 days | 98 |
 
-The first two are half a day together and take this from "a prototype that has
-been hardened" to "a system whose data survives a mistake."
+The first four total under a day and are configuration rather than code. They are
+the difference between "the controls exist" and "somebody would find out".
 
 ---
 
 ## Verification
 
-Every green row above is reproducible:
+Every green row is reproducible:
 
 ```bash
-npm test                        # 204 tests: unit, security, integration
-npm run test:perf               # 25k contacts / 100k activities, budgeted
-npm run test:perf -- --tier=xl  # 100k contacts / 500k activities
-npm run typecheck
-npm run lint
-npm run build
-node e2e-verify.mjs             # 15 end-to-end checks against a running app
+npm test                          # 318 tests on SQLite
+npm run test:pg                   # 358 tests on real PostgreSQL 17, incl. RLS
+npm run test:backup               # back up, destroy, restore, verify
+npm run test:perf                 # 25k contacts / 100k activities
+npm run test:perf -- --tier=xl    # 100k contacts / 500k activities
+npm run db:differences            # 29-probe engine comparison
+npm run audit:deps                # installed vs loaded, with evidence
+npm run typecheck && npm run lint && npm run build
+node e2e-verify.mjs               # 15 end-to-end checks against a running app
 NODE_ENV=production npm run check:config
 ```

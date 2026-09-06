@@ -14,6 +14,10 @@ this says, the file is right and this document is wrong — fix both.
 
 ## 1. Tenancy
 
+Two layers. The application enforces the chain below on every request; PostgreSQL
+enforces it again underneath, so a query that forgets the filter still returns
+nothing — see `docs/RLS.md` and §16.
+
 **A workspace is the security boundary.** Every record below `Workspace` carries
 a `workspaceId`, and the whole authorization model reduces to one chain:
 
@@ -85,15 +89,61 @@ every mutating action.
 
 **Proof:** `tests/security/auth.test.ts`.
 
+### Password reset
+
+`src/lib/auth/tokens.ts`, `src/lib/actions/auth.ts`.
+
+32 bytes from the CSPRNG; only a SHA-256 hash is stored; 30-minute expiry; single
+use through a conditional `updateMany` so two redemptions cannot both win;
+superseded when a new link is requested; and on completion **every outstanding
+token and every session is revoked**. A reset that left the attacker's session
+alive would change the lock while they were already inside.
+
+Every request answers `{ ok: true }` whether or not the account exists, spends
+comparable time either way, and is limited on both the address and the account.
+Every failure returns one message — "already used" versus "expired" tells an
+attacker holding a stale link whether it was ever real.
+
+### Email verification
+
+An unverified account may build its own workspace but cannot invite anyone,
+export, import, connect an integration, delete the workspace or touch billing
+(`src/lib/auth/verification.ts`). The gate is checked *after* the permission
+check, so an under-privileged user is not told that verifying would help.
+
+Enforcement follows the ability to deliver mail: with no provider configured
+nobody could verify, so the gate would be a wall. That weakening is deliberate
+and reported by the readiness scorecard.
+
+### Sessions
+
+`src/lib/auth/sessions.ts`. Tokens carry a session id matched against a live row
+and an epoch compared against the user's. The row is the product feature — sign
+out one device — and the epoch is the backstop, making "sign out everywhere",
+"password changed" and "account disabled" instant with no lookup at all.
+
+Only the hash of a session id is stored. Addresses are truncated to a /24 or /48
+before storage, so a session list can say "somewhere else" without keeping a
+movement history. **Settings → Security** lists devices and signs them out.
+
+### Two-factor authentication — foundation only
+
+TOTP with AES-256-GCM-encrypted secrets, ±1 step of drift, replay protection on
+the used time step, and bcrypt-hashed single-use recovery codes. All of it works
+and is tested.
+
+**It is not demanded at sign-in.** `MFA_ENFORCED_AT_SIGN_IN` is `false`,
+`mfaStatus()` returns that flag, the settings screen says so in the UI, and a
+test asserts the status a user sees agrees with what sign-in does. A user who
+enrols and believes they are protected is in a worse position than one who knows
+they are not.
+
 ### Not implemented
 
-- **Email verification.** The `AuthToken` model and `User.emailVerifiedAt`
-  column exist and are unused. No email is sent, and no address is verified.
-- **Password reset.** Same: the token model exists, the flow does not.
-- **MFA.** Not present.
-- **Single sign-on.** Not present. `src/lib/auth/context.ts` is the only file
-  that references NextAuth, so swapping to Auth.js providers, Clerk, WorkOS or
-  Auth0 is a change to one file plus `src/auth.ts`.
+- **Single sign-on.** `src/lib/auth/context.ts` is the only file that references
+  NextAuth, so swapping to Auth.js providers, Clerk, WorkOS or Auth0 is a change
+  to one file plus `src/auth.ts`.
+- **The MFA sign-in challenge**, as above.
 
 ---
 
@@ -214,6 +264,7 @@ every bound.
 - **CSV export** neutralises any cell beginning `=`, `+`, `-` or `@` by prefixing
   a tab. Otherwise a contact named `=cmd|'/c calc'!A0` turns an export into code
   execution on the machine of whoever opens it.
+- **Uploads** — see §17.
 - **Filenames** are stripped of path separators and control characters, and a
   stored file is never named by the browser: `src/lib/uploads.ts` generates a
   workspace-partitioned random storage key.
@@ -273,9 +324,17 @@ provider leaves the deployment; see `docs/THREAT-MODEL.md`.
 
 `next.config.ts`:
 
-- `Content-Security-Policy` — `default-src 'self'`; no `unsafe-eval` in
-  production. `style-src` retains `'unsafe-inline'` because Next.js and Recharts
-  both emit inline styles; this is a real, documented weakening.
+- `Content-Security-Policy` — set per request in `src/proxy.ts` with a **nonce**
+  (`src/lib/csp.ts`), because a static `script-src 'self'` blocks Next's own
+  inline bootstrap and silently broke React hydration in production. No
+  `'unsafe-inline'` and no `'unsafe-eval'` for scripts. `img-src` names two hosts
+  rather than all of `https:`. `base-uri 'none'`.
+
+  `style-src-elem` retains `'unsafe-inline'` for one measured reason: `sonner`
+  injects its stylesheet from JavaScript after hydration, and a runtime-injected
+  element cannot carry a server-generated nonce. `style-src-attr` retains it
+  permanently — React and Recharts set style attributes, and no browser supports
+  a nonce for an attribute.
 - `Strict-Transport-Security` in production (no `preload` — that is a one-way
   door and belongs to whoever owns the domain).
 - `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
@@ -294,12 +353,30 @@ Next.js's own Server Action origin check on every action.
 mutation, bulk, import, export, upload, webhook, …) behind a `RateLimitStore`
 interface.
 
-**The default store is in-memory.** It is per-instance and resets on deploy,
-which means it is effective against a single client on a single-instance
-deployment and close to useless across a horizontally scaled one. The interface
-is the seam: a Redis store is a drop-in replacement, and
-`RATE_LIMIT_REDIS_URL` is already read and warned about at startup when unset.
-**This is a known gap, listed in the readiness scorecard.**
+**Three backends**, chosen from configuration (`src/lib/rate-limit/stores.ts`):
+in-process for development, Redis/Upstash for production, and a shared counter
+table in the application's own PostgreSQL for a deployment that does not want to
+operate Redis. The last is the one this repository's tests can verify, and do:
+two independent store instances share one counter, and 20 concurrent increments
+all land.
+
+**Production refuses to start on the in-process store when `APP_INSTANCES > 1`.**
+Counters that are not shared give an attacker N times every limit and reset on
+each deploy.
+
+Limits apply on several axes at once, because each alone has a known bypass:
+per-account loses to password spraying, per-address loses to a botnet, per-user
+loses to a team acting in concert. All configured axes must pass. Export is
+capped per workspace as well as per user — an export is the shape an
+exfiltration takes, and one seat is not a ceiling on a team.
+
+Identifiers are hashed with a **keyed** digest before storage, so the backend
+never becomes a second copy of who uses the product and from where, and someone
+holding the key list cannot confirm an email address by rehashing it.
+
+A store outage fails open and logs at error level. That is a deliberate
+availability choice; account lockout is an independent control that does not
+depend on this store.
 
 ---
 
@@ -372,13 +449,24 @@ inside the action, after authorization and before the write.
 
 ## 14. Dependencies
 
-`npm audit` currently reports **4 high advisories, all transitive under the
-`prisma` CLI** (`mysql2`, `deepmerge-ts`, `@prisma/config`). The Prisma CLI is a
-devDependency used for `generate` and `migrate`; it is not part of the deployed
-runtime, the MySQL driver is never loaded (this app uses SQLite and PostgreSQL),
-and no fix exists within Prisma 7.10.0, the current release. This is an accepted,
-tracked risk — re-check on each Prisma release. CI fails only on a *critical*
-advisory in runtime dependencies and reports everything else.
+`npm audit` reports **4 high advisories** (`mysql2`, `deepmerge-ts`,
+`@prisma/config`, `prisma`).
+
+An earlier version of this document said they were "not part of the deployed
+runtime" because the Prisma CLI is a devDependency. **That was half wrong**, and
+`npm run audit:deps` now checks rather than asserts: `@prisma/client` is a
+*production* dependency and depends on `prisma`, which depends on `mysql2`. All
+four are installed by `npm ci --omit=dev` and do ship in a container image.
+
+What is true, and is verified on every CI run: **none of them appears in the
+build output**, so none is executed by the running server. The MySQL driver is
+never loaded — this app uses SQLite and PostgreSQL — and both advisories against
+it require connecting to a hostile MySQL server. No fix exists within Prisma
+7.10.0.
+
+The distinction matters and the script reports it as two separate questions:
+INSTALLED (on disk) and LOADED (in the build output). CI fails only on the
+second, plus any critical advisory in runtime dependencies.
 
 No secrets are committed. `.env*` is git-ignored, the repository history was
 scanned for key-shaped literals, and CI runs a secret scan over the full history
@@ -391,3 +479,92 @@ on every push.
 There is no security contact configured for this project yet. Before it takes
 real customer data, add one here and in `SECURITY.md` at the repository root,
 with a response-time commitment you can actually meet.
+
+---
+
+## 16. Row-level security
+
+PostgreSQL enforces tenant isolation underneath the application. 38 of 47 tables
+carry `FORCE ROW LEVEL SECURITY`, gated on two transaction-local settings that
+`src/lib/tenant-db.ts` is the only writer of. Unset means **no rows**, so
+forgetting the context fails closed.
+
+The invariant: *a query that forgets the application's workspace filter still
+returns no other tenant's rows*. Proven by 40 tests that connect directly as the
+restricted role — no Prisma, no application code — and issue `SELECT * FROM
+"Contact"` with no `WHERE` clause at all, across 16 tables, plus `UPDATE`,
+`DELETE`, `INSERT` and audit-log tampering.
+
+**A superuser bypasses RLS even on a `FORCE`'d table.** The application asks the
+database which role it is connected as and logs at error level, every boot, when
+the connection is not actually protected. Point `DATABASE_URL` at `tinycrm_app`.
+
+Full design, exclusions and failure behaviour: `docs/RLS.md`.
+
+---
+
+## 17. Background jobs
+
+`src/lib/jobs.ts`. Atomic claiming (`FOR UPDATE SKIP LOCKED` on PostgreSQL),
+claims that expire so a dead worker strands nothing, exponential backoff with
+jitter, a dead-letter state that is never retried automatically, and a
+per-attempt execution log.
+
+Every handler runs inside `withTenantContext` for the job's own workspace, so a
+background job is subject to the same database-level isolation as a request —
+including when the handler forgets to filter. That matters more for jobs than
+for requests: nobody is watching one run.
+
+**A worker must actually be running.** Without `npm run worker` somewhere,
+automations fire only when a request happens to drain the outbox, and nothing
+sweeps expired sessions, tokens, rate-limit counters or scheduled deletions.
+
+---
+
+## 18. AI privacy
+
+Per workspace, not per account (`src/lib/ai/privacy.ts`): one person may run
+their own business and a client's in the same account, under different
+obligations.
+
+`disabled` sends nothing and keeps every deterministic feature working — scoring,
+momentum, stall detection, the cleanup scan, the daily brief. `private` fails
+closed until an operator sets `AI_ENTERPRISE_AGREEMENT`; a mode that silently
+degraded to `enabled` would send data to a standard endpoint while the workspace
+believed otherwise. A mixed scope keeps the whole answer local.
+
+**Nothing claims zero retention.** That is a property of a contract and a
+configuration, not of a vendor; the provider table records what is *available*
+and never infers what this deployment holds.
+
+---
+
+## 19. Recoverability
+
+- **Trash.** Archived contacts, companies, deals, projects, opportunities and
+  notes are listed in one place and restorable. Archive was already reversible;
+  without a screen there was nowhere to reverse it from.
+- **Workspace deletion is scheduled**, not immediate: a seven-day grace period,
+  a `critical` alert, and cancellable throughout. Immediate deletion requires
+  having scheduled it first.
+- **Backup and restore is verified, not assumed.** `npm run test:backup` backs up
+  a representative database, destroys it, restores from the backup alone, and
+  checks row counts, a content fingerprint, every foreign key, a
+  contact → company → deal → stage → workspace walk, cross-tenant bleed and the
+  tenant-isolation suite. It found that a circular foreign key made a logical
+  restore impossible; `003_deferrable_constraints.sql` fixes it.
+
+---
+
+## 20. Security alerting
+
+`src/lib/security/alerts.ts`. Deliberately a different type from an audit entry:
+the audit log is a complete record of what happened, an alert is the small subset
+someone should look at. An alert that fires on everything is an alert nobody
+reads.
+
+Repeats collapse into one row with a count, and a repeat re-opens an acknowledged
+alert — otherwise an attacker who triggers one alert, waits for it to be
+acknowledged and triggers it again would be invisible. Metadata passes through
+the same redaction as the audit log. **Without `ALERT_WEBHOOK_URL` nothing is
+delivered**; alerts are recorded and logged only.
