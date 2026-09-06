@@ -56,8 +56,8 @@ export async function POST(request: Request) {
 
       // Two windows: a burst limit and an hourly ceiling. AI requests cost real
       // money, so an authenticated user must not be able to spend without bound.
-      await enforceRateLimit("ai", actor.identity.id);
-      await enforceRateLimit("aiHourly", actor.identity.id);
+      await enforceRateLimit("ai", { user: actor.identity.id });
+      await enforceRateLimit("aiHourly", { user: actor.identity.id });
 
       const body = bodySchema.parse(await request.json());
 

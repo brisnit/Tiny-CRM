@@ -4,7 +4,7 @@ import { getActor, resolveReadScope } from "@/lib/auth/access";
 import { searchEverything } from "@/lib/data/search";
 import { toAppError } from "@/lib/errors";
 import { log, newRequestId, runWithContext } from "@/lib/logger";
-import { enforceRateLimit } from "@/lib/rate-limit";
+import { clientAddress, enforceRateLimit } from "@/lib/rate-limit";
 import { LIMITS } from "@/lib/validation/limits";
 import { zScope, zSearchQuery } from "@/lib/validation/common";
 
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
         return NextResponse.json({ hits: [], requestId }, { status: 401 });
       }
 
-      await enforceRateLimit("search", actor.identity.id);
+      await enforceRateLimit("search", { user: actor.identity.id, ip: clientAddress(request.headers) });
 
       const { searchParams } = new URL(request.url);
       const rawQuery = searchParams.get("q") ?? "";

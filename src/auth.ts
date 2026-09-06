@@ -79,7 +79,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // Per-account limiter, independent of the per-IP one applied at the
         // route level: distributed credential stuffing spreads across addresses
         // but still converges on one account.
-        const accountLimit = await checkRateLimit("loginPerAccount", email);
+        const accountLimit = await checkRateLimit("loginPerAccount", { account: email });
         if (!accountLimit.ok) {
           await recordAudit({
             action: "auth.sign_in_failed",
@@ -170,7 +170,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               : {}),
           },
         });
-        await resetRateLimit("loginPerAccount", email);
+        await resetRateLimit("loginPerAccount", { account: email });
 
         await recordAudit({
           actorId: user.id,

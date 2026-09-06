@@ -20,6 +20,9 @@ CREATE TABLE "User" (
     "emailVerifiedAt" TIMESTAMP(3),
     "failedLoginCount" INTEGER NOT NULL DEFAULT 0,
     "lockedUntil" TIMESTAMP(3),
+    "sessionEpoch" INTEGER NOT NULL DEFAULT 0,
+    "mfaEnabledAt" TIMESTAMP(3),
+    "passwordChangedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -37,6 +40,10 @@ CREATE TABLE "Workspace" (
     "archivedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "aiMode" TEXT NOT NULL DEFAULT 'enabled',
+    "deletionRequestedAt" TIMESTAMP(3),
+    "deletionRequestedById" TEXT,
+    "deletionScheduledAt" TIMESTAMP(3),
 
     CONSTRAINT "Workspace_pkey" PRIMARY KEY ("id")
 );
@@ -659,6 +666,7 @@ CREATE TABLE "AuthToken" (
     "usedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "requestIp" TEXT,
+    "consumedBySessionId" TEXT,
 
     CONSTRAINT "AuthToken_pkey" PRIMARY KEY ("id")
 );
@@ -687,12 +695,33 @@ CREATE TABLE "DomainEvent" (
     "entityId" TEXT NOT NULL,
     "actorId" TEXT,
     "payload" TEXT NOT NULL DEFAULT '{}',
+    "status" TEXT NOT NULL DEFAULT 'pending',
     "processedAt" TIMESTAMP(3),
     "attempts" INTEGER NOT NULL DEFAULT 0,
+    "maxAttempts" INTEGER NOT NULL DEFAULT 5,
+    "availableAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "claimedBy" TEXT,
+    "claimedUntil" TIMESTAMP(3),
     "lastError" TEXT,
+    "deadAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "DomainEvent_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "JobRun" (
+    "id" TEXT NOT NULL,
+    "eventId" TEXT NOT NULL,
+    "attempt" INTEGER NOT NULL,
+    "worker" TEXT NOT NULL,
+    "startedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "finishedAt" TIMESTAMP(3),
+    "outcome" TEXT,
+    "durationMs" INTEGER,
+    "error" TEXT,
+
+    CONSTRAINT "JobRun_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -707,6 +736,78 @@ CREATE TABLE "FeatureFlag" (
     CONSTRAINT "FeatureFlag_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "RateLimitCounter" (
+    "key" TEXT NOT NULL,
+    "count" INTEGER NOT NULL DEFAULT 0,
+    "resetAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "RateLimitCounter_pkey" PRIMARY KEY ("key")
+);
+
+-- CreateTable
+CREATE TABLE "UserSession" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "tokenHash" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "lastSeenAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+    "revokedAt" TIMESTAMP(3),
+    "revokedReason" TEXT,
+    "ipPrefix" TEXT,
+    "userAgent" TEXT,
+    "deviceLabel" TEXT,
+
+    CONSTRAINT "UserSession_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "MfaCredential" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "type" TEXT NOT NULL DEFAULT 'totp',
+    "secretEncrypted" TEXT NOT NULL,
+    "confirmedAt" TIMESTAMP(3),
+    "lastUsedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "lastUsedStep" INTEGER,
+
+    CONSTRAINT "MfaCredential_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "MfaRecoveryCode" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "codeHash" TEXT NOT NULL,
+    "usedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "MfaRecoveryCode_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "SecurityAlert" (
+    "id" TEXT NOT NULL,
+    "workspaceId" TEXT,
+    "userId" TEXT,
+    "kind" TEXT NOT NULL,
+    "severity" TEXT NOT NULL DEFAULT 'warning',
+    "summary" TEXT NOT NULL,
+    "metadata" TEXT,
+    "count" INTEGER NOT NULL DEFAULT 1,
+    "firstSeenAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "lastSeenAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "dedupeKey" TEXT NOT NULL,
+    "acknowledgedAt" TIMESTAMP(3),
+    "acknowledgedById" TEXT,
+    "deliveredAt" TIMESTAMP(3),
+    "deliveryError" TEXT,
+
+    CONSTRAINT "SecurityAlert_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
 
@@ -718,6 +819,9 @@ CREATE INDEX "User_deactivatedAt_idx" ON "User"("deactivatedAt");
 
 -- CreateIndex
 CREATE INDEX "Workspace_ownerId_archivedAt_idx" ON "Workspace"("ownerId", "archivedAt");
+
+-- CreateIndex
+CREATE INDEX "Workspace_deletionScheduledAt_idx" ON "Workspace"("deletionScheduledAt");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Workspace_ownerId_slug_key" ON "Workspace"("ownerId", "slug");
@@ -1050,16 +1154,55 @@ CREATE INDEX "IdempotencyKey_expiresAt_idx" ON "IdempotencyKey"("expiresAt");
 CREATE UNIQUE INDEX "IdempotencyKey_scope_key_key" ON "IdempotencyKey"("scope", "key");
 
 -- CreateIndex
+CREATE INDEX "DomainEvent_status_availableAt_idx" ON "DomainEvent"("status", "availableAt");
+
+-- CreateIndex
 CREATE INDEX "DomainEvent_processedAt_createdAt_idx" ON "DomainEvent"("processedAt", "createdAt");
 
 -- CreateIndex
 CREATE INDEX "DomainEvent_workspaceId_name_createdAt_idx" ON "DomainEvent"("workspaceId", "name", "createdAt");
 
 -- CreateIndex
+CREATE INDEX "JobRun_eventId_attempt_idx" ON "JobRun"("eventId", "attempt");
+
+-- CreateIndex
+CREATE INDEX "JobRun_startedAt_idx" ON "JobRun"("startedAt");
+
+-- CreateIndex
 CREATE INDEX "FeatureFlag_key_idx" ON "FeatureFlag"("key");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "FeatureFlag_key_workspaceId_key" ON "FeatureFlag"("key", "workspaceId");
+
+-- CreateIndex
+CREATE INDEX "RateLimitCounter_resetAt_idx" ON "RateLimitCounter"("resetAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "UserSession_tokenHash_key" ON "UserSession"("tokenHash");
+
+-- CreateIndex
+CREATE INDEX "UserSession_userId_revokedAt_lastSeenAt_idx" ON "UserSession"("userId", "revokedAt", "lastSeenAt");
+
+-- CreateIndex
+CREATE INDEX "UserSession_expiresAt_idx" ON "UserSession"("expiresAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "MfaCredential_userId_type_key" ON "MfaCredential"("userId", "type");
+
+-- CreateIndex
+CREATE INDEX "MfaRecoveryCode_userId_usedAt_idx" ON "MfaRecoveryCode"("userId", "usedAt");
+
+-- CreateIndex
+CREATE INDEX "SecurityAlert_workspaceId_lastSeenAt_idx" ON "SecurityAlert"("workspaceId", "lastSeenAt");
+
+-- CreateIndex
+CREATE INDEX "SecurityAlert_severity_acknowledgedAt_lastSeenAt_idx" ON "SecurityAlert"("severity", "acknowledgedAt", "lastSeenAt");
+
+-- CreateIndex
+CREATE INDEX "SecurityAlert_deliveredAt_idx" ON "SecurityAlert"("deliveredAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "SecurityAlert_dedupeKey_key" ON "SecurityAlert"("dedupeKey");
 
 -- AddForeignKey
 ALTER TABLE "Workspace" ADD CONSTRAINT "Workspace_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -1368,5 +1511,20 @@ ALTER TABLE "AuthToken" ADD CONSTRAINT "AuthToken_userId_fkey" FOREIGN KEY ("use
 ALTER TABLE "DomainEvent" ADD CONSTRAINT "DomainEvent_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "JobRun" ADD CONSTRAINT "JobRun_eventId_fkey" FOREIGN KEY ("eventId") REFERENCES "DomainEvent"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "FeatureFlag" ADD CONSTRAINT "FeatureFlag_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UserSession" ADD CONSTRAINT "UserSession_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "MfaCredential" ADD CONSTRAINT "MfaCredential_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "MfaRecoveryCode" ADD CONSTRAINT "MfaRecoveryCode_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SecurityAlert" ADD CONSTRAINT "SecurityAlert_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 

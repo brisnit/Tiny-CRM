@@ -81,7 +81,9 @@ export async function action<T>(
 ): Promise<ActionResult<T>> {
   return execute(async () => {
     const actor = await requireActor();
-    if (options.rateLimit) await enforceRateLimit(options.rateLimit, actor.identity.id);
+    if (options.rateLimit) {
+      await enforceRateLimit(options.rateLimit, { user: actor.identity.id });
+    }
     return handler(actor);
   });
 }
@@ -96,7 +98,13 @@ export async function workspaceAction<T>(
 ): Promise<ActionResult<T>> {
   return execute(async () => {
     const actor = await requireWorkspaceAccess(options.workspaceId, options.permission);
-    if (options.rateLimit) await enforceRateLimit(options.rateLimit, actor.identity.id);
+    if (options.rateLimit) {
+      // Both axes: one seat cannot be expensive, and neither can a whole team.
+      await enforceRateLimit(options.rateLimit, {
+        user: actor.identity.id,
+        workspace: actor.workspaceId,
+      });
+    }
     return handler(actor);
   });
 }
@@ -122,7 +130,9 @@ export async function recordAction<T>(
       permission: options.permission,
       workspaceId: options.workspaceId,
     });
-    if (options.rateLimit) await enforceRateLimit(options.rateLimit, actor.identity.id);
+    if (options.rateLimit) {
+      await enforceRateLimit(options.rateLimit, { user: actor.identity.id, workspace: workspaceId });
+    }
     return handler({ actor, workspaceId, recordId });
   });
 }

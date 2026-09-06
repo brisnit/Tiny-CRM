@@ -86,7 +86,23 @@ export const env = {
   billingWebhookSecret: optional("BILLING_WEBHOOK_SECRET"),
 
   /** Optional Redis-compatible rate-limit backend. Falls back to in-memory. */
+  /**
+   * Rate limiting. `auto` picks Redis when a URL is configured, otherwise
+   * memory. Production refuses to boot on memory when APP_INSTANCES > 1.
+   */
+  rateLimitBackend: (optional("RATE_LIMIT_BACKEND") ?? "auto") as
+    | "auto" | "memory" | "redis" | "postgres",
   rateLimitRedisUrl: optional("RATE_LIMIT_REDIS_URL"),
+  rateLimitRedisToken: optional("RATE_LIMIT_REDIS_TOKEN"),
+  rateLimitUsePostgres: flag("RATE_LIMIT_USE_POSTGRES", false),
+
+  /**
+   * How many application instances this deployment runs. Declared rather than
+   * detected: a process cannot see its siblings, and the difference between
+   * "one instance" and "several" is exactly what decides whether an in-process
+   * rate limiter is a control or a decoration.
+   */
+  appInstances: Number(optional("APP_INSTANCES") ?? "1"),
 
   /** Object storage for file uploads. Absent means uploads stay disabled. */
   storageDriver: (optional("STORAGE_DRIVER") ?? "none") as "none" | "local" | "s3",
@@ -165,7 +181,45 @@ export function assertProductionEnv(): void {
     problems.push("STORAGE_DRIVER=s3 but STORAGE_BUCKET is not set.");
   }
 
+  // Rate limiting is only a control if the counters are shared. On more than one
+  // instance an in-process limiter gives an attacker N times every limit, and
+  // resets them all on each deploy — so a deployment that declares more than one
+  // instance must configure a shared store rather than silently fall back.
+  const usingSharedStore = usingSharedRateLimitStore();
+
+  if (!Number.isFinite(env.appInstances) || env.appInstances < 1) {
+    problems.push("APP_INSTANCES must be a positive whole number.");
+  } else if (env.appInstances > 1 && !usingSharedStore) {
+    problems.push(
+      `APP_INSTANCES is ${env.appInstances} but rate limiting is in-process. ` +
+        "Set RATE_LIMIT_REDIS_URL, or RATE_LIMIT_BACKEND=postgres to share counters " +
+        "through the database.",
+    );
+  }
+
+  if (env.rateLimitBackend === "redis" && !env.rateLimitRedisUrl) {
+    problems.push("RATE_LIMIT_BACKEND=redis but RATE_LIMIT_REDIS_URL is not set.");
+  }
+  if (env.rateLimitBackend === "postgres" && env.databaseUrl.startsWith("file:")) {
+    problems.push("RATE_LIMIT_BACKEND=postgres but DATABASE_URL is not PostgreSQL.");
+  }
+
   if (problems.length > 0) throw new ConfigurationError(problems);
+}
+
+/**
+ * Whether rate-limit counters are shared between instances.
+ *
+ * Exported so the startup gate, the startup warnings and the readiness endpoint
+ * all answer this the same way, rather than each re-deriving it.
+ */
+export function usingSharedRateLimitStore(): boolean {
+  return (
+    env.rateLimitBackend === "redis" ||
+    env.rateLimitBackend === "postgres" ||
+    env.rateLimitUsePostgres ||
+    (env.rateLimitBackend === "auto" && Boolean(env.rateLimitRedisUrl))
+  );
 }
 
 /** Non-fatal configuration observations, surfaced at startup. */
@@ -175,9 +229,9 @@ export function productionWarnings(): string[] {
     if (!env.billingWebhookSecret) {
       warnings.push("BILLING_WEBHOOK_SECRET is not set — plan changes cannot be applied by a provider.");
     }
-    if (!env.rateLimitRedisUrl) {
+    if (!usingSharedRateLimitStore()) {
       warnings.push(
-        "RATE_LIMIT_REDIS_URL is not set — rate limiting is per-instance and resets on deploy.",
+        "Rate limiting is in-process — counters are per-instance and reset on deploy.",
       );
     }
     if (env.logAiPrompts) {

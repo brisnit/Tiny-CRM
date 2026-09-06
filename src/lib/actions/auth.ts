@@ -57,7 +57,7 @@ export async function signUp(input: z.input<typeof signUpSchema>): Promise<SignU
     // No request scope (tests, scripts).
   }
 
-  const limit = await checkRateLimit("signup", ip ?? "unknown");
+  const limit = await checkRateLimit("signup", { ip: ip ?? "unknown" });
   if (!limit.ok) {
     return { ok: false, error: "Too many attempts. Try again in a few minutes." };
   }

@@ -32,7 +32,7 @@ export async function GET(request: Request) {
       const actor = await getActor();
       if (!actor) return NextResponse.json({ options: [], requestId }, { status: 401 });
 
-      await enforceRateLimit("options", actor.identity.id);
+      await enforceRateLimit("options", { user: actor.identity.id });
 
       const { searchParams } = new URL(request.url);
       const params = paramsSchema.parse({

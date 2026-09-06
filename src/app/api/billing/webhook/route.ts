@@ -34,7 +34,7 @@ export async function POST(request: Request) {
 
   return runWithContext({ requestId, route: "billing.webhook" }, async () => {
     try {
-      await enforceRateLimit("webhook", clientAddress(request.headers));
+      await enforceRateLimit("webhook", { ip: clientAddress(request.headers) });
 
       const body = await request.text();
       verifySignature({

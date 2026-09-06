@@ -52,6 +52,20 @@ model User {
   failedLoginCount Int       @default(0)
   lockedUntil      DateTime?
 
+  /// Bumped to invalidate every existing session at once — a password reset, a
+  /// "sign out everywhere", or a compromise. A JWT carries the epoch it was
+  /// minted at; a token whose epoch is behind this one is refused. Cheap global
+  /// revocation that needs no per-token lookup.
+  sessionEpoch Int @default(0)
+
+  /// Set when a confirmed second factor exists. Distinct from having an
+  /// MfaCredential row, which may be an unconfirmed enrolment in progress.
+  mfaEnabledAt DateTime?
+
+  /// The last time this account changed its password. A session minted before
+  /// this instant is not trusted, independently of the epoch.
+  passwordChangedAt DateTime?
+
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -74,6 +88,9 @@ model User {
   usage           UsageCounter[]
   auditEvents     AuditLog[]        @relation("AuditActor")
   authTokens      AuthToken[]
+  sessions        UserSession[]
+  mfaCredentials  MfaCredential[]
+  recoveryCodes   MfaRecoveryCode[]
 
   @@index([plan])
   @@index([deactivatedAt])
@@ -89,6 +106,25 @@ model Workspace {
   archivedAt  DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+
+  /// Whether CRM content may be sent to a model provider.
+  ///
+  ///   disabled  nothing leaves the deployment; deterministic features still run
+  ///   enabled   authorised context may be sent to the configured provider
+  ///   private   reserved for a provider under an enterprise/zero-retention
+  ///             agreement; behaves as `disabled` until one is configured
+  ///
+  /// Per workspace, not per account: one person may run their own business and
+  /// a client's in the same account, with different obligations for each.
+  aiMode String @default("enabled")
+
+  /// Delayed destruction. Deleting a workspace is irreversible and cascades to
+  /// everything in it, so it is scheduled rather than executed: the request is
+  /// recorded, the workspace becomes read-only, and a worker performs it after
+  /// the grace period unless it is cancelled.
+  deletionRequestedAt   DateTime?
+  deletionRequestedById String?
+  deletionScheduledAt   DateTime?
 
   owner User @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
 
@@ -119,9 +155,11 @@ model Workspace {
   auditLogs      AuditLog[]
   domainEvents   DomainEvent[]
   featureFlags   FeatureFlag[]
+  securityAlerts SecurityAlert[]
 
   @@unique([ownerId, slug])
   @@index([ownerId, archivedAt])
+  @@index([deletionScheduledAt])
 }
 
 model WorkspaceMember {
@@ -1117,6 +1155,10 @@ model AuthToken {
   createdAt DateTime @default(now())
   requestIp String?
 
+  /// The session this token consumed, when it was used. Kept so a reset can be
+  /// traced to the session it produced during an investigation.
+  consumedBySessionId String?
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, purpose, expiresAt])
@@ -1161,15 +1203,52 @@ model DomainEvent {
   /// JSON payload.
   payload     String   @default("{}")
 
+  /// pending | processing | done | failed | dead
+  status      String   @default("pending")
   processedAt DateTime?
   attempts    Int      @default(0)
+  maxAttempts Int      @default(5)
+  /// Not eligible for a worker until this instant. Exponential backoff writes
+  /// it forward after each failure.
+  availableAt DateTime @default(now())
+  /// Which worker holds the claim, and until when. A claim that expires is
+  /// reclaimable, so a worker that dies mid-job does not strand it.
+  claimedBy   String?
+  claimedUntil DateTime?
   lastError   String?
+  /// Set when attempts are exhausted. A dead event stays for inspection and is
+  /// never retried automatically, so one poisoned job cannot block the queue.
+  deadAt      DateTime?
   createdAt   DateTime @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  runs      JobRun[]
 
+  @@index([status, availableAt])
   @@index([processedAt, createdAt])
   @@index([workspaceId, name, createdAt])
+}
+
+/// One execution attempt of one job, kept for failure visibility.
+///
+/// The event row carries only the latest error; this carries the history, which
+/// is what distinguishes "failed once on a timeout" from "fails every time".
+model JobRun {
+  id        String   @id @default(cuid())
+  eventId   String
+  attempt   Int
+  worker    String
+  startedAt DateTime @default(now())
+  finishedAt DateTime?
+  /// success | failure
+  outcome   String?
+  durationMs Int?
+  error     String?
+
+  event DomainEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, attempt])
+  @@index([startedAt])
 }
 
 /// Server-side feature flags, optionally scoped to one workspace.
@@ -1186,4 +1265,149 @@ model FeatureFlag {
 
   @@unique([key, workspaceId])
   @@index([key])
+}
+
+/// Distributed rate-limit counters.
+///
+/// A fixed-window counter shared by every instance, for a deployment that runs
+/// more than one but does not want to operate Redis. `INSERT … ON CONFLICT DO
+/// UPDATE … RETURNING` makes increment-and-read a single atomic statement, so
+/// two instances cannot both observe the same count.
+///
+/// The key is a keyed digest of the identifier, never the identifier itself —
+/// this table must not become a second copy of who uses the product and from
+/// where. Rows are swept by the worker; `resetAt` is indexed for that.
+model RateLimitCounter {
+  key     String   @id
+  count   Int      @default(0)
+  resetAt DateTime
+
+  @@index([resetAt])
+}
+
+// ---------------------------------------------------------------------------
+// Sessions, second factors, security alerts
+// ---------------------------------------------------------------------------
+
+/// A server-side record of one signed-in session.
+///
+/// The application uses JWT sessions, which are self-contained and therefore not
+/// revocable on their own — the previous hardening report called this out: a
+/// stolen token stayed usable for up to 14 days. Each token now carries an `sid`
+/// that must match a live row here, so revocation is a single UPDATE.
+///
+/// The row is also what makes "Active sessions" a real screen: without it the
+/// product cannot answer "where am I signed in?" at all.
+model UserSession {
+  id     String @id @default(cuid())
+  userId String
+
+  /// SHA-256 of the session id carried in the token. The id itself is never
+  /// stored, so a leaked database does not hand over usable sessions.
+  tokenHash String @unique
+
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  /// signed_out | signed_out_others | password_changed | role_changed |
+  /// deactivated | expired | admin_revoked
+  revokedReason String?
+
+  /// Truncated to a /24 (IPv4) or /48 (IPv6). Enough to tell "somewhere else"
+  /// from "here", without keeping a precise movement log of the user.
+  ipPrefix    String?
+  userAgent   String?
+  /// A short human label derived from the user agent — "Chrome on macOS".
+  deviceLabel String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt, lastSeenAt])
+  @@index([expiresAt])
+}
+
+/// A second authentication factor.
+///
+/// TOTP only for now. The secret is encrypted at rest with a key derived from
+/// AUTH_SECRET, so a database copy alone does not yield working codes.
+model MfaCredential {
+  id     String @id @default(cuid())
+  userId String
+  /// totp (webauthn is the intended second implementation)
+  type   String @default("totp")
+
+  /// Encrypted, never the raw secret. See src/lib/auth/mfa.ts.
+  secretEncrypted String
+  /// Set when the user proved they can generate a valid code. An unconfirmed
+  /// row is an enrolment in progress and does not gate sign-in.
+  confirmedAt DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  /// The last accepted code's 30-second time step, so a code cannot be replayed
+  /// inside its own validity window. Int, not BigInt: a 30-second step fits in
+  /// 32 bits until the year 4000, and BigInt round-trips awkwardly through JSON.
+  lastUsedStep Int?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type])
+}
+
+/// Single-use recovery codes, for the authenticator that is lost or wiped.
+model MfaRecoveryCode {
+  id       String    @id @default(cuid())
+  userId   String
+  /// bcrypt hash. These are credentials; the plaintext is shown once.
+  codeHash String
+  usedAt   DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
+}
+
+/// A security event worth someone's attention.
+///
+/// Deliberately separate from AuditLog. The audit log is a complete, append-only
+/// record of what happened; almost none of it warrants waking anybody. An alert
+/// is the small subset that does, and it carries the fields an alert needs and
+/// an audit entry does not: severity, a repeat count, acknowledgement, and
+/// delivery state.
+model SecurityAlert {
+  id          String  @id @default(cuid())
+  workspaceId String?
+  userId      String?
+
+  /// A value from SECURITY_ALERTS in src/lib/security/alerts.ts.
+  kind     String
+  /// info | warning | critical
+  severity String  @default("warning")
+  summary  String
+  /// Redacted JSON, same rules as the audit log.
+  metadata String?
+
+  /// Repeated occurrences collapse into one row rather than one alert each, so
+  /// a burst of failed sign-ins is a single alert with a count.
+  count       Int      @default(1)
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  /// Groups occurrences that should collapse together.
+  dedupeKey   String
+
+  acknowledgedAt   DateTime?
+  acknowledgedById String?
+
+  /// Delivery to the configured sink.
+  deliveredAt   DateTime?
+  deliveryError String?
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([dedupeKey])
+  @@index([workspaceId, lastSeenAt])
+  @@index([severity, acknowledgedAt, lastSeenAt])
+  @@index([deliveredAt])
 }
