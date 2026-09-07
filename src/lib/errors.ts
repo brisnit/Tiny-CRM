@@ -1,3 +1,4 @@
+import { ZodError } from "zod";
 /**
  * Structured application errors.
  *
@@ -75,6 +76,17 @@ export function toAppError(error: unknown): AppError {
 
   // Framework control flow (redirect, notFound) must propagate untouched.
   if (error && typeof error === "object" && "digest" in error) throw error;
+
+  // A schema rejection is the caller's input being wrong, not the server
+  // failing. Without this it fell through to "internal": /api/search?q=%
+  // returned 500 to any signed-in user, and a real fault was indistinguishable
+  // from bad input in the logs. The action layer checks ZodError before calling
+  // here, which is why only the routes that map errors directly were affected.
+  if (error instanceof ZodError) {
+    const first = error.issues[0];
+    const field = typeof first?.path?.[0] === "string" ? first.path[0] : undefined;
+    return validation(first?.message ?? "That input is not valid.", field);
+  }
 
   const prisma = error as { code?: string; meta?: { target?: string[] } };
   if (prisma?.code === "P2002") {

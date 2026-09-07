@@ -37,7 +37,19 @@ export async function GET(request: Request) {
         return NextResponse.json({ hits: [], requestId });
       }
 
-      const query = zSearchQuery.parse(rawQuery.slice(0, LIMITS.searchQuery.max));
+      // A wildcard-only term is refused by zSearchQuery, and that refusal is
+      // correct — `LIKE '%%'` matches every row in the workspace. But this is a
+      // box the UI types into, so it is treated like a too-short term above:
+      // no results, not an error banner. Without this the user typing "%" got a
+      // failure response for something that is simply not a search yet.
+      const parsed = zSearchQuery.safeParse(rawQuery.slice(0, LIMITS.searchQuery.max));
+      if (!parsed.success) {
+        return NextResponse.json(
+          { hits: [], requestId },
+          { headers: { "x-request-id": requestId, "cache-control": "no-store" } },
+        );
+      }
+      const query = parsed.data;
       const scope = zScope.parse(searchParams.get("scope"));
       const { workspaceIds } = await resolveReadScope(scope);
 
