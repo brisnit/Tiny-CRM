@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { SECRETS, realisticStack } from "../helpers/leak-fixtures";
+import { SECRETS, realisticStack, plainStack } from "../helpers/leak-fixtures";
 
 /**
  * The scrubbing tests check the functions. This one checks the bytes.
@@ -26,7 +26,10 @@ import { SECRETS, realisticStack } from "../helpers/leak-fixtures";
 describe("the outbound Sentry request carries no secrets", () => {
   const originalFetch = globalThis.fetch;
 
-  async function capturedBody(context?: { route?: string; operation?: string }): Promise<string> {
+  async function capturedBody(
+    context?: { route?: string; operation?: string },
+    stack: string = realisticStack,
+  ): Promise<string> {
     let body = "";
     globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
       body = String(init.body);
@@ -36,8 +39,8 @@ describe("the outbound Sentry request carries no secrets", () => {
     process.env.SENTRY_DSN = "https://0123456789abcdef0123456789abcdef@o1.ingest.sentry.io/2";
     const { captureError } = await import("../../src/lib/observability");
 
-    const error = new Error(realisticStack.split("\n")[0]!);
-    error.stack = realisticStack;
+    const error = new Error(stack.split("\n")[0]!);
+    error.stack = stack;
     try {
       await captureError(error, {
         operation: "contact.list",
@@ -108,5 +111,16 @@ describe("the outbound Sentry request carries no secrets", () => {
     const a = JSON.parse(await capturedBody()).event_id;
     const b = JSON.parse(await capturedBody()).event_id;
     assert.notEqual(a, b, "every report would collapse onto one event");
+  });
+
+  test("a non-Prisma error leaks nothing either", async () => {
+    // The Prisma-shaped fixture masked two real leaks: its rule spans to the
+    // first stack frame, so it removed everything before any other rule ran.
+    // This sends the same secrets behind a plain TypeError, over the wire.
+    const body = await capturedBody(undefined, plainStack);
+    for (const [label, secret] of Object.entries(SECRETS)) {
+      assert.ok(!body.includes(secret), `${label} was sent to Sentry:\n${body}`);
+    }
+    assert.match(body, /contacts\.ts/, `the failing file never reached Sentry:\n${body}`);
   });
 });

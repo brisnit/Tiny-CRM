@@ -23,3 +23,22 @@ export const realisticStack = [
   `resend ${SECRETS.resend}`,
   "    at handler (/var/task/src/lib/actions/contacts.ts:42:11)",
 ].join("\n");
+
+/**
+ * The same secrets in an error that is *not* a Prisma failure.
+ *
+ * `realisticStack` above hides a weakness: the rule that strips Prisma's quoted
+ * row spans to the first stack frame, so it removed the entire block in one go
+ * and every other rule was never exercised. Two secrets — a session JWT and a
+ * vendor API key — survived a plain TypeError while the Prisma fixture passed.
+ *
+ * Any assertion worth making about leaks should be made against both.
+ */
+export const plainStack = [
+  "TypeError: upstream rejected the call",
+  `  ctx for ${SECRETS.email} session ${SECRETS.jwt}`,
+  `  db postgresql://tinycrm_app:${SECRETS.dbPassword}@db.internal:5432/tinycrm`,
+  `  hook https://hooks.slack.com/services/T00000000/B00000000/${SECRETS.webhookSecret}`,
+  `  key ${SECRETS.resend}`,
+  "    at handler (/var/task/src/lib/actions/contacts.ts:42:11)",
+].join("\n");

@@ -79,6 +79,21 @@ export function redact(value: unknown, depth = 0): unknown {
     // failure: logs nobody can read are logs that get switched off.
     return value
       .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, REDACTED)
+      // A JSON Web Token. Its dots are word boundaries, so a generic long-run
+      // rule sees three short pieces rather than one long secret and lets a
+      // live session token through — which is what happened. Anchored on the
+      // `eyJ` that a base64url-encoded `{"` always produces.
+      .replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]+)?/g, REDACTED)
+      // Vendor keys that announce themselves with a prefix: re_, sk_, pk_,
+      // rk_, whsec_ and friends. Length alone does not catch these — a Resend
+      // key is 31 characters, under any threshold loose enough to be safe on
+      // ordinary text. The prefix is what makes them recognisable, and it is
+      // required to be followed by 16+ token characters so `re_queued` and
+      // other ordinary snake_case words are untouched.
+      .replace(/\b(?:re|sk|pk|rk|ak|whsec|shpat|glpat|npm|ey)_[A-Za-z0-9_-]{16,}/gi, REDACTED)
+      .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}/g, REDACTED)
+      .replace(/\bxox[baprse]-[A-Za-z0-9-]{10,}/gi, REDACTED)
+      .replace(/\bAKIA[0-9A-Z]{16}\b/g, REDACTED)
       .replace(/\bBearer\s+[A-Za-z0-9._-]+/gi, `Bearer ${REDACTED}`)
       .replace(/https:\/\/hooks\.slack\.com\/services\/[^\s"'<>]+/gi, `https://hooks.slack.com/services/${REDACTED}`)
       .replace(/https:\/\/(?:\w+\.)?discord(?:app)?\.com\/api\/webhooks\/[^\s"'<>]+/gi, `https://discord.com/api/webhooks/${REDACTED}`)

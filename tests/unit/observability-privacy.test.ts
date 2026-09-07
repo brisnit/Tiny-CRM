@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
 import { scrubMessage, scrubStack } from "../../src/lib/observability";
-import { SECRETS, realisticStack } from "../helpers/leak-fixtures";
+import { SECRETS, realisticStack, plainStack } from "../helpers/leak-fixtures";
 
 /**
  * What actually leaves the process in an error report.
@@ -55,5 +55,16 @@ describe("nothing sensitive survives into an error report", () => {
     const out = scrubStack("Error: x\n    at f (/Users/someone/app/src/lib/db.ts:1:1)") ?? "";
     assert.ok(!out.includes("/Users/someone"), `a filesystem path survived: ${out}`);
   });
-});
 
+  test("the same secrets are removed from an error that is not a Prisma error", () => {
+    // The Prisma fixture above passed while a session token and an API key were
+    // leaving the process: its one rule spans to the first stack frame and
+    // removed the whole block, so nothing else was ever tested. This is the
+    // same content behind a plain TypeError, where every rule stands alone.
+    const out = scrubStack(plainStack) ?? "";
+    for (const [label, secret] of Object.entries(SECRETS)) {
+      assert.ok(!out.includes(secret), `${label} survived a non-Prisma stack:\n${out}`);
+    }
+    assert.match(out, /contacts\.ts/, `the failing file was scrubbed away:\n${out}`);
+  });
+});

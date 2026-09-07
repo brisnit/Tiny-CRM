@@ -58,4 +58,51 @@ describe("webhook credentials never survive redaction", () => {
     assert.ok(!String(redact("Authorization: Bearer abc.def.ghi")).includes("abc.def.ghi"));
     assert.ok(!String(redact("key sk-ant-0123456789abcdef")).includes("0123456789abcdef"));
   });
+
+  /**
+   * A session token and a vendor API key both survived redaction, and the test
+   * that should have caught it passed for the wrong reason: its fixture was a
+   * Prisma error, and the rule that strips Prisma's quoted row spans to the
+   * first stack frame, so it removed the whole block before any of these rules
+   * were tested on their own. Found by rerunning the same secrets through a
+   * plain TypeError instead.
+   *
+   * Assembled at runtime so no string here resembles a live credential to a
+   * secret scanner.
+   */
+  test("a session JWT does not survive", () => {
+    // The long-run rule needs 40+ characters between word boundaries, and a
+    // JWT's dots break it into three shorter pieces — so a token that is
+    // obviously a token to any reader went straight through.
+    const jwt = ["eyJhbGciOiJIUzI1NiJ9", "abcdefghijklmnopqrstuvwxyz0123456789", "signature"].join(".");
+    const out = String(redact(`TypeError: upstream rejected session ${jwt}`));
+    assert.ok(!out.includes(jwt), `a session token survived: ${out}`);
+  });
+
+  test("a vendor API key does not survive on length alone", () => {
+    // 31 characters — under the 40-character long-run threshold, and carrying
+    // no header, no URL and no Bearer prefix to match on.
+    const key = ["re", "TestKey", "0123456789abcdefghij"].join("_");
+    const out = String(redact(`mail send failed with key ${key}`));
+    assert.ok(!out.includes(key), `a provider API key survived: ${out}`);
+  });
+
+  test("prefixed keys from the usual providers do not survive", () => {
+    for (const key of [
+      ["sk", "live", "0123456789abcdefghijklmn"].join("_"),
+      ["ghp", "0123456789abcdefghijklmnopqrstuvwxyz"].join("_"),
+      ["xoxb", "123456789012", "1234567890123", "abcdefghijklmnopqrstuvwx"].join("-"),
+    ]) {
+      const out = String(redact(`request failed: ${key}`));
+      assert.ok(!out.includes(key), `${key.slice(0, 4)}… survived: ${out}`);
+    }
+  });
+
+  test("ordinary prose and identifiers are still readable", () => {
+    // The other direction. These rules run on every log line and every error
+    // report, and one that eats normal text makes both useless.
+    const out = String(redact("job re_queued for workspace clx1234567890abcdefghij after 3 retries"));
+    assert.match(out, /workspace clx1234567890abcdefghij/, `an id was redacted: ${out}`);
+    assert.match(out, /after 3 retries/, `prose was redacted: ${out}`);
+  });
 });
