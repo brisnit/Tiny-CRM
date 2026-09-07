@@ -85,4 +85,28 @@ describe("the outbound Sentry request carries no secrets", () => {
     assert.ok(!body.includes("q="), `a query string was sent to Sentry:\n${body}`);
     assert.match(body, /\/api\/search/, `the route itself was lost:\n${body}`);
   });
+
+  test("the event carries an id we chose, so a report is traceable from our logs", async () => {
+    // Sentry accepts a client-supplied event_id and uses it as the event's own
+    // id. Generating it here rather than reading it back from the response
+    // means a log line can name the exact Sentry event without the adapter
+    // ever parsing a response body — which it deliberately does not do, since
+    // that body can echo the payload back.
+    //
+    // Without this an accepted report is unfindable: the dashboard has an
+    // event, the logs have a request, and nothing connects them.
+    const body = await capturedBody();
+    const eventId = JSON.parse(body).event_id;
+    assert.match(
+      String(eventId),
+      /^[0-9a-f]{32}$/,
+      `event_id is missing or not in Sentry's required form: ${eventId}`,
+    );
+  });
+
+  test("two reports do not share an event id", async () => {
+    const a = JSON.parse(await capturedBody()).event_id;
+    const b = JSON.parse(await capturedBody()).event_id;
+    assert.notEqual(a, b, "every report would collapse onto one event");
+  });
 });

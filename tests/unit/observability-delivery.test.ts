@@ -64,8 +64,10 @@ describe("observability delivery failures are never silent", () => {
     );
   });
 
-  test("a successful send logs nothing", async () => {
-    // Over-logging a working sink is its own problem: it trains people to
+  test("a successful send logs no failure", async () => {
+    // A success does log one correlation line naming the event id — that is
+    // what makes an accepted report findable from these logs. What it must not
+    // do is log a *failure*: crying wolf over a working sink trains people to
     // ignore the line that matters.
     const lines = await captureWith(new Response(JSON.stringify({ id: "abc" }), { status: 200 }));
     assert.equal(

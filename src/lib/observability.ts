@@ -269,6 +269,12 @@ class SentryAdapter implements ObservabilityAdapter {
     }
 
     const payload = buildPayload(error, context);
+    // Sentry accepts a client-supplied event id and uses it as the event's own.
+    // Choosing it here means a log line can name the exact event without the
+    // adapter parsing a response body, which it deliberately does not read.
+    // Without it an accepted report is unfindable: the dashboard has an event,
+    // the logs have a request, and nothing connects the two.
+    const eventId = globalThis.crypto.randomUUID().replace(/-/g, "");
     try {
       const response = await fetch(target.url, {
         method: "POST",
@@ -277,6 +283,7 @@ class SentryAdapter implements ObservabilityAdapter {
           "x-sentry-auth": `Sentry sentry_version=7, sentry_key=${target.key}`,
         },
         body: JSON.stringify({
+          event_id: eventId,
           timestamp: new Date().toISOString(),
           platform: "node",
           level: "error",
@@ -312,11 +319,22 @@ class SentryAdapter implements ObservabilityAdapter {
       if (!response.ok) {
         log.error("could not report an exception", {
           status: response.status,
+          eventId,
           operation: payload.operation,
         });
+        return;
       }
+
+      // The correlation record. `requestId` is already a tag on the event, so
+      // this line joins a request in these logs to an issue in the tracker in
+      // both directions.
+      log.info("exception reported", {
+        eventId,
+        requestId: payload.requestId,
+        operation: payload.operation,
+      });
     } catch (sendError) {
-      log.error("could not report an exception", { error: String(sendError) });
+      log.error("could not report an exception", { eventId, error: String(sendError) });
     }
   }
 
