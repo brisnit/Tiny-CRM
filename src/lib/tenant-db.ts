@@ -62,7 +62,7 @@ export type TenantContext = {
 export async function withTenantContext<T>(
   context: TenantContext,
   fn: (tx: Prisma.TransactionClient) => Promise<T>,
-  options: { timeout?: number; isolated?: boolean } = {},
+  options: { timeout?: number; maxWait?: number; isolated?: boolean } = {},
 ): Promise<T> {
   // Ids come from the caller's own memberships, never from a request. Rejecting
   // anything unexpected keeps the value that reaches `set_config` free of the
@@ -112,7 +112,17 @@ export async function withTenantContext<T>(
       // runs on this transaction, and therefore under this RLS context.
       return runWithTenantClient(tx, () => fn(tx));
     },
-    { timeout: options.timeout ?? 15_000 },
+    {
+      timeout: options.timeout ?? 15_000,
+      // How long to wait for a pooled connection before giving up. Prisma's
+      // default is 2 seconds, which was fine when most requests were single
+      // queries. Every request now runs inside a transaction so that RLS has a
+      // context to read, which means connection acquisition is on the critical
+      // path for all of them — and a 2s ceiling surfaced as
+      // "Unable to start a transaction in the given time" under ordinary
+      // concurrency, reported to the user as an unrelated failure.
+      maxWait: options.maxWait ?? 10_000,
+    },
   );
 }
 
