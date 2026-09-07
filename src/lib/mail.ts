@@ -54,6 +54,15 @@ export type MailResult = {
   adapter: "sink" | "log" | "http";
   /** Only ever populated by the development sink. */
   previewUrl?: string;
+  /**
+   * The provider's message id, when it returns one.
+   *
+   * An opaque identifier, never the content. Without it a delivery complaint
+   * cannot be traced to a specific send, and "the provider accepted it" cannot
+   * be distinguished from "the provider delivered it" — which is the difference
+   * between a working reset flow and one that only looks like it works.
+   */
+  providerMessageId?: string;
   error?: string;
 };
 
@@ -167,7 +176,22 @@ class HttpAdapter implements MailAdapter {
         return { delivered: false, adapter: "http", error: `Provider returned ${response.status}` };
       }
 
-      return { delivered: true, adapter: "http" };
+      // Only the id is read out of the response. The body echoes the request,
+      // which for these messages contains the reset link, so nothing else is
+      // touched and nothing else is logged.
+      let providerMessageId: string | undefined;
+      try {
+        const body = (await response.json()) as { id?: unknown };
+        if (typeof body?.id === "string") providerMessageId = body.id;
+      } catch {
+        // A provider that returns no JSON body is fine; the send still worked.
+      }
+
+      if (providerMessageId) {
+        log.info("mail accepted by provider", { subject: message.subject, providerMessageId });
+      }
+
+      return { delivered: true, adapter: "http", providerMessageId };
     } catch (error) {
       log.error("mail provider unreachable", {
         subject: message.subject,
