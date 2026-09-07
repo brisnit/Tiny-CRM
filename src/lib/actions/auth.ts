@@ -11,7 +11,7 @@ import { revokeAllSessions, truncateIp } from "@/lib/auth/sessions";
 import { issueToken, redeemToken, revokeTokens } from "@/lib/auth/tokens";
 import { env } from "@/lib/env";
 import { log } from "@/lib/logger";
-import { passwordChangedEmail, passwordResetEmail, sendMail } from "@/lib/mail";
+import { passwordChangedEmail, passwordResetEmail, sendMail, verificationEmail } from "@/lib/mail";
 import { raiseAlert } from "@/lib/security/alerts";
 import { clientAddress, checkRateLimit } from "@/lib/rate-limit";
 import { zEmail, zShortText } from "@/lib/validation/common";
@@ -45,6 +45,38 @@ const signUpSchema = z.object({
 });
 
 export type SignUpResult = { ok: true } | { ok: false; error: string; field?: string };
+
+
+/**
+ * Issues a verification token and mails the link.
+ *
+ * Deliberately never throws. A provider outage must not lose the account that
+ * was just created — the address simply stays unverified and the owner can ask
+ * for another link. Failing the sign-up instead would turn a transient mail
+ * problem into a registration the user has to repeat with no idea why.
+ *
+ * `issueToken` supersedes any earlier verification token for the account, so
+ * asking again invalidates the previous link rather than leaving two live.
+ */
+async function sendVerificationEmail(
+  userId: string,
+  email: string,
+  ip: string | null,
+): Promise<{ sent: boolean }> {
+  try {
+    const { token, expiresAt } = await issueToken(userId, "email_verification", { requestIp: ip });
+    const link = `${env.appUrl}/verify-email?token=${encodeURIComponent(token)}`;
+    const hours = Math.max(1, Math.round((expiresAt.getTime() - Date.now()) / 3_600_000));
+    const result = await sendMail({ to: email, ...verificationEmail(link, hours) });
+    if (!result.delivered) {
+      log.error("verification email could not be delivered", { adapter: result.adapter });
+    }
+    return { sent: result.delivered };
+  } catch (error) {
+    log.error("verification email failed", { error: error instanceof Error ? error.message : "unknown" });
+    return { sent: false };
+  }
+}
 
 export async function signUp(input: z.input<typeof signUpSchema>): Promise<SignUpResult> {
   const parsed = signUpSchema.safeParse(input);
@@ -92,6 +124,8 @@ export async function signUp(input: z.input<typeof signUpSchema>): Promise<SignU
     },
     select: { id: true },
   });
+
+  await sendVerificationEmail(user.id, email, ip);
 
   await recordAudit({
     actorId: user.id,
@@ -324,4 +358,48 @@ async function requestIp(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+const resendSchema = z.object({ email: zEmail });
+
+export type ResendResult = { ok: true };
+
+/**
+ * Sends another verification link.
+ *
+ * Answers identically whatever the address is, for the same reason
+ * `requestPasswordReset` does: a different response for a known account turns
+ * this into an account-existence oracle. Rate limited on both axes — a flood
+ * from one host, and a flood aimed at one inbox, the second being harassment
+ * whether or not it ever succeeds.
+ */
+export async function resendVerification(
+  input: z.input<typeof resendSchema>,
+): Promise<ResendResult> {
+  const parsed = resendSchema.safeParse(input);
+  if (!parsed.success) return { ok: true };
+
+  const { email } = parsed.data;
+  const ip = await requestIp();
+
+  const limit = await checkRateLimit("emailVerification", { ip: ip ?? "unknown", account: email });
+  if (!limit.ok) {
+    log.warn("verification resend throttled");
+    return { ok: true };
+  }
+
+  const user = await db.user.findUnique({
+    where: { email },
+    select: { id: true, email: true, emailVerifiedAt: true, deactivatedAt: true },
+  });
+
+  // Already verified, absent, or deactivated all take the same path out: there
+  // is nothing to send, and saying so would answer the question.
+  if (!user || user.deactivatedAt || user.emailVerifiedAt) {
+    await bcrypt.hash(email, 10);
+    return { ok: true };
+  }
+
+  await sendVerificationEmail(user.id, user.email, ip);
+  return { ok: true };
 }

@@ -8,7 +8,7 @@ import { AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/label";
-import { signUp } from "@/lib/actions/auth";
+import { requestPasswordReset, resendVerification, resetPassword, signUp } from "@/lib/actions/auth";
 import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
 
 function ErrorNote({ children }: { children: React.ReactNode }) {
@@ -67,6 +67,14 @@ export function LoginForm({ demo = null }: { demo?: DemoCredentials | null }) {
       <Field label="Password" htmlFor="password">
         <Input id="password" name="password" type="password" autoComplete="current-password" required />
       </Field>
+      <div className="-mt-1 text-right">
+        <a
+          href="/forgot-password"
+          className="text-[12px] font-medium text-brand-600 hover:underline dark:text-brand-400"
+        >
+          Forgot password?
+        </a>
+      </div>
       <Button type="submit" variant="brand" size="lg" className="w-full" loading={pending}>
         Sign in
       </Button>
@@ -171,5 +179,161 @@ function DemoHint({ credentials }: { credentials: DemoCredentials }) {
         {pending ? "Signing in…" : "Open the demo workspace"}
       </button>
     </div>
+  );
+}
+
+/**
+ * Requests a password reset.
+ *
+ * The server answers identically whether or not the address has an account, so
+ * this shows the same confirmation either way. Reflecting anything else — even
+ * a different phrasing, even a different delay — would turn the form into an
+ * account-existence oracle, which is the thing the server action is careful to
+ * avoid.
+ */
+export function ForgotPasswordForm() {
+  const [pending, setPending] = React.useState(false);
+  const [sent, setSent] = React.useState(false);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    const form = new FormData(event.currentTarget);
+    await requestPasswordReset({ email: String(form.get("email") ?? "") });
+    setPending(false);
+    setSent(true);
+  }
+
+  if (sent) {
+    return (
+      <div className="space-y-3 text-[13px] text-muted">
+        <p className="text-body">
+          If that address has an account, a reset link is on its way. It expires
+          shortly, and using it signs out every other device.
+        </p>
+        <p>
+          Nothing arrived? Check spam, then{" "}
+          <button type="button" className="font-medium text-brand-600 hover:underline dark:text-brand-400" onClick={() => setSent(false)}>
+            try again
+          </button>
+          .
+        </p>
+        <p className="pt-1">
+          <a href="/login" className="font-medium text-brand-600 hover:underline dark:text-brand-400">
+            Back to sign in
+          </a>
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-3.5">
+      <Field label="Email" htmlFor="email">
+        <Input id="email" name="email" type="email" autoComplete="email" required placeholder="you@company.com" />
+      </Field>
+      <Button type="submit" variant="brand" size="lg" className="w-full" loading={pending}>
+        Send reset link
+      </Button>
+      <p className="text-center text-[13px] text-muted">
+        <a href="/login" className="font-medium text-brand-600 hover:underline dark:text-brand-400">
+          Back to sign in
+        </a>
+      </p>
+    </form>
+  );
+}
+
+/** Completes a password reset with the token from the emailed link. */
+export function ResetPasswordForm({ token }: { token: string }) {
+  const router = useRouter();
+  const [pending, setPending] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [done, setDone] = React.useState(false);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    setError(null);
+
+    const form = new FormData(event.currentTarget);
+    const password = String(form.get("password") ?? "");
+    const confirm = String(form.get("confirm") ?? "");
+    if (password !== confirm) {
+      setError("Those passwords do not match.");
+      setPending(false);
+      return;
+    }
+
+    const result = await resetPassword({ token, password });
+    if (!result.ok) {
+      setError(result.error);
+      setPending(false);
+      return;
+    }
+    setDone(true);
+    setPending(false);
+  }
+
+  if (done) {
+    return (
+      <div className="space-y-3 text-[13px]">
+        <p className="text-body">
+          Your password is changed, and every other session has been signed out.
+        </p>
+        <Button variant="brand" size="lg" className="w-full" onClick={() => router.push("/login")}>
+          Sign in
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-3.5">
+      <ErrorNote>{error}</ErrorNote>
+      <Field label="New password" htmlFor="password" hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}>
+        <Input id="password" name="password" type="password" autoComplete="new-password" required minLength={PASSWORD_MIN_LENGTH} />
+      </Field>
+      <Field label="Confirm new password" htmlFor="confirm">
+        <Input id="confirm" name="confirm" type="password" autoComplete="new-password" required minLength={PASSWORD_MIN_LENGTH} />
+      </Field>
+      <Button type="submit" variant="brand" size="lg" className="w-full" loading={pending}>
+        Set new password
+      </Button>
+    </form>
+  );
+}
+
+/** Asks for another verification link. Same anti-enumeration rule as above. */
+export function ResendVerificationForm() {
+  const [pending, setPending] = React.useState(false);
+  const [sent, setSent] = React.useState(false);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    const form = new FormData(event.currentTarget);
+    await resendVerification({ email: String(form.get("email") ?? "") });
+    setPending(false);
+    setSent(true);
+  }
+
+  if (sent) {
+    return (
+      <p className="text-[13px] text-body">
+        If that address needs verifying, a new link is on its way.
+      </p>
+    );
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-3.5">
+      <Field label="Email" htmlFor="resend-email">
+        <Input id="resend-email" name="email" type="email" autoComplete="email" required placeholder="you@company.com" />
+      </Field>
+      <Button type="submit" variant="outline" size="lg" className="w-full" loading={pending}>
+        Send a new link
+      </Button>
+    </form>
   );
 }
