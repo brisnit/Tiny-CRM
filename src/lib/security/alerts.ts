@@ -301,7 +301,10 @@ async function deliver(
   } catch (error) {
     await deliveryScoped(scope, () => db.securityAlert.update({
       where: { id: alertId },
-      data: { deliveryError: String(error).slice(0, 300) },
+      // Through redact(), because this column is written directly to the
+      // database and never passes through the logger. A fetch failure can carry
+      // the URL it was fetching, and that URL is the webhook credential.
+      data: { deliveryError: String(redact(String(error))).slice(0, 300) },
     }));
   }
 }

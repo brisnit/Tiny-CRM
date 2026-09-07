@@ -67,9 +67,24 @@ export function redact(value: unknown, depth = 0): unknown {
   if (typeof value === "string") {
     if (value.length > 2000) return `${value.slice(0, 2000)}…[truncated]`;
     // Bearer tokens and provider keys occasionally appear inside message strings.
+    //
+    // Webhook URLs need their own rule because the secret *is* the URL: there is
+    // no header to strip. A delivery failure logs the error, and a fetch error
+    // can carry the URL it was fetching — so without this the alert webhook
+    // could reach the logs and the SecurityAlert.deliveryError column through
+    // the one path whose job is to report that alerting is broken.
+    //
+    // Matched on the known webhook hosts rather than "any long URL path", so an
+    // ordinary application URL stays readable. Over-redaction is its own
+    // failure: logs nobody can read are logs that get switched off.
     return value
       .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, REDACTED)
-      .replace(/\bBearer\s+[A-Za-z0-9._-]+/gi, `Bearer ${REDACTED}`);
+      .replace(/\bBearer\s+[A-Za-z0-9._-]+/gi, `Bearer ${REDACTED}`)
+      .replace(/https:\/\/hooks\.slack\.com\/services\/[^\s"'<>]+/gi, `https://hooks.slack.com/services/${REDACTED}`)
+      .replace(/https:\/\/(?:\w+\.)?discord(?:app)?\.com\/api\/webhooks\/[^\s"'<>]+/gi, `https://discord.com/api/webhooks/${REDACTED}`)
+      .replace(/https:\/\/[^\s"'<>]*\.webhook\.office\.com\/[^\s"'<>]+/gi, `https://outlook.office.com/webhook/${REDACTED}`)
+      // Credentials carried as URL userinfo, in any scheme.
+      .replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s:@/"']+):([^\s@/"']+)@/gi, `$1$2:${REDACTED}@`);
   }
   if (typeof value !== "object") return value;
   if (Array.isArray(value)) return value.slice(0, 50).map((v) => redact(v, depth + 1));
