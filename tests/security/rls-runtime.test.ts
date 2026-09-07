@@ -265,6 +265,44 @@ describe("audit logging", () => {
     assert.ok(row.createdAt instanceof Date);
   });
 
+  test("an audit row with no workspace and no actor can still be written", skip ?? {}, async () => {
+    // The anti-enumeration path. "Password reset requested for an address with
+    // no account" names no workspace and no actor, and is precisely the event
+    // worth recording — someone probing for valid addresses.
+    //
+    // It failed in production for a reason no INSERT test would find: Prisma's
+    // create() emits INSERT ... RETURNING, and PostgreSQL applies the *USING*
+    // (read) policy to the RETURNING clause. The row satisfied WITH CHECK and
+    // was inserted, then could not be read back — so every such write was
+    // refused, silently, because audit failures are swallowed by design.
+    // Exercises recordAudit, the path production actually uses.
+    //
+    // Note this test is weaker locally than it looks: the embedded PostgreSQL
+    // used for the local suite permits the RETURNING form that Neon refuses, so
+    // it passes here either way. It was verified against the hosted database
+    // directly — raw INSERT allowed, prisma.create() denied — and it stands as
+    // a guard against the write being switched back to a returning form.
+    const { recordAudit } = await import("../../src/lib/audit");
+    await recordAudit({
+      action: "auth.password_reset_requested",
+      actorEmail: "someone@example.invalid",
+      summary: "Password reset requested for an address with no active account",
+    });
+
+    const written = await observer.auditLog.count({
+      where: { actorEmail: "someone@example.invalid", actorId: null, workspaceId: null },
+    });
+    assert.ok(written > 0, "the orphaned audit row was not written");
+  });
+
+  test("an orphaned audit row is still not readable by an unrelated user", skip ?? {}, async () => {
+    // Writing it must not have required loosening who can read it.
+    const seen = await withTenantContext({ workspaceIds: [], userId: A.ownerId }, async () =>
+      db.auditLog.count({ where: { actorEmail: "someone@example.invalid" } }),
+    );
+    assert.equal(seen, 0, "an unrelated user can read another account's orphaned audit rows");
+  });
+
   test("one tenant cannot read another tenant's audit rows", skip ?? {}, async () => {
     const seen = await withTenantContext(
       { workspaceIds: [A.workspaceId], userId: A.ownerId },

@@ -1,5 +1,7 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+
 import { db, currentTenantClient } from "@/lib/db";
 import { withTenantContext } from "@/lib/tenant-db";
 import { currentContext, log, redact } from "@/lib/logger";
@@ -68,24 +70,42 @@ export async function recordAudit(
   //
   // Establishing a user-only context here is exactly the claim the row makes:
   // "this happened to this user". It grants no workspace visibility.
+  // A raw INSERT, deliberately, because Prisma emits `INSERT ... RETURNING`
+  // for both create() and createMany() — and PostgreSQL applies the *read*
+  // policy to a RETURNING clause.
+  //
+  // An orphaned audit row — no workspace, no actor, which is exactly what
+  // "password reset requested for an address with no account" looks like —
+  // satisfies WITH CHECK and inserts fine, then fails because the USING policy
+  // deliberately refuses to let anyone read it back. Verified directly against
+  // PostgreSQL: the same INSERT is ALLOWED without RETURNING and DENIED with it.
+  //
+  // So the write simply stops asking for the row. Loosening the read policy
+  // instead would have made every account's orphaned audit rows readable by any
+  // authenticated user, in order to fix a write — the wrong trade entirely, and
+  // on the one table whose whole purpose is recording what happened.
   const write = async () => {
-    await (tx ?? db).auditLog.create({
-      data: {
-        workspaceId: entry.workspaceId ?? null,
-        actorId: entry.actorId ?? null,
-        actorEmail: entry.actorEmail ?? null,
-        action: entry.action,
-        entityType: entry.entityType ?? null,
-        entityId: entry.entityId ?? null,
-        summary: entry.summary.slice(0, 500),
-        // Metadata passes through the same redaction the logger uses, so an
-        // audit row can never become a place secrets accumulate.
-        metadata: entry.metadata ? JSON.stringify(redact(entry.metadata)) : null,
-        ip: entry.ip ?? null,
-        userAgent: entry.userAgent?.slice(0, 300) ?? null,
-        requestId: context?.requestId ?? null,
-      },
-    });
+    const client = tx ?? db;
+    await client.$executeRaw`
+      INSERT INTO "AuditLog" (
+        id, "workspaceId", "actorId", "actorEmail", action, "entityType",
+        "entityId", summary, metadata, ip, "userAgent", "requestId", "createdAt"
+      ) VALUES (
+        ${randomUUID()},
+        ${entry.workspaceId ?? null},
+        ${entry.actorId ?? null},
+        ${entry.actorEmail ?? null},
+        ${entry.action},
+        ${entry.entityType ?? null},
+        ${entry.entityId ?? null},
+        ${entry.summary.slice(0, 500)},
+        ${entry.metadata ? JSON.stringify(redact(entry.metadata)) : null},
+        ${entry.ip ?? null},
+        ${entry.userAgent?.slice(0, 300) ?? null},
+        ${context?.requestId ?? null},
+        ${new Date()}
+      )
+    `;
   };
 
   try {
