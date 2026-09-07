@@ -60,6 +60,7 @@ export async function register() {
 export async function onRequestError(
   error: unknown,
   request: { path?: string; method?: string },
+  context?: { routePath?: string; routeType?: string },
 ) {
   const { log } = await import("@/lib/logger");
   log.error("unhandled request error", {
@@ -71,6 +72,16 @@ export async function onRequestError(
 
   // And to the configured error tracker, with a payload built from an explicit
   // allowlist — see src/lib/observability.ts for why that matters here.
+  //
+  // `context.routePath` is the route *file* path (`/contacts/[id]`), not the
+  // requested URL: no record ids, no query string, and it groups every instance
+  // of one fault into a single issue instead of one per record. `request.path`
+  // is the fallback, and the sink strips its query string — Next documents that
+  // path as including one, which for /api/search means the user's search term.
   const { captureError } = await import("@/lib/observability");
-  await captureError(error, { route: request.path, operation: request.method });
+  await captureError(error, {
+    route: context?.routePath ?? request.path,
+    operation: request.method,
+    tags: context?.routeType ? { routeType: context.routeType } : undefined,
+  });
 }

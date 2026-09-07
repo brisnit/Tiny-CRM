@@ -66,19 +66,39 @@ export type Span = {
  */
 const QUOTED_DATA = [
   // Prisma echoes the offending row: `Unique constraint failed on the fields: (`email`)`
-  /Invalid `[^`]*` invocation[\s\S]*/,
+  //
+  // Bounded at the first stack frame. Unbounded (`[\s\S]*`) it consumed the
+  // whole string — which was invisible while this only ran on the message, and
+  // erased every frame the moment the same rule was applied to the stack. An
+  // error report with no frames is not a safer report, it is a useless one.
+  /Invalid `[^`]*` invocation[\s\S]*?(?=\n\s+at |$)/,
   // Anything that looks like an email address.
   /[\w.+-]+@[\w-]+\.[\w.-]+/g,
   // Long base64/hex runs: tokens, hashes, ids of things we did not choose.
   /\b[A-Za-z0-9+/_-]{40,}={0,2}\b/g,
 ];
 
-export function scrubMessage(message: string): string {
-  let scrubbed = message.slice(0, 1_000);
+/**
+ * Removes everything sensitive from a block of text.
+ *
+ * Shared by the message and the stack, because they are the same text: a Node
+ * stack *begins with the error message*. Scrubbing only the message left the
+ * full original in `logentry.formatted` one field further down the payload —
+ * database password, webhook URL, API key, session token and CRM note text all
+ * included. Found by intercepting the outbound request and reading the bytes.
+ */
+function stripSensitive(text: string): string {
+  let out = text;
   for (const pattern of QUOTED_DATA) {
-    scrubbed = scrubbed.replace(pattern, "[redacted]");
+    out = out.replace(pattern, "[redacted]");
   }
-  return scrubbed;
+  // The logger's rules as well: credentials carried in a URL rather than in a
+  // recognisable key/value pair.
+  return String(redact(out));
+}
+
+export function scrubMessage(message: string): string {
+  return stripSensitive(message.slice(0, 1_000));
 }
 
 /**
@@ -90,12 +110,32 @@ export function scrubMessage(message: string): string {
  */
 export function scrubStack(stack: string | undefined): string | undefined {
   if (!stack) return undefined;
-  return stack
+  const paths = stack
     .split("\n")
     .slice(0, 30)
     .map((line) => line.replace(/\(?\/[^\s)]*?\/(src|scripts|prisma|\.next)\//g, "($1/"))
     .map((line) => line.replace(/file:\/\/\/[^\s)]*/g, "[path]"))
     .join("\n");
+  // The frames are now safe; the first line is still the raw message.
+  return stripSensitive(paths);
+}
+
+/**
+ * Keeps the path, discards the query string.
+ *
+ * Next hands `onRequestError` a path with the query attached — its own docs
+ * give `/blog?name=foo` as the example — and that value became Sentry's
+ * transaction name. For this application that meant `/api/search?q=...`, so a
+ * user's search term, which is the name of a contact or company they were
+ * looking for, left the deployment every time that route threw. `?q=%` already
+ * does throw.
+ *
+ * The path itself is kept: it is what makes the report navigable, and its
+ * dynamic segments are ids, which the allowlist already permits.
+ */
+export function scrubRoute(route: string | undefined): string | undefined {
+  if (!route) return undefined;
+  return route.split(/[?#]/)[0]!.slice(0, 200);
 }
 
 type Payload = {
@@ -112,6 +152,45 @@ type Payload = {
   tags?: Record<string, unknown>;
 };
 
+/**
+ * The shape of an identifier: a cuid, a uuid, a request id, an enum, a dotted
+ * operation name, an HTTP status. Deliberately excludes whitespace and `@`.
+ */
+const IDENTIFIER = /^[A-Za-z0-9_.:\/-]{1,64}$/;
+
+/**
+ * Tags are identifiers, not content — enforced by shape rather than trusted.
+ *
+ * Scrubbing cannot work here. `redact` matches key names, so a tag called
+ * `note` is invisible to it, and no pattern recognises ordinary English: the
+ * note "client is unhappy about pricing" contains no token, no URL and no
+ * address, so every content rule passed it through untouched and it was sent
+ * to Sentry in full.
+ *
+ * Deciding whether a string is customer data is not something a regular
+ * expression can do. What *is* decidable is whether it looks like an
+ * identifier, which is all a tag is ever allowed to be. Prose contains spaces;
+ * cuids, uuids, enums, request ids and operation names do not. So anything
+ * that is not identifier-shaped is dropped and replaced by its length, which
+ * still says "a value was here, and how big" without disclosing it.
+ *
+ * A caller who loses a legitimate tag gets a slightly less specific report. The
+ * inverse mistake sends a customer's private note to a third party.
+ */
+function scrubTags(tags: Record<string, unknown>): Record<string, unknown> {
+  const safe = redact(tags) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(safe)) {
+    if (typeof value !== "string") {
+      out[key] = value;
+      continue;
+    }
+    const scrubbed = stripSensitive(value);
+    out[key] = IDENTIFIER.test(scrubbed) ? scrubbed : `[dropped: ${value.length} chars]`;
+  }
+  return out;
+}
+
 /** Builds the payload. This allowlist is the control; everything else is transport. */
 function buildPayload(error: unknown, context: ErrorContext): Payload {
   const request = currentContext();
@@ -122,14 +201,19 @@ function buildPayload(error: unknown, context: ErrorContext): Payload {
     message: scrubMessage(raw.message),
     stack: scrubStack(raw.stack),
     requestId: request?.requestId,
-    route: context.route,
+    route: scrubRoute(context.route),
     operation: context.operation,
     // Ids only. A user id is meaningless outside the database; an email is not.
     userId: context.userId ?? request?.userId ?? undefined,
     workspaceId: context.workspaceId ?? request?.workspaceId ?? undefined,
     release: env.release,
     environment: env.nodeEnv,
-    tags: context.tags ? (redact(context.tags) as Record<string, unknown>) : undefined,
+    // Key-based redaction *and* content scrubbing, with a hard length cap.
+    // `redact` catches `password`/`authorization`/`cookie` by name; it cannot
+    // know that a key called `note` holds a customer's note. Tags are meant to
+    // be identifiers and enums — the cap makes a value that is actually prose
+    // useless to leak rather than merely unlikely to.
+    tags: context.tags ? scrubTags(context.tags) : undefined,
   };
 }
 
@@ -186,7 +270,7 @@ class SentryAdapter implements ObservabilityAdapter {
 
     const payload = buildPayload(error, context);
     try {
-      await fetch(target.url, {
+      const response = await fetch(target.url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -217,6 +301,20 @@ class SentryAdapter implements ObservabilityAdapter {
         }),
         signal: AbortSignal.timeout(3_000),
       });
+
+      // fetch does not throw on 4xx or 5xx, so without this a rejected event —
+      // rate limited, payload too large, bad key, endpoint retired — returned
+      // normally and the adapter carried on as though the error had been
+      // reported. An empty dashboard would then mean "nothing broke" and
+      // "reporting is broken" indistinguishably, which is the worst way for
+      // observability to fail. The response body is deliberately not read: it
+      // echoes nothing useful and could carry the payload back.
+      if (!response.ok) {
+        log.error("could not report an exception", {
+          status: response.status,
+          operation: payload.operation,
+        });
+      }
     } catch (sendError) {
       log.error("could not report an exception", { error: String(sendError) });
     }

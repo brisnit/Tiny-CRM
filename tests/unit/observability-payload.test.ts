@@ -1,0 +1,88 @@
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+
+import { SECRETS, realisticStack } from "../helpers/leak-fixtures";
+
+/**
+ * The scrubbing tests check the functions. This one checks the bytes.
+ *
+ * The leak was not in a scrubbing function — both did what they said. It was in
+ * the *assembly*: `exception.values[0].value` received the scrubbed message and
+ * `logentry.formatted` received the stack, which begins with the unscrubbed
+ * one. Every test that examined a function in isolation passed while a database
+ * password, a webhook URL, an API key, a session token and the text of a CRM
+ * note were leaving the process.
+ *
+ * So this drives the real adapter through a stubbed transport and asserts on
+ * the serialized request body — the only representation that cannot disagree
+ * with what Sentry receives. A field added to the payload later is covered
+ * automatically; a per-function test would not have been.
+ *
+ * It lives in its own file because the adapter is chosen once, at module load,
+ * from `SENTRY_DSN`. Any static import of `observability` — even for an
+ * unrelated helper — pins it to the log adapter before the test can set a DSN,
+ * and the assertions then silently examine a request that was never made.
+ */
+describe("the outbound Sentry request carries no secrets", () => {
+  const originalFetch = globalThis.fetch;
+
+  async function capturedBody(context?: { route?: string; operation?: string }): Promise<string> {
+    let body = "";
+    globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+      body = String(init.body);
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    process.env.SENTRY_DSN = "https://0123456789abcdef0123456789abcdef@o1.ingest.sentry.io/2";
+    const { captureError } = await import("../../src/lib/observability");
+
+    const error = new Error(realisticStack.split("\n")[0]!);
+    error.stack = realisticStack;
+    try {
+      await captureError(error, {
+        operation: "contact.list",
+        ...context,
+        // `note` is content, not an identifier. `redact` matches key names and
+        // cannot know that — the content scrub and length cap are what stop it.
+        tags: { note: SECRETS.note, email: SECRETS.email } as never,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    return body;
+  }
+
+  test("no secret of any category appears anywhere in the request body", async () => {
+    const body = await capturedBody();
+    assert.ok(body.length > 0, "the adapter sent no request at all");
+    for (const [label, secret] of Object.entries(SECRETS)) {
+      assert.ok(!body.includes(secret), `${label} was sent to Sentry:\n${body}`);
+    }
+  });
+
+  test("the request is still worth sending", async () => {
+    // The other direction: a payload scrubbed into uselessness satisfies every
+    // leak assertion above. An unactionable report is its own failure.
+    const body = await capturedBody();
+    assert.match(body, /contacts\.ts/, `the failing file never reached Sentry:\n${body}`);
+    assert.match(body, /contact\.list/, `the operation never reached Sentry:\n${body}`);
+  });
+
+  test("a query string never reaches the provider", async () => {
+    // Next hands `onRequestError` a path *with the query string attached* —
+    // documented as "resource path, e.g. /blog?name=foo". This application
+    // serves /api/search?q=..., and that route is known to be able to throw, so
+    // the transaction name was carrying the user's search term: the names of
+    // the contacts and companies they were looking for.
+    //
+    // Enforced at the sink rather than at the call site, so no future caller
+    // can reintroduce it by passing a raw path.
+    const body = await capturedBody({
+      route: "/api/search?q=Acme%20Corporation&owner=britt%40tinycrm.biz",
+      operation: "GET",
+    });
+    assert.ok(!body.includes("Acme"), `a search term was sent to Sentry:\n${body}`);
+    assert.ok(!body.includes("q="), `a query string was sent to Sentry:\n${body}`);
+    assert.match(body, /\/api\/search/, `the route itself was lost:\n${body}`);
+  });
+});
