@@ -147,9 +147,21 @@ export async function provisionWorkspace(
   // nothing else, and the caller's other workspaces stay out of reach for the
   // duration — a narrower context than the caller is entitled to, not a wider
   // one.
+  // `isolated`, and this is the subtle part.
+  //
+  // Onboarding runs inside the action wrapper, which establishes context from
+  // the actor's memberships — and a user creating their first workspace has
+  // none, so that ambient context is empty. Reusing it would leave the new
+  // workspace id out of scope and the INSERT is refused by the very policy that
+  // is supposed to permit it. The bootstrap needs a context the surrounding
+  // request cannot supply, so it opens its own transaction containing exactly
+  // the workspace being created.
+  //
+  // This failed only on the deployed application: called directly, as a test
+  // does, there is no ambient context to reuse and the bug is invisible.
   return withTenantContext(
     { workspaceIds: [workspaceId], userId },
     (client) => (tx ? run(tx) : run(client)),
-    { timeout: 15_000 },
+    { timeout: 15_000, isolated: true },
   );
 }

@@ -197,6 +197,32 @@ describe("fresh account onboarding", () => {
     assert.ok(dashboardReads, "the dashboard could not read the new workspace");
   });
 
+  test("onboarding works through the action wrapper, not just the helper", skip ?? {}, async () => {
+    // The hosted regression. Calling provisionWorkspace directly leaves no
+    // ambient context, so it opens its own and everything works. The real path
+    // runs inside the action wrapper, whose context for a user with no
+    // memberships is *empty* — and reusing that empty context put the new
+    // workspace outside its own bootstrap policy. Only the deployed app hit it.
+    const userId = `c${randomUUID().replace(/-/g, "")}`;
+    await observer.user.create({
+      data: { id: userId, email: `viaaction-${userId}@test.local`, name: "Via Action" },
+    });
+
+    const { createWorkspace } = await import("../../src/lib/actions/settings");
+    const result = await runAsTestIdentity(userId, () =>
+      createWorkspace({ name: "Through The Action" } as never),
+    );
+    assert.equal(result.ok, true, `onboarding through the action failed: ${JSON.stringify(result)}`);
+
+    const created = await observer.workspace.findFirst({ where: { ownerId: userId } });
+    assert.ok(created, "no workspace row was written");
+    assert.equal(
+      await observer.workspaceMember.count({ where: { workspaceId: created!.id, userId } }),
+      1,
+      "the owner's membership was not created",
+    );
+  });
+
   test("the database refuses a workspace owned by someone else", skip ?? {}, async () => {
     const id = `c${randomUUID().replace(/-/g, "")}`;
     await assert.rejects(
