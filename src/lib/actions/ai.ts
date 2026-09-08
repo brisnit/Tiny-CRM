@@ -51,7 +51,11 @@ export async function refreshDailyBrief(scopeParam?: string | null) {
     action(
       async () => {
         const { actor, scope } = await scopeFor(scopeParam);
-        const brief = await getDailyBrief(actor, scope, { force: true });
+        // Explicitly asked for, with someone waiting on the answer: a plan
+        // limit belongs in front of them as an error with an upgrade prompt,
+        // not quietly rendered as prose inside the card. Page rendering takes
+        // the opposite path and degrades — see src/lib/ai/summaries.ts.
+        const brief = await getDailyBrief(actor, scope, { force: true, surfaceErrors: true });
         revalidatePathSafely("/home");
         return brief;
       },
@@ -89,6 +93,7 @@ export async function refreshRecordSummary(
         const summary = await getRecordSummary(actor, scope, kind, recordId, {
           force: true,
           workspaceId,
+          surfaceErrors: true,
         });
         revalidatePathSafely(`/${kind}s/${recordId}`);
         return summary;
