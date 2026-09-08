@@ -131,3 +131,48 @@ function hrefFor(entityType: string | null, entityId: string | null): string | n
   const base = map[entityType];
   return base ? `${base}/${entityId}` : null;
 }
+
+/**
+ * The context an edit dialog needs: the workspaces the person can write to, the
+ * deal pipelines and the project statuses.
+ *
+ * The same shape the shell already builds for quick-add, fetched on its own so
+ * a record page can render an edit form without pulling the whole shell
+ * payload. Editing reuses the create fields, so it needs the create context.
+ */
+export async function getEditContext(
+  actor: Actor,
+  workspaceIds: string[],
+): Promise<{
+  workspaces: { id: string; name: string }[];
+  defaultWorkspaceId: string | null;
+  pipelines: { id: string; name: string; workspaceId: string; stages: { id: string; name: string }[] }[];
+  statuses: { id: string; name: string; workspaceId: string }[];
+}> {
+  return withTenantContext({ workspaceIds }, async () => {
+    const where = { workspaceId: { in: workspaceIds } };
+    const [pipelines, statuses] = await Promise.all([
+      db.pipeline.findMany({
+        where: { ...where, kind: "deal" },
+        select: {
+          id: true, name: true, workspaceId: true,
+          stages: { select: { id: true, name: true }, orderBy: { order: "asc" } },
+        },
+        orderBy: { order: "asc" },
+      }),
+      db.projectStatus.findMany({
+        where,
+        select: { id: true, name: true, workspaceId: true },
+        orderBy: { order: "asc" },
+      }),
+    ]);
+    return {
+      workspaces: actor.memberships
+        .filter((m) => workspaceIds.includes(m.id))
+        .map((m) => ({ id: m.id, name: m.name })),
+      defaultWorkspaceId: workspaceIds[0] ?? null,
+      pipelines,
+      statuses,
+    };
+  });
+}

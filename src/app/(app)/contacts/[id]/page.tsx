@@ -16,10 +16,11 @@ import { ScoreExplainer } from "@/components/app/score-explainer";
 import { AskAiButton } from "@/components/app/ask-ai-button";
 import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
-import { RecordActions } from "@/components/app/record-actions";
+import { RecordHeaderActions } from "@/components/app/record-edit";
 import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getContact } from "@/lib/data/contacts";
+import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatCompact } from "@/lib/money";
@@ -49,6 +50,8 @@ export default async function ContactPage({ params }: PageProps<"/contacts/[id]"
     id,
     { workspaceId: contact.workspaceId },
   );
+
+  const editContext = await getEditContext(actor, [contact.workspaceId]);
 
   const openDeals = contact.deals.filter((d) => d.deal.stage.kind === "open");
   const since = daysSince(contact.lastContactedAt);
@@ -99,10 +102,20 @@ export default async function ContactPage({ params }: PageProps<"/contacts/[id]"
         actions={
           <>
             <AskAiButton focus={{ type: "contact", id: contact.id, label: contact.fullName }} />
-            <RecordActions
-              entityType="contact"
+            <RecordHeaderActions
+              kind="contact"
               id={contact.id}
               name={contact.fullName}
+              version={contact.version}
+              context={editContext}
+              initial={{
+                firstName: contact.firstName,
+                lastName: contact.lastName,
+                email: contact.email,
+                jobTitle: contact.jobTitle,
+                companyId: contact.companyId,
+                relationshipType: contact.relationshipType,
+              }}
             />
           </>
         }

@@ -17,10 +17,11 @@ import { AiSummaryCard } from "@/components/app/ai-summary-card";
 import { AskAiButton } from "@/components/app/ask-ai-button";
 import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
-import { RecordActions } from "@/components/app/record-actions";
+import { RecordHeaderActions } from "@/components/app/record-edit";
 import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getCompany } from "@/lib/data/companies";
+import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatCompact, formatMoney } from "@/lib/money";
@@ -52,6 +53,8 @@ export default async function CompanyPage({ params }: PageProps<"/companies/[id]
     id,
     { workspaceId: company.workspaceId },
   );
+
+  const editContext = await getEditContext(actor, [company.workspaceId]);
 
   return (
     <PageShell wide>
@@ -86,10 +89,17 @@ export default async function CompanyPage({ params }: PageProps<"/companies/[id]
         actions={
           <>
             <AskAiButton focus={{ type: "company", id: company.id, label: company.name }} />
-            <RecordActions
-              entityType="company"
+            <RecordHeaderActions
+              kind="company"
               id={company.id}
               name={company.name}
+              version={company.version}
+              context={editContext}
+              initial={{
+                name: company.name,
+                website: company.website,
+                industry: company.industry,
+              }}
             />
           </>
         }

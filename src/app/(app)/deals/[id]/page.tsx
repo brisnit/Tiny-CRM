@@ -17,11 +17,12 @@ import { ScoreExplainer } from "@/components/app/score-explainer";
 import { AskAiButton } from "@/components/app/ask-ai-button";
 import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
-import { RecordActions } from "@/components/app/record-actions";
+import { RecordHeaderActions } from "@/components/app/record-edit";
 import { StageSelector } from "@/components/app/stage-selector";
 import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getDeal } from "@/lib/data/deals";
+import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatMoney } from "@/lib/money";
@@ -52,6 +53,8 @@ export default async function DealPage({ params }: PageProps<"/deals/[id]">) {
     { workspaceId: deal.workspaceId },
   );
 
+  const editContext = await getEditContext(actor, [deal.workspaceId]);
+
   const daysInStage = daysSince(deal.stageEnteredAt) ?? 0;
 
   return (
@@ -79,7 +82,22 @@ export default async function DealPage({ params }: PageProps<"/deals/[id]">) {
         actions={
           <>
             <AskAiButton focus={{ type: "deal", id: deal.id, label: deal.name }} />
-            <RecordActions entityType="deal" id={deal.id} name={deal.name} />
+            <RecordHeaderActions
+              kind="deal"
+              id={deal.id}
+              name={deal.name}
+              version={deal.version}
+              context={editContext}
+              initial={{
+                name: deal.name,
+                valueCents: deal.valueCents != null ? String(deal.valueCents / 100) : "",
+                expectedCloseAt: deal.expectedCloseAt ? deal.expectedCloseAt.toISOString().slice(0, 10) : "",
+                stageId: deal.stageId,
+                companyId: deal.companyId,
+                primaryContactId: deal.primaryContactId,
+                projectId: deal.projectId,
+              }}
+            />
           </>
         }
       />

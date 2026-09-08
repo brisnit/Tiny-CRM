@@ -8,6 +8,7 @@ import {
   recordAction, revalidateRecord, transaction, workspaceAction, type ActionResult,
 } from "@/lib/actions/base";
 import { assertRelations } from "@/lib/auth/access";
+import { noSuchRecord } from "@/lib/errors";
 import { assertWithinLimit } from "@/lib/entitlements";
 import { assertConfirmation } from "@/lib/destructive";
 import { diffFields } from "@/lib/audit";
@@ -374,6 +375,62 @@ export async function setProjectNextAction(
 
         revalidateRecord([`/projects/${recordId}`, "/projects", "/home"]);
         return { id: recordId };
+      },
+    ),
+  );
+}
+
+/**
+ * Attaches a person to a project, or detaches them.
+ *
+ * `ProjectContact` existed in the schema from the start and nothing ever wrote
+ * to it. The consequence was the most visible gap in the product: a project
+ * page shows a People panel that says "Add the client contacts and
+ * collaborators on this project", and there was no way to add one. Project
+ * Intelligence is meant to answer "who is involved", and it could only ever
+ * answer "nobody".
+ *
+ * The contact is looked up inside the project's own workspace, so a contact id
+ * from another tenant resolves to nothing and is refused as a missing record —
+ * the same shape every other cross-tenant reference gets, and not a distinct
+ * error that would confirm the id exists somewhere.
+ */
+export async function setProjectContact(
+  projectId: string,
+  contactId: string,
+  attached: boolean,
+): Promise<ActionResult<{ contactId: string; attached: boolean }>> {
+  return guard(() =>
+    recordAction("project", projectId, { permission: "record:edit", rateLimit: "mutation" },
+      async ({ actor, workspaceId, recordId }) => {
+        const id = zId.parse(contactId);
+
+        const contact = await db.contact.findFirst({
+          where: { id, workspaceId },
+          select: { id: true, fullName: true },
+        });
+        if (!contact) throw noSuchRecord();
+
+        if (attached) {
+          await db.projectContact.upsert({
+            where: { projectId_contactId: { projectId: recordId, contactId: contact.id } },
+            update: {},
+            create: { projectId: recordId, contactId: contact.id },
+          });
+        } else {
+          await db.projectContact.deleteMany({ where: { projectId: recordId, contactId: contact.id } });
+        }
+
+        await audit(actor, {
+          workspaceId,
+          action: "record.updated",
+          entityType: "project",
+          entityId: recordId,
+          summary: `${attached ? "Added" : "Removed"} ${contact.fullName} ${attached ? "to" : "from"} the project`,
+        });
+
+        revalidateRecord([`/projects/${recordId}`]);
+        return { contactId: contact.id, attached };
       },
     ),
   );

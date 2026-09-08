@@ -19,11 +19,13 @@ import { ScoreExplainer } from "@/components/app/score-explainer";
 import { AskAiButton } from "@/components/app/ask-ai-button";
 import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
-import { RecordActions } from "@/components/app/record-actions";
+import { RecordHeaderActions } from "@/components/app/record-edit";
+import { AddProjectPerson, RemoveProjectPerson } from "@/components/app/project-people";
 import { ProjectStatusPicker, NextActionEditor, MilestoneList } from "@/components/app/project-controls";
 import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getProject } from "@/lib/data/projects";
+import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatCompact, formatMoney } from "@/lib/money";
@@ -53,6 +55,8 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
     id,
     { workspaceId: project.workspaceId },
   );
+
+  const editContext = await getEditContext(actor, [project.workspaceId]);
 
   const deadline = describeDeadline(project.targetDate);
   const completedMilestones = project.milestones.filter((m) => m.completedAt).length;
@@ -108,10 +112,20 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
         actions={
           <>
             <AskAiButton focus={{ type: "project", id: project.id, label: project.name }} />
-            <RecordActions
-              entityType="project"
+            <RecordHeaderActions
+              kind="project"
               id={project.id}
               name={project.name}
+              version={project.version}
+              context={editContext}
+              initial={{
+                name: project.name,
+                description: project.description,
+                companyId: project.companyId,
+                statusId: project.statusId,
+                targetDate: project.targetDate ? project.targetDate.toISOString().slice(0, 10) : "",
+                priority: project.priority,
+              }}
             />
           </>
         }
@@ -343,13 +357,20 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
             icon={<Users />}
             emptyTitle="No contacts attached"
             emptyDescription="Add the client contacts and collaborators on this project."
+            action={<AddProjectPerson projectId={project.id} workspaceId={project.workspaceId} />}
             items={project.contacts.map((link) => ({
               id: link.contact.id,
               href: `/contacts/${link.contact.id}`,
               title: link.contact.fullName,
               subtitle: link.contact.jobTitle ?? link.contact.email,
               leading: <Avatar name={link.contact.fullName} size="sm" />,
-              trailing: link.role ? <Badge>{link.role}</Badge> : null,
+              trailing: (
+                <RemoveProjectPerson
+                  projectId={project.id}
+                  contactId={link.contact.id}
+                  name={link.contact.fullName}
+                />
+              ),
             }))}
           />
 

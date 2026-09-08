@@ -161,7 +161,14 @@ export function QuickAddDialog({
   );
 }
 
-function QuickAddFields({
+/**
+ * The fields for one record kind, driven by a plain `form` record.
+ *
+ * Exported because editing renders exactly these. A separate edit form would
+ * be the same inputs maintained twice, and the two would drift — the create
+ * dialog would gain a field the edit dialog silently could not change.
+ */
+export function QuickAddFields({
   kind, form, set, workspaceId, dealPipeline, statuses,
 }: {
   kind: QuickAddKind;
@@ -273,8 +280,11 @@ function QuickAddFields({
             <Field label="Company">
               <RecordPicker type="company" value={form.companyId ?? null} onChange={set("companyId")} workspaceId={workspaceId} emptyLabel="No company" />
             </Field>
-            <Field label="Primary contact" className="sm:col-span-2">
+            <Field label="Primary contact">
               <RecordPicker type="contact" value={form.primaryContactId ?? null} onChange={set("primaryContactId")} workspaceId={workspaceId} emptyLabel="No contact" />
+            </Field>
+            <Field label="Project">
+              <RecordPicker type="project" value={form.projectId ?? null} onChange={set("projectId")} workspaceId={workspaceId} emptyLabel="No project" />
             </Field>
           </div>
         </>
@@ -337,6 +347,9 @@ function QuickAddFields({
             </Field>
             <Field label="Proposal deadline">
               <Input type="date" value={form.proposalDeadlineAt ?? ""} onChange={(e) => set("proposalDeadlineAt")(e.target.value)} />
+            </Field>
+            <Field label="Project">
+              <RecordPicker type="project" value={form.projectId ?? null} onChange={set("projectId")} workspaceId={workspaceId} emptyLabel="No project" />
             </Field>
           </div>
         </>
@@ -418,6 +431,7 @@ async function runCreate(
         workspaceId, name: s("name") ?? "", pipelineId: pipeline.id, stageId,
         valueCents: s("valueCents"), expectedCloseAt: s("expectedCloseAt"),
         companyId: s("companyId"), primaryContactId: s("primaryContactId"),
+        projectId: s("projectId"),
       });
     }
     case "project":
@@ -434,7 +448,7 @@ async function runCreate(
       return createOpportunity({
         workspaceId, name: s("name") ?? "", companyId: s("companyId"),
         solicitationNumber: s("solicitationNumber"), estimatedValueCents: s("estimatedValueCents"),
-        proposalDeadlineAt: s("proposalDeadlineAt"),
+        proposalDeadlineAt: s("proposalDeadlineAt"), projectId: s("projectId"),
       });
     case "meeting":
       return logTimelineEntry({

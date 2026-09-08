@@ -1,7 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   BarChart3, Bot, Building2, CalendarDays, CheckSquare, FileText, FolderKanban,
-  Home, Landmark, Paperclip, Settings, Target, Users, Workflow,
+  Home, Landmark, Settings, Target, Users,
 } from "lucide-react";
 
 export type NavItem = {
@@ -25,10 +25,26 @@ export const PRIMARY_NAV: NavItem[] = [
   { href: "/notes", label: "Notes", icon: FileText },
 ];
 
+/**
+ * Navigation only advertises what a customer can actually finish.
+ *
+ * Automations and Files were in the sidebar and neither could be used. The
+ * automations screen described what a rule is and offered no way to create one;
+ * the files screen invited people to attach proposals and contracts with no
+ * upload control, because `STORAGE_DRIVER` is `none`. A primary navigation
+ * entry is a promise, and both were promising something the product does not do
+ * yet.
+ *
+ * They are hidden rather than deleted: the routes, the data model and the
+ * automation engine all still exist and still run — the outbox drives
+ * automations today — so this is a change to what is offered, not to what has
+ * been built. `BETA_HIDDEN` keeps the reason in one place rather than leaving
+ * two commented-out lines for someone to restore without knowing why they went.
+ */
+export const BETA_HIDDEN = ["/automations", "/files"] as const;
+
 export const SECONDARY_NAV: NavItem[] = [
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/automations", label: "Automations", icon: Workflow },
-  { href: "/files", label: "Files", icon: Paperclip },
 ];
 
 export const FOOTER_NAV: NavItem[] = [{ href: "/settings", label: "Settings", icon: Settings }];

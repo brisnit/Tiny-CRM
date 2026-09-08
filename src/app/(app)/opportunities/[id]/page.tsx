@@ -16,11 +16,12 @@ import { AiSummaryCard } from "@/components/app/ai-summary-card";
 import { AskAiButton } from "@/components/app/ask-ai-button";
 import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
-import { RecordActions } from "@/components/app/record-actions";
+import { RecordHeaderActions } from "@/components/app/record-edit";
 import { StageSelector } from "@/components/app/stage-selector";
 import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getOpportunity } from "@/lib/data/opportunities";
+import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatMoney } from "@/lib/money";
@@ -52,6 +53,8 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
     id,
     { workspaceId: opportunity.workspaceId },
   );
+
+  const editContext = await getEditContext(actor, [opportunity.workspaceId]);
 
   const deadline = describeDeadline(opportunity.deadlineAt);
   const questions = describeDeadline(opportunity.questionsDeadlineAt);
@@ -89,10 +92,20 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
         actions={
           <>
             <AskAiButton focus={{ type: "opportunity", id: opportunity.id, label: opportunity.name }} />
-            <RecordActions
-              entityType="opportunity"
+            <RecordHeaderActions
+              kind="opportunity"
               id={opportunity.id}
               name={opportunity.name}
+              version={opportunity.version}
+              context={editContext}
+              initial={{
+                name: opportunity.name,
+                companyId: opportunity.companyId,
+                solicitationNumber: opportunity.solicitationNumber,
+                estimatedValueCents: opportunity.estimatedValueCents != null ? String(opportunity.estimatedValueCents / 100) : "",
+                proposalDeadlineAt: opportunity.proposalDeadlineAt ? opportunity.proposalDeadlineAt.toISOString().slice(0, 10) : "",
+                projectId: opportunity.projectId,
+              }}
             />
           </>
         }
