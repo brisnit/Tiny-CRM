@@ -348,7 +348,7 @@ async function verify(url, ownerUrl, label) {
   };
 
   for (const [self, other] of [["A", "B"], ["B", "A"]]) {
-    const me_ = m.tenants[self], them = m.tenants[other];
+    const me_ = m.tenants[self];
     // Positive and negative on the same table, in the same run. A refusal is
     // only evidence when the identical permitted read succeeds beside it.
     for (const table of ["Contact", "Company", "Deal", "Task", "Note", "AuditLog", "SecurityAlert"]) {
