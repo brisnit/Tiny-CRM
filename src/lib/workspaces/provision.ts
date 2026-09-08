@@ -3,6 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { withTenantContext } from "@/lib/tenant-db";
+import { recordAudit } from "@/lib/audit";
 import { slugify } from "@/lib/utils";
 import {
   DEFAULT_DEAL_STAGES, DEFAULT_OPPORTUNITY_STAGES, DEFAULT_PROJECT_STATUSES,
@@ -139,6 +140,35 @@ export async function provisionWorkspace(
         },
       },
     });
+
+    // The audit row belongs here, inside the bootstrap context, for the same
+    // reason every other row above does.
+    //
+    // Both callers used to audit *after* provisioning returned, from the
+    // caller's own context — which cannot contain a workspace that did not
+    // exist when that context was built. PostgreSQL refused the INSERT with
+    // 42501, `recordAudit` swallowed the failure as designed, and the aborted
+    // transaction then failed the caller's next statement with 25P02. The
+    // visible symptom was somewhere else entirely: onboarding stopped setting
+    // `onboardedAt`.
+    //
+    // Production had three workspaces and zero `workspace.created` audit rows,
+    // so this had been losing the record since the first deployment. Found by
+    // running the onboarding tests against PostgreSQL; on SQLite, where there
+    // is no row-level security, all of it passes.
+    const owner = await client.user.findUnique({ where: { id: userId }, select: { email: true } });
+    await recordAudit(
+      {
+        workspaceId: workspace.id,
+        actorId: userId,
+        actorEmail: owner?.email ?? null,
+        action: "workspace.created",
+        entityType: "workspace",
+        entityId: workspace.id,
+        summary: `Created workspace ${workspace.name}`,
+      },
+      client,
+    );
 
     return workspace;
   };

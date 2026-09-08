@@ -96,15 +96,11 @@ export async function createWorkspace(
         const data = workspaceSchema.parse(input);
         await assertWithinLimit(actor, "workspaces");
 
+        // Audited inside provisionWorkspace, in the bootstrap context that
+        // actually contains the new workspace. Auditing here silently lost
+        // every `workspace.created` row: production had three workspaces and
+        // none of these entries.
         const workspace = await provisionWorkspace(actor.identity.id, data);
-
-        await audit(actor, {
-          workspaceId: workspace.id,
-          action: "workspace.created",
-          entityType: "workspace",
-          entityId: workspace.id,
-          summary: `Created workspace ${workspace.name}`,
-        });
 
         revalidateLayout();
         return { id: workspace.id, name: workspace.name };

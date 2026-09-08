@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { action, audit, guard, type ActionResult, revalidateLayout } from "@/lib/actions/base";
+import { action, guard, type ActionResult, revalidateLayout } from "@/lib/actions/base";
 import { provisionWorkspace } from "@/lib/workspaces/provision";
 
 /**
@@ -48,15 +48,12 @@ export async function completeOnboarding(): Promise<ActionResult<{ ok: true }>> 
           const firstName = actor.identity.name.trim().split(/\s+/)[0];
           const name = firstName ? `${firstName}'s workspace` : "My workspace";
 
-          const workspace = await provisionWorkspace(actor.identity.id, { name });
-
-          await audit(actor, {
-            workspaceId: workspace.id,
-            action: "workspace.created",
-            entityType: "workspace",
-            entityId: workspace.id,
-            summary: `Created workspace ${workspace.name} while completing onboarding`,
-          });
+          // `provisionWorkspace` records the audit itself, inside the bootstrap
+          // context. Auditing from out here instead is what broke this action:
+          // the actor's context cannot contain a workspace that did not exist
+          // when the context was built, so the INSERT was refused, the
+          // transaction aborted, and the `onboardedAt` update below failed.
+          await provisionWorkspace(actor.identity.id, { name });
         }
 
         await db.user.update({

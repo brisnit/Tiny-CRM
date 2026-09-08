@@ -124,4 +124,28 @@ describe("an account that skipped setup can still use the application", () => {
     });
     assert.match(String(membership?.workspace.name), /Sam/, "the default workspace has no recognisable name");
   });
+
+  test("creating the first workspace is actually recorded in the audit log", async () => {
+    // This is the assertion that would have caught a defect nobody saw for the
+    // life of the deployment. Production had three workspaces and zero
+    // `workspace.created` rows: the audit was written from the caller's
+    // context, which cannot contain a workspace that did not exist when that
+    // context was built, so PostgreSQL refused every one of them and the
+    // swallowed failure aborted the surrounding transaction.
+    //
+    // It only fails on PostgreSQL. SQLite has no row-level security, so the
+    // write succeeds there and this test passes for the wrong reason — which is
+    // precisely why the suite runs against both.
+    const userId = await freshAccount("Nadia Farr");
+    const { completeOnboarding } = await import("../../src/lib/actions/onboarding");
+    const result = await runAsTestIdentity(userId, () => completeOnboarding());
+    assert.equal(result.ok, true, `skipping setup failed: ${JSON.stringify(result)}`);
+
+    const entries = await db.auditLog.findMany({
+      where: { actorId: userId, action: "workspace.created" },
+      select: { workspaceId: true, summary: true },
+    });
+    assert.equal(entries.length, 1, `expected one workspace.created audit row, got ${entries.length}`);
+    assert.ok(entries[0]!.workspaceId, "the audit row is not attached to the workspace it describes");
+  });
 });
