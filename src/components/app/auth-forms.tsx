@@ -32,6 +32,37 @@ export type DemoCredentials = { email: string; password: string };
  * renders. Passing `null` from the server is what keeps the strings out of a
  * production build entirely, rather than merely keeping the button hidden.
  */
+/**
+ * `method="post"` on every form here is a security control, not a formality.
+ *
+ * These forms submit through `onSubmit`, which calls `preventDefault()`, so in
+ * normal use the method attribute is never consulted. It matters in the two
+ * cases where the handler is not attached: before React hydrates, and when the
+ * script fails to load at all. A form with no method defaults to GET, and the
+ * browser then puts every field in the query string.
+ *
+ * Reproduced against production with JavaScript disabled, on all five:
+ *
+ *   /login           ?email=...&password=...
+ *   /signup          ?name=...&email=...&password=...
+ *   /reset-password  ?password=...&confirm=...   — and the ?token= was replaced
+ *   /forgot-password ?email=...
+ *   /verify-email    ?email=...
+ *
+ * What that actually costs, measured rather than assumed: Vercel's runtime logs
+ * record the path without the query, there is no analytics package, CSP blocks
+ * third-party requests, and `Referrer-Policy: strict-origin-when-cross-origin`
+ * keeps the URL out of cross-origin Referer headers. The exposure that remains
+ * is the browser's own history — plaintext, on disk, in address-bar
+ * autocomplete, and synced across devices when browser sync is on. That is
+ * enough: a password does not belong in a URL.
+ *
+ * POST fails closed. Without JavaScript the browser posts to a route that does
+ * not accept POST and the submit does not complete, which is the right outcome
+ * — better a form that visibly does nothing than one that quietly writes a
+ * password into history. Making these work without JavaScript is separate work
+ * and needs server actions, not a method attribute.
+ */
 export function LoginForm({ demo = null }: { demo?: DemoCredentials | null }) {
   const router = useRouter();
   const [pending, setPending] = React.useState(false);
@@ -59,7 +90,7 @@ export function LoginForm({ demo = null }: { demo?: DemoCredentials | null }) {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-3.5">
+    <form method="post" onSubmit={submit} className="space-y-3.5">
       <ErrorNote>{error}</ErrorNote>
       <Field label="Email" htmlFor="email">
         <Input id="email" name="email" type="email" autoComplete="email" required placeholder="you@company.com" />
@@ -118,7 +149,7 @@ export function SignupForm({ plan }: { plan: string }) {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-3.5">
+    <form method="post" onSubmit={submit} className="space-y-3.5">
       <ErrorNote>{error}</ErrorNote>
       <Field label="Your name" htmlFor="name">
         <Input id="name" name="name" autoComplete="name" required placeholder="Alex Rivera" />
@@ -228,7 +259,7 @@ export function ForgotPasswordForm() {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-3.5">
+    <form method="post" onSubmit={submit} className="space-y-3.5">
       <Field label="Email" htmlFor="email">
         <Input id="email" name="email" type="email" autoComplete="email" required placeholder="you@company.com" />
       </Field>
@@ -289,7 +320,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-3.5">
+    <form method="post" onSubmit={submit} className="space-y-3.5">
       <ErrorNote>{error}</ErrorNote>
       <Field label="New password" htmlFor="password" hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}>
         <Input id="password" name="password" type="password" autoComplete="new-password" required minLength={PASSWORD_MIN_LENGTH} />
@@ -327,7 +358,7 @@ export function ResendVerificationForm() {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-3.5">
+    <form method="post" onSubmit={submit} className="space-y-3.5">
       <Field label="Email" htmlFor="resend-email">
         <Input id="resend-email" name="email" type="email" autoComplete="email" required placeholder="you@company.com" />
       </Field>
