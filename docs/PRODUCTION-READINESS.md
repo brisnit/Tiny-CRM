@@ -40,9 +40,13 @@ confidential business data.** Error reporting, alert delivery, transactional mai
 and the scheduled worker are now connected and each verified end to end against
 the hosted deployment rather than in a test.
 
-The remaining RED is retention and privacy documentation, which is organisation
-rather than code, and the remaining material gap is that the restore drill has
-never been run against Neon's own backups.
+The provider's own recovery mechanism has now been exercised end to end and is
+recorded in `docs/NEON-RECOVERY-DRILL.md`. The remaining RED is retention and
+privacy documentation, which is organisation rather than code.
+
+Two limits are not closed by any of this and should be read before launch: the
+PITR window is **6 hours** on the current Neon plan, and production runs
+**PostgreSQL 18.6** while the entire test matrix runs 17.10.
 
 Not ready for a regulated buyer, an enterprise security review, or anyone who
 requires enforced MFA.
@@ -76,13 +80,13 @@ requires enforced MFA.
 | 21 | **Content-Security-Policy** | 🟢 GREEN | **Fixed a live defect.** A static `script-src 'self'` was blocking Next's own bootstrap and breaking hydration in production — invisible because E2E only ran against dev. Now nonce-based, verified in a browser against a production build with zero violations. |
 | 22 | **Database integrity** | 🟢 GREEN | Foreign keys throughout, compound uniqueness, indexes on every access path, `SetNull` below the workspace, and now deferrable constraints so a logical restore is possible at all. |
 | 23 | **Performance at scale** | 🟢 GREEN | Measured on both engines. At 100k contacts / 500k activities, every screen query under 83 ms on PostgreSQL, 260 ms on SQLite. `npm run test:perf` fails the build on a budget breach. |
-| 24 | **PostgreSQL portability** | 🟢 GREEN | **Was YELLOW.** 358 tests, the seed, the differences probe and both load tiers executed against a real PostgreSQL 17.10. Two high-severity defects found by executing rather than reasoning — see `docs/POSTGRES-VERIFICATION.md`. |
+| 24 | **PostgreSQL portability** | 🟡 YELLOW | **Was GREEN — corrected downwards.** 433 tests, the seed, the differences probe and both load tiers execute against a real PostgreSQL 17.10, and two high-severity defects were found by executing rather than reasoning (`docs/POSTGRES-VERIFICATION.md`). **Gap found during the recovery drill: production runs PostgreSQL 18.6.** Every test in CI, and every claim in this document, is one major version behind the engine that actually serves customers. The drill itself ran against 18.6 and passed, which is real but narrow evidence. Until the matrix runs 18, portability is asserted rather than demonstrated. |
 
 ## Infrastructure and operations
 
 | # | Area | Grade | Evidence / gap |
 |---|---|---|---|
-| 25 | **Backups and recovery** | 🟡 YELLOW | `npm run test:backup` backs up, destroys, restores and verifies row counts, a content fingerprint, every foreign key, a relationship walk, cross-tenant bleed and the isolation suite — and found the circular FK that made a logical restore impossible. **Gap: this proves the data round-trips through our own dump and restore; it has never been run against Neon's own backups. Until a restore from the provider's snapshot has been performed and verified, the recovery story is untested where it matters most.** This is the next thing to close. |
+| 25 | **Backups and recovery** | 🟢 GREEN | **Was YELLOW.** The provider's own recovery mechanism has now been exercised: a branch taken from a historical timestamp, verified with 38 assertions that pass identically on production and on the restored branch — schema hash-identical across tables, columns, constraints, policies and indexes; fingerprint exact; the circular `Company ↔ Contact` FK intact; RLS enabled and forced; `tinycrm_app` still non-superuser without BYPASSRLS; A→B and B→A refused while A→A and B→B succeed. Branch ready in 2.7 s. Full record in `docs/NEON-RECOVERY-DRILL.md`. **Caveat that does not go away: the PITR window is 6 hours on the free plan**, so data destroyed and noticed the next day is unrecoverable, and branching is copy-on-write within the project rather than an independent copy. |
 | 26 | **Observability & alerting** | 🟢 GREEN | **Was RED.** Both sinks are connected and were proven by making the real thing happen, not by calling a function. A Slack alert raised through the application's own alerting path arrived in a human's Slack. One deliberate production exception, thrown from a `CRON_SECRET`-gated diagnostics route so it takes the real `onRequestError` path, was accepted by Sentry (event `c452c01d`, confirmed visually in the project). No SDK: the payload is an allowlist, so no breadcrumbs, request bodies, local variables, cookies or headers exist to leak. Integrating it exposed four real privacy defects — the stack carried the unscrubbed message, tag values carried content, the query string became the transaction name, and a session JWT and vendor API key survived redaction entirely — each fixed with a regression test written first. A delivery failure can no longer be silent: `fetch` does not throw on 4xx/5xx, so a rejected event used to look identical to a healthy one. |
 | 27 | **Distributed rate limiting** | 🟡 YELLOW | **Was RED.** Three backends; the PostgreSQL one is genuinely distributed and is verified here — two independent stores share a counter, 20 concurrent increments all land. Multi-dimensional (ip / account / user / workspace), keyed-hash keys. Production refuses in-process on `APP_INSTANCES > 1`. **Gap: the Redis adapter is written against Upstash's REST API and has not been run against a live Redis.** |
 | 28 | **Background worker** | 🟢 GREEN | **Was YELLOW.** Atomic claiming, expiring claims, exponential backoff, dead-letter, per-attempt execution log, tenant context per job. A poisoned job cannot block the queue — tested. **Gap closed:** Vercel Cron drives `/api/cron/jobs` every five minutes, and production logs show it draining and reporting an empty queue with nothing dead-lettered. The endpoint is `CRON_SECRET`-gated with a constant-time comparison, because an unprotected job runner is a free denial-of-service against the database. |
@@ -106,13 +110,18 @@ Weighted by what actually causes incidents, not by row count.
 | Tenant isolation & authorization | 25 | 24 | 25 | **25** |
 | Input, output and write safety | 20 | 20 | 20 | **20** |
 | Authentication & account lifecycle | 15 | 8 | 12 | **13** |
-| Data integrity & recoverability | 15 | 7 | 13 | **13** |
+| Data integrity & recoverability | 15 | 7 | 13 | **14** |
 | Operations: rate limiting, observability, CI | 15 | 6 | 10 | **14** |
-| Scale & portability | 10 | 7 | 10 | **10** |
+| Scale & portability | 10 | 7 | 10 | **9** |
 | **Total** | **100** | **72** | **90** | **95** |
 
 The previous pass reported 88. Its own rows summed to 90 — an arithmetic error,
 corrected above rather than quietly carried forward. The 72 was correct.
+
+**Scale & portability** loses a point it previously held. Production runs
+PostgreSQL 18.6 and the entire verification matrix runs 17.10 — a gap found by
+reading the engine version during the recovery drill, not by any test. It is a
+correction of a grade that was always too generous rather than a regression.
 
 **Tenant isolation** holds full marks: two independent layers, the second proven
 by attacking it from below the application, and now also proven against the
@@ -123,9 +132,11 @@ through the real HTTP path, with production rate limiting left switched on.
 and reset are reachable rather than merely implemented. It still loses 2 because
 MFA is enrolment-only: sign-in does not demand a code, and the UI says so.
 
-**Data integrity** is unchanged. It loses 2 for the same reason as last time,
-and that reason is now the single most valuable thing left: the restore drill
-has never been run against Neon's own backups.
+**Data integrity** gains a real provider recovery, verified rather than assumed:
+a branch from a historical timestamp, restored and checked with the same 38
+assertions that pass against production. It loses 1 for the six-hour PITR
+window, which is a plan limit and the binding constraint on how much can
+actually be recovered.
 
 **Operations** gains an error tracker, alert delivery, a scheduled worker and an
 observed green CI run, each verified rather than assumed. It loses 1 because the
@@ -138,12 +149,15 @@ which is what production actually uses, has.
 
 | Change | Effort | New score |
 |---|---|---|
-| Run the restore drill against Neon's own backups | ~2 hours | 97 |
+| Move Neon to a paid plan for a 7- or 30-day PITR window | ~15 minutes | 96 |
+| Run the CI matrix against PostgreSQL 18 to match production | ~1 hour | 97 |
 | Automated retention purging + a privacy notice | ~1 day | 98 |
 | MFA enforced at sign-in (two-stage flow) | ~2 days | 100 |
 
-The first two total under half a day. The restore drill is the one that matters:
-everything else on this scorecard protects data that is still there.
+The first two total about an hour and are configuration, not code. The six-hour
+window is the one to do first: every other control on this scorecard protects
+data that still exists, and that number decides how much of it can come back
+when something destroys it.
 
 ---
 
