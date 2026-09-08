@@ -58,6 +58,15 @@ const head = (t) => console.log(`\n${t}\n${"-".repeat(t.length)}`);
 const id = (p = "c") => `${p}${randomUUID().replace(/-/g, "")}`;
 
 const read = (name) => readFileSync(`${CONFIG}/${name}`, "utf8").trim();
+
+/**
+ * The owner connection used for setup and cleanup.
+ *
+ * `PROBE_ADMIN_URL` exists so the harness can be rehearsed against a throwaway
+ * cluster before it is ever pointed at production. A drill script whose first
+ * execution is against the real database is not a drill, it is an experiment.
+ */
+const adminUrl = () => process.env.PROBE_ADMIN_URL || read("neon-owner.url");
 const connect = async (url) => {
   const c = new Client({ connectionString: url, connectionTimeoutMillis: 30_000 });
   await c.connect();
@@ -125,7 +134,7 @@ async function fingerprintOf(client, manifest) {
 // ---------------------------------------------------------------------------
 
 async function seed() {
-  const admin = await connect(read("neon-owner.url"));
+  const admin = await connect(adminUrl());
   const stamp = Date.now();
   const rows = Object.fromEntries(SHAPE.map(([t]) => [t, []]));
   const track = (t, id, note) => rows[t].push({ id, note });
@@ -245,9 +254,21 @@ async function seed() {
 
 // ---------------------------------------------------------------------------
 
-async function verify(url, label) {
+async function verify(url, ownerUrl, label) {
   const m = loadManifest();
   const app = await connect(url);
+  // Two questions, two roles.
+  //
+  // "Is the data byte-identical?" is a content question, and asking it through
+  // RLS measures visibility instead: the first run of this script fingerprinted
+  // the source as owner and the target as the restricted role with no workspace
+  // context set, so the hash differed for the one reason that has nothing to do
+  // with the restore. Content is checked with full visibility.
+  //
+  // "Can A read B?" is an isolation question, and answering it with anything
+  // other than the restricted role is worthless. That stays on `app`.
+  const owner = ownerUrl ? await connect(ownerUrl) : null;
+  const content = owner ?? app;
 
   head(`${label}: the connection under test`);
   const { rows: who } = await app.query(
@@ -275,28 +296,45 @@ async function verify(url, label) {
                   WHERE col.table_schema='public' AND col.table_name=c.relname
                     AND col.column_name='workspaceId')
     ORDER BY c.relname`);
-  const unprotected = rls.filter((r) => !r.enabled || !r.forced);
+  const unprotected = rls.filter((r) => !r.enabled || !r.forced).map((r) => r.relname).sort();
+  // One table carries a workspaceId and is deliberately not under RLS:
+  // IdempotencyKey is written by the billing webhook, which is authenticated by
+  // signature and has no workspace context to set, so a policy would refuse the
+  // only write it ever receives. The reasoning is in
+  // prisma/postgres/002_row_level_security.sql and docs/RLS.md, and its sole
+  // writer sets scope/key/status/expiresAt only — never workspaceId, userId or
+  // result — so there is no tenant data in it to isolate.
+  //
+  // Asserted as an exact set rather than skipped: a *newly* unprotected table
+  // is a real defect, and a check that tolerates one exclusion by name would
+  // wave through the next one.
+  const EXPECTED_UNPROTECTED = ["IdempotencyKey"];
+  const unexpected = unprotected.filter((t) => !EXPECTED_UNPROTECTED.includes(t));
+  const nowProtected = EXPECTED_UNPROTECTED.filter((t) => !unprotected.includes(t));
   if (rls.length === 0) fail("workspace-owned tables were found", "none — the schema did not restore");
-  else if (unprotected.length === 0) pass(`RLS enabled AND forced on all ${rls.length} workspace-owned tables`);
-  else fail("RLS enabled and forced on every workspace-owned table",
-            unprotected.map((r) => `${r.relname}(enabled=${r.enabled},forced=${r.forced})`).join(", "));
+  else if (unexpected.length === 0) {
+    pass(`RLS enabled AND forced on all ${rls.length - unprotected.length} workspace-owned tables`,
+         `${EXPECTED_UNPROTECTED.length} documented exclusion${nowProtected.length ? `, ${nowProtected.join(", ")} now protected` : ""}`);
+  } else {
+    fail("RLS enabled and forced on every workspace-owned table",
+         `undocumented and unprotected: ${unexpected.join(", ")}`);
+  }
 
   head(`${label}: the fixture came back`);
-  const fp = await fingerprintOf(app, m);
-  // Read under each tenant's own context, since RLS hides the rest.
+  const fp = await fingerprintOf(content, m);
   let restored = 0, expected = 0;
   for (const [table] of SHAPE) {
     const ids = (m.rows[table] ?? []).map((r) => r.id);
+    if (!ids.length) continue;
     expected += ids.length;
-    for (const t of [m.tenants.A, m.tenants.B]) {
-      await app.query("BEGIN");
-      await app.query("SELECT set_config('app.workspace_ids', $1, true)", [t.workspaceId]);
-      const { rows } = await app.query(`SELECT count(*)::int AS n FROM "${table}" WHERE id = ANY($1::text[])`, [ids]);
-      restored += rows[0].n;
-      await app.query("ROLLBACK");
-    }
+    // Counted once per table, not summed across both tenant contexts: tables
+    // that are not workspace-scoped (User, PipelineStage) are visible under
+    // either one, and summing reported 26 of 24 rows present.
+    const { rows } = await content.query(
+      `SELECT count(*)::int AS n FROM "${table}" WHERE id = ANY($1::text[])`, [ids]);
+    restored += rows[0].n;
+    if (rows[0].n !== ids.length) console.log(`    ${table}: ${rows[0].n}/${ids.length}`);
   }
-  // User and Workspace are not workspace-scoped; count them once, unscoped.
   if (restored === expected) pass(`every fixture row is present (${restored}/${expected})`);
   else fail("every fixture row is present", `${restored}/${expected} — rows are missing`);
 
@@ -327,8 +365,8 @@ async function verify(url, label) {
   }
 
   head(`${label}: referential integrity of the fixture`);
-  await app.query("BEGIN");
-  await app.query("SELECT set_config('app.workspace_ids', $1, true)",
+  await content.query("BEGIN");
+  await content.query("SELECT set_config('app.workspace_ids', $1, true)",
     [`${m.tenants.A.workspaceId},${m.tenants.B.workspaceId}`]);
   const checks = [
     ["Deal.stageId resolves", `SELECT count(*)::int n FROM "Deal" d JOIN "PipelineStage" s ON s.id = d."stageId" WHERE d.id = ANY($1::text[])`, m.rows.Deal.map(r=>r.id)],
@@ -339,11 +377,11 @@ async function verify(url, label) {
     ["Task.contactId resolves", `SELECT count(*)::int n FROM "Task" tk JOIN "Contact" ct ON ct.id = tk."contactId" WHERE tk.id = ANY($1::text[])`, m.rows.Task.map(r=>r.id)],
   ];
   for (const [name, sql, ids] of checks) {
-    const { rows } = await app.query(sql, [ids]);
+    const { rows } = await content.query(sql, [ids]);
     if (rows[0].n === ids.length) pass(name, `${rows[0].n}/${ids.length}`);
     else fail(name, `${rows[0].n}/${ids.length} — a relationship did not survive`);
   }
-  await app.query("ROLLBACK");
+  await content.query("ROLLBACK");
 
   head(`${label}: fingerprint`);
   console.log(`  expected (source) : ${m.fingerprint}`);
@@ -352,6 +390,7 @@ async function verify(url, label) {
   else fail("the fingerprint matches the source recovery point", "the restored content differs");
 
   await app.end();
+  if (owner) await owner.end();
   return { passed, failed };
 }
 
@@ -360,9 +399,10 @@ async function verify(url, label) {
 async function cleanup() {
   const m = loadManifest();
   const keep = allIds(m);
-  const admin = await connect(read("neon-owner.url"));
+  const admin = await connect(adminUrl());
 
-  head("Guarded cleanup of production");
+  const target = process.env.PROBE_ADMIN_URL ? "the rehearsal cluster" : "production";
+  head(`Guarded cleanup of ${target}`);
   console.log(`  the manifest records ${keep.size} ids; nothing outside that set can be deleted`);
 
   // Children before parents. Every delete is bounded by an explicit id list
@@ -392,7 +432,7 @@ async function cleanup() {
   const { rows: left } = await admin.query(
     `SELECT count(*)::int n FROM "Workspace" WHERE name LIKE $1 OR slug LIKE $2`,
     [`${MARK}%`, `${MARK.toLowerCase()}%`]);
-  if (left[0].n === 0) pass(`no ${MARK} workspace remains in production`);
+  if (left[0].n === 0) pass(`no ${MARK} workspace remains in ${target}`);
   else fail(`no ${MARK} workspace remains`, `${left[0].n} left behind`);
   console.log(`  ${removed} rows removed in total`);
   await admin.end();
@@ -405,17 +445,17 @@ try {
   if (command === "seed") await seed();
   else if (command === "fingerprint") {
     const m = loadManifest();
-    const c = await connect(arg || read("app-database.url"));
+    const c = await connect(arg || process.env.PROBE_ADMIN_URL || read("app-database.url"));
     const fp = await fingerprintOf(c, m);
     console.log(`fingerprint : ${fp.hash}`);
     console.log(`recorded    : ${m.fingerprint}`);
     console.log(fp.hash === m.fingerprint ? "MATCH" : "DIFFERENT");
     await c.end();
   }
-  else if (command === "verify") await verify(arg || read("app-database.url"), arg ? "restored target" : "production");
+  else if (command === "verify") await verify(arg || read("app-database.url"), process.argv[4] || process.env.PROBE_ADMIN_URL || (arg ? null : read("neon-owner.url")), arg ? "restored target" : "production");
   else if (command === "cleanup") await cleanup();
   else {
-    console.error("Usage: restore-probe.mjs <seed|fingerprint|verify|cleanup> [DATABASE_URL]");
+    console.error("Usage: restore-probe.mjs <seed|fingerprint|verify|cleanup> [APP_URL] [OWNER_URL]");
     process.exit(2);
   }
 } catch (e) {
