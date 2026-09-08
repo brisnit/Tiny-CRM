@@ -23,10 +23,10 @@ or RED row names what is missing and what it would take.
 
 | | Previous | Now |
 |---|---|---|
-| 🟢 GREEN | 25 | **28** |
-| 🟡 YELLOW | 9 | **7** |
+| 🟢 GREEN | 25 | **29** |
+| 🟡 YELLOW | 9 | **6** |
 | 🔴 RED | 2 | **1** |
-| **Score** | **90 / 100** | **94 / 100** |
+| **Score** | **90 / 100** | **95 / 100** |
 
 **Two corrections to the previous pass, made by counting rather than by trusting
 the last summary.** Its dimension rows summed to 90 while the total said 88. Its
@@ -91,7 +91,7 @@ requires enforced MFA.
 | 31 | **Email verification** | 🟢 GREEN | **Was YELLOW.** Mail is configured and delivering. The full account lifecycle was run against the hosted deployment with *actually delivered* mail — sign-up issues a verification token and sends it, verification completes, reset completes, and a used, expired or superseded token is refused and distinguishable from a token that never existed. The entry points are asserted to exist, because every one of these flows was implemented, tested and correct while being unreachable: no link, no page, no mail on sign-up. A mail outage cannot lose an account — sign-up does not roll back on a send failure. |
 | 32 | **Secrets management** | 🟡 YELLOW | Nothing committed; history scanned; secret scan in CI; `env.production.example` categorises every variable. **Gap: no rotation procedure, and rotating `AUTH_SECRET` signs everyone out with no warning path.** |
 | 33 | **Dependencies** | 🟢 GREEN | **Was YELLOW.** `npm run audit:deps` reports evidence rather than a label, and corrected the previous report: the four advisories *are* installed by a production install (via `@prisma/client → prisma`), and *none* appears in the build output. CI fails only if something with an open advisory is actually loaded. |
-| 34 | **CI/CD** | 🟡 YELLOW | Eight jobs covering static checks, both engines, RLS with a restricted login, the restore drill, the config gate in both directions, performance budgets, dependency evidence and a secret scan. **Was: "no git remote, so GitHub has never executed it."** There is a remote now and the work is pushed. **Gap: a green run on GitHub has not yet been observed from here.** A stray provider flip committed by accident would have failed the SQLite job — caught locally, but that is exactly the class of thing CI is supposed to catch instead. |
+| 34 | **CI/CD** | 🟢 GREEN | **Was YELLOW.** Eight jobs covering static checks, both engines, RLS with a restricted login, the restore drill, the config gate in both directions, performance budgets, dependency evidence and a secret scan. **A full green run is now observed from a clean checkout** (`ff931ca`, all eight jobs). It earned its place immediately: the previous push went red on the secret scan, catching two false-positive fixtures before they became somebody's confusing build failure. The previous grade's stated reason — "no git remote, so GitHub has never executed it" — was already stale; 25 runs had executed. |
 | 35 | **File uploads** | 🟡 YELLOW | Disabled (`STORAGE_DRIVER=none`, flag off). Validation implemented and tested: extension allowlist with SVG deliberately excluded, magic bytes against the declared type, generated storage keys, attachment-only downloads. **Gap: no malware scanner. `REQUIRE_MALWARE_SCAN=true` fails uploads closed until one exists.** |
 | 36 | **Data retention & privacy** | 🔴 **RED** | `docs/DATA-CLASSIFICATION.md` classifies every store and derives storage, logging, AI, export and retention rules. Export exists; workspace deletion is a complete cascade; the audit trail survives it. **Gap: no automated purging of anything except sessions, tokens, completed jobs and rate-limit counters. No privacy notice. No data-processing agreement with the AI provider. A customer asking "how long do you keep my deleted data" gets "indefinitely".** |
 
@@ -107,9 +107,9 @@ Weighted by what actually causes incidents, not by row count.
 | Input, output and write safety | 20 | 20 | 20 | **20** |
 | Authentication & account lifecycle | 15 | 8 | 12 | **13** |
 | Data integrity & recoverability | 15 | 7 | 13 | **13** |
-| Operations: rate limiting, observability, CI | 15 | 6 | 10 | **13** |
+| Operations: rate limiting, observability, CI | 15 | 6 | 10 | **14** |
 | Scale & portability | 10 | 7 | 10 | **10** |
-| **Total** | **100** | **72** | **90** | **94** |
+| **Total** | **100** | **72** | **90** | **95** |
 
 The previous pass reported 88. Its own rows summed to 90 — an arithmetic error,
 corrected above rather than quietly carried forward. The 72 was correct.
@@ -127,10 +127,10 @@ MFA is enrolment-only: sign-in does not demand a code, and the UI says so.
 and that reason is now the single most valuable thing left: the restore drill
 has never been run against Neon's own backups.
 
-**Operations** gains an error tracker, alert delivery and a scheduled worker,
-each verified against the hosted deployment. It loses 2 because a green CI run
-has not been observed, and because the Redis limiter has never been run against
-a live Redis — the PostgreSQL one, which is what production uses, has.
+**Operations** gains an error tracker, alert delivery, a scheduled worker and an
+observed green CI run, each verified rather than assumed. It loses 1 because the
+Redis limiter has never been run against a live Redis — the PostgreSQL one,
+which is what production actually uses, has.
 
 ---
 
@@ -138,8 +138,7 @@ a live Redis — the PostgreSQL one, which is what production uses, has.
 
 | Change | Effort | New score |
 |---|---|---|
-| Run the restore drill against Neon's own backups | ~2 hours | 96 |
-| Observe a green CI run on GitHub | ~1 hour | 97 |
+| Run the restore drill against Neon's own backups | ~2 hours | 97 |
 | Automated retention purging + a privacy notice | ~1 day | 98 |
 | MFA enforced at sign-in (two-stage flow) | ~2 days | 100 |
 
