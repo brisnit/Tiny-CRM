@@ -75,3 +75,55 @@ describe("route group layouts cannot redirect to themselves", () => {
     assert.doesNotMatch(matcher, /welcome/, "/welcome must not be excluded from the proxy matcher");
   });
 });
+
+/**
+ * The second loop, found by an external tester rather than by this file.
+ *
+ * The layout sends an account with no workspace to /welcome. /welcome only
+ * steps aside once a workspace exists. "Skip setup" set `onboardedAt` and
+ * created nothing, so the two guards disagreed permanently and every app route
+ * bounced back to onboarding — reported as *"not working for me when I skipped
+ * setup. Now its a blank screen."*
+ *
+ * The behaviour is covered by tests/integration/onboarding-zero-state.test.ts,
+ * which is where the real assertion lives. These are the structural companions:
+ * they fail fast if someone later "simplifies" the action back into the shape
+ * that caused it, without needing a database to notice.
+ */
+describe("skipping setup cannot recreate the onboarding loop", () => {
+  const onboarding = read("src/lib/actions/onboarding.ts");
+  const layout = read("src/app/(app)/layout.tsx");
+  const welcome = read("src/app/(app)/welcome/page.tsx");
+
+  test("the layout still redirects an account with no workspace to /welcome", () => {
+    // The premise of everything below. If this stops being true the loop is
+    // gone, but so is the reason these tests are written this way.
+    assert.match(
+      layout,
+      /workspaces\.length === 0\)\s*redirect\("\/welcome"\)/,
+      "the layout no longer redirects on an empty workspace list — revisit these assertions",
+    );
+  });
+
+  test("completing onboarding provisions a workspace, which is what breaks the loop", () => {
+    assert.match(
+      onboarding,
+      /provisionWorkspace/,
+      "completeOnboarding must create a workspace when the account has none, or " +
+        "skipping setup leaves the layout redirecting to /welcome forever",
+    );
+    assert.match(
+      onboarding,
+      /memberships\.length === 0/,
+      "the provisioning must be conditional on the account actually having no workspace",
+    );
+  });
+
+  test("the guided flow can be reopened after it was skipped", () => {
+    assert.match(
+      welcome,
+      /resume/,
+      "skipping setup must not make the guided flow permanently unreachable",
+    );
+  });
+});
