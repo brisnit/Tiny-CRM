@@ -220,27 +220,16 @@ export function assertProductionEnv(): void {
     );
   }
 
-  // APP_URL is what customer-facing links are built from, so "is it HTTPS and
-  // not localhost" was too weak a test: a *.vercel.app deployment hostname
-  // passed it and went out in real password-reset email. A link on a deployment
-  // hostname works until that deployment is superseded, and then the person
-  // locked out of their account clicks a 404.
+  // These three are unchanged and remain fatal: an unset, localhost or plaintext
+  // APP_URL in production is a deployment that should not serve traffic.
   //
-  // A warning rather than a hard failure, deliberately. appOrigin() already
-  // falls back to the canonical domain, so links stay correct either way, and
-  // refusing to boot over this would take a working deployment down to fix a
-  // value that is no longer load-bearing.
+  // A *deployment hostname* is deliberately NOT fatal — see productionWarnings.
   if (!optional("APP_URL")) {
-    problems.push("APP_URL is not set. Customer-facing links fall back to the canonical origin.");
+    problems.push("APP_URL is not set.");
   } else if (/localhost|127\.0\.0\.1|0\.0\.0\.0/.test(env.appUrl)) {
     problems.push(`APP_URL points at localhost (${env.appUrl}).`);
   } else if (!env.appUrl.startsWith("https://")) {
     problems.push(`APP_URL must use HTTPS in production (got ${env.appUrl}).`);
-  } else if (/(^|\.)vercel\.app$/i.test(new URL(env.appUrl).hostname)) {
-    problems.push(
-      `APP_URL is a deployment hostname (${env.appUrl}). Account-recovery links must use the ` +
-        "canonical domain; set APP_URL to it.",
-    );
   }
 
   if (optional("SEED_ALLOW_PRODUCTION")) {
@@ -299,6 +288,32 @@ export function usingSharedRateLimitStore(): boolean {
 /** Non-fatal configuration observations, surfaced at startup. */
 export function productionWarnings(): string[] {
   const warnings: string[] = [];
+
+  // APP_URL is what customer-facing links are built from, and "is it HTTPS and
+  // not localhost" was too weak a test: a *.vercel.app deployment hostname
+  // passes both, and one did — going out in real password-reset email. A link
+  // on a deployment hostname works until that deployment is superseded, and
+  // then the person locked out of their account clicks a 404.
+  //
+  // A warning, not a boot failure. The first version of this check was fatal
+  // and took production down the moment it shipped, to correct a value that
+  // appOrigin() already compensates for — it falls back to the canonical
+  // domain, so the links are right either way. Refusing to serve traffic over
+  // a value that is no longer load-bearing is not failing safely; it is
+  // failing loudly at the customer's expense.
+  if (isProduction && optional("APP_URL")) {
+    try {
+      if (/(^|\.)vercel\.app$/i.test(new URL(env.appUrl).hostname)) {
+        warnings.push(
+          `APP_URL is a deployment hostname (${env.appUrl}). Customer-facing links are using the ` +
+            "canonical origin instead. Set APP_URL to the canonical domain.",
+        );
+      }
+    } catch {
+      warnings.push(`APP_URL is not a parseable URL (${env.appUrl}).`);
+    }
+  }
+
   if (isProduction) {
     if (!env.billingWebhookSecret) {
       warnings.push("BILLING_WEBHOOK_SECRET is not set — plan changes cannot be applied by a provider.");

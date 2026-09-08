@@ -123,4 +123,34 @@ describe("customer-facing links use the canonical origin", () => {
       "the reset response now reveals whether an account exists",
     );
   });
+
+  test("a deployment hostname warns rather than refusing to boot", () => {
+    // The first version of this check was fatal and took production down the
+    // moment it shipped — every route 500'd on "Refusing to start: unsafe
+    // production configuration", to correct a value appOrigin() already
+    // compensates for.
+    //
+    // The three pre-existing fatal checks (unset, localhost, plaintext) are
+    // deliberately still fatal and must stay that way.
+    const env = read("src/lib/env.ts");
+    const assertBody = env.slice(
+      env.indexOf("export function assertProductionEnv"),
+      env.indexOf("export function productionWarnings"),
+    );
+    const warnBody = env.slice(env.indexOf("export function productionWarnings"));
+
+    assert.doesNotMatch(
+      assertBody,
+      /vercel\\?\.app/,
+      "a deployment hostname is fatal again; it must warn, because appOrigin() already corrects it",
+    );
+    assert.match(warnBody, /vercel\\?\.app/, "nothing warns about a deployment hostname any more");
+
+    for (const fatal of ["APP_URL is not set", "points at localhost", "must use HTTPS"]) {
+      assert.ok(
+        assertBody.includes(fatal),
+        `the pre-existing fatal check "${fatal}" was weakened out of assertProductionEnv`,
+      );
+    }
+  });
 });
