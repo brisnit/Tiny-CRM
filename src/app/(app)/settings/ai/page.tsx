@@ -67,19 +67,12 @@ export default async function AiSettings() {
                 you ask things outside the built-in patterns.
               </p>
               <div className="rounded-lg border border-hairline bg-sunken/60 p-3">
-                <p className="text-[12px] font-medium text-body">To connect a model</p>
-                <pre className="mt-2 overflow-x-auto rounded bg-panel p-2.5 font-mono text-[11px] leading-relaxed text-muted">
-{`# .env
-ANTHROPIC_API_KEY="sk-ant-..."
-ANTHROPIC_MODEL="claude-opus-5"
-
-# or
-OPENAI_API_KEY="sk-..."
-OPENAI_MODEL="gpt-4o"`}
-                </pre>
-                <p className="mt-2 text-[11.5px] text-faint">
-                  Restart the server after adding a key. <code className="font-mono">AI_PROVIDER</code> can pin a
-                  specific vendor, or be set to <code className="font-mono">offline</code> to force the built-in engine.
+                <p className="text-[12px] font-medium text-body">Connecting a model</p>
+                <p className="mt-1.5 text-[12px] leading-relaxed text-muted">
+                  During the private beta this is switched on for your account by us rather than
+                  configured here. Everything below already works without it — the scores, the hygiene
+                  checks and the daily brief are computed either way. A model changes how answers are
+                  worded and lets you ask questions outside the built-in set.
                 </p>
               </div>
             </>

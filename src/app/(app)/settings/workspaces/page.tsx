@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
@@ -34,6 +36,18 @@ export default async function WorkspacesSettings() {
         <PanelHeader
           title="Workspaces"
           description="One per business. Each keeps its own pipelines, statuses and tags."
+          action={
+            /*
+             * Skipping setup is a legitimate choice and it lands on a real,
+             * empty home screen. But it also made the guided flow unreachable,
+             * so anyone who skipped on their first evening had no way back to
+             * it. The capability existed behind ?resume=1 with nothing linking
+             * to it; this is the link.
+             */
+            <Button asChild variant="outline" size="sm">
+              <Link href={{ pathname: "/welcome", query: { resume: "1" } }}>Run setup again</Link>
+            </Button>
+          }
         />
         <ul className="divide-y divide-hairline border-t border-hairline">
           {details.map((workspace) => (

@@ -83,8 +83,7 @@ export default async function CalendarPage() {
               <EmptyState
                 icon={<CalendarDays />}
                 title="Nothing scheduled"
-                description="Connect Google Calendar or Outlook and your meetings will appear here, linked to the right contacts and projects."
-                action={{ label: "Connect a calendar", href: "/settings/integrations" }}
+                description="Log a meeting to keep it on the record it belongs to. Calendar sync is not part of this beta."
               />
             </Panel>
           ) : (
@@ -211,9 +210,8 @@ export default async function CalendarPage() {
             </ul>
             <div className="border-t border-hairline p-4">
               <p className="text-[12px] leading-relaxed text-muted">
-                Calendar and email are running on seeded demo data. The sync layer upserts on{" "}
-                <code className="rounded bg-sunken px-1 py-0.5 font-mono text-[11px]">(provider, externalId)</code>,
-                so connecting a real account replaces this data without a schema change.
+                Calendar and email sync is not switched on for this beta. Meetings you log by hand
+                appear on the record they belong to.
               </p>
               <Button asChild size="sm" variant="outline" className="mt-3">
                 <Link href="/settings/integrations">Manage connections</Link>
