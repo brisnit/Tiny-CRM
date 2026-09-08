@@ -403,3 +403,51 @@ export async function resendVerification(
   await sendVerificationEmail(user.id, user.email, ip);
   return { ok: true };
 }
+
+/**
+ * The reset form's action, taking FormData.
+ *
+ * ---------------------------------------------------------------------------
+ * The bug this exists to fix
+ * ---------------------------------------------------------------------------
+ *
+ * The reset form's only working submit path was React's `onSubmit`. Anything
+ * that submitted it another way — which is exactly what Chrome does after
+ * "Use Strong Password", and why it then offers "Update password?" — never ran
+ * `preventDefault()`, so the browser posted the form to the page itself. Next
+ * answers that with 200 and renders the page again, so the person landed back
+ * on a freshly rendered, **empty** reset form with the token still in the URL,
+ * and could repeat it forever. The token was never consumed, which is the one
+ * mercy in it: nothing was spent, so nothing was lost except the ability to
+ * finish.
+ *
+ * Reproduced in Chromium by submitting the form without firing the submit
+ * event. What did *not* reproduce, and had to be ruled out first: React
+ * clobbering the autofilled value. The inputs are uncontrolled, and a
+ * simulated password-manager fill survived a re-render intact.
+ *
+ * A form action fixes the class rather than the symptom. The submission is now
+ * handled wherever it comes from — React, a password manager, or a browser with
+ * no JavaScript at all — because the server receives the POST and acts on it
+ * instead of re-rendering a blank form.
+ *
+ * Everything security-relevant stays in `resetPassword` below it: token
+ * hashing, expiry, single use, session revocation, the notification email and
+ * the identical answers that keep the endpoint non-enumerable.
+ */
+export async function resetPasswordAction(
+  _previous: ResetResult | null,
+  formData: FormData,
+): Promise<ResetResult> {
+  const token = String(formData.get("token") ?? "");
+  const password = String(formData.get("password") ?? "");
+  const confirm = String(formData.get("confirm") ?? "");
+
+  // Checked on the server so it also holds when the form is submitted without
+  // JavaScript, and so the two fields cannot disagree silently.
+  if (password !== confirm) {
+    return { ok: false, error: "Those passwords do not match.", field: "confirm" };
+  }
+
+  return resetPassword({ token, password });
+}

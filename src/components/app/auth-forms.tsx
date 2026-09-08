@@ -8,7 +8,7 @@ import { AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/label";
-import { requestPasswordReset, resendVerification, resetPassword, signUp } from "@/lib/actions/auth";
+import { requestPasswordReset, resendVerification, resetPasswordAction, signUp } from "@/lib/actions/auth";
 import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
 
 function ErrorNote({ children }: { children: React.ReactNode }) {
@@ -278,35 +278,28 @@ export function ForgotPasswordForm() {
 /** Completes a password reset with the token from the emailed link. */
 export function ResetPasswordForm({ token }: { token: string }) {
   const router = useRouter();
-  const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const [done, setDone] = React.useState(false);
+  const [state, formAction, pending] = React.useActionState(resetPasswordAction, null);
 
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setPending(true);
-    setError(null);
-
-    const form = new FormData(event.currentTarget);
-    const password = String(form.get("password") ?? "");
-    const confirm = String(form.get("confirm") ?? "");
-    if (password !== confirm) {
-      setError("Those passwords do not match.");
-      setPending(false);
-      return;
-    }
-
-    const result = await resetPassword({ token, password });
-    if (!result.ok) {
-      setError(result.error);
-      setPending(false);
-      return;
-    }
-    setDone(true);
-    setPending(false);
-  }
-
-  if (done) {
+  /**
+   * A form *action*, not an onSubmit handler.
+   *
+   * The previous version submitted through `onSubmit` and called
+   * `preventDefault()`. Anything that submitted the form another way never ran
+   * that handler, so the browser posted to the page, Next answered 200, and the
+   * person landed back on a freshly rendered empty form with the token still in
+   * the URL — able to repeat it forever without ever consuming the token.
+   *
+   * Chrome does exactly that after "Use Strong Password", which is why it then
+   * offers to update the saved credential: from the browser's point of view the
+   * password form *was* submitted. With a form action the submission is handled
+   * wherever it originates — React, a password manager, or no JavaScript at all.
+   *
+   * The fields stay uncontrolled deliberately. A password manager writes
+   * straight to the DOM, and the value it writes is what FormData reads; adding
+   * controlled state here would create the very race this form is being fixed
+   * for.
+   */
+  if (state?.ok) {
     return (
       <div className="space-y-3 text-[13px]">
         <p className="text-body">
@@ -320,13 +313,30 @@ export function ResetPasswordForm({ token }: { token: string }) {
   }
 
   return (
-    <form method="post" onSubmit={submit} className="space-y-3.5">
-      <ErrorNote>{error}</ErrorNote>
+    <form action={formAction} className="space-y-3.5">
+      <ErrorNote>{state && !state.ok ? state.error : null}</ErrorNote>
+      {/* The token already travels in the URL; carrying it in the form is what
+          lets a submission from any source complete the reset. */}
+      <input type="hidden" name="token" value={token} />
       <Field label="New password" htmlFor="password" hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}>
-        <Input id="password" name="password" type="password" autoComplete="new-password" required minLength={PASSWORD_MIN_LENGTH} />
+        <Input
+          id="password"
+          name="password"
+          type="password"
+          autoComplete="new-password"
+          required
+          minLength={PASSWORD_MIN_LENGTH}
+        />
       </Field>
       <Field label="Confirm new password" htmlFor="confirm">
-        <Input id="confirm" name="confirm" type="password" autoComplete="new-password" required minLength={PASSWORD_MIN_LENGTH} />
+        <Input
+          id="confirm"
+          name="confirm"
+          type="password"
+          autoComplete="new-password"
+          required
+          minLength={PASSWORD_MIN_LENGTH}
+        />
       </Field>
       <Button type="submit" variant="brand" size="lg" className="w-full" loading={pending}>
         Set new password
@@ -335,7 +345,6 @@ export function ResetPasswordForm({ token }: { token: string }) {
   );
 }
 
-/** Asks for another verification link. Same anti-enumeration rule as above. */
 export function ResendVerificationForm() {
   const [pending, setPending] = React.useState(false);
   const [sent, setSent] = React.useState(false);

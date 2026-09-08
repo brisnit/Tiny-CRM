@@ -47,14 +47,26 @@ function forms(source: string): string[] {
 }
 
 describe("credentials cannot be transmitted in a URL", () => {
-  test("every form in auth-forms.tsx posts", () => {
+  /**
+   * Two ways to be safe, and only two.
+   *
+   * An explicit `method="post"`, or a server action passed as `action={…}` —
+   * React renders the latter as `method="POST"` with a hidden action id, and it
+   * cannot be submitted as a GET. The reset form uses the second form since it
+   * was changed to complete regardless of how it is submitted.
+   *
+   * What must never appear is a form with neither, because a form with no
+   * method defaults to GET and puts every field in the query string.
+   */
+  const posts = (form: string) => /method="post"/i.test(form) || /\saction=\{/.test(form);
+
+  test("no auth form can be submitted as a GET", () => {
     const found = forms(read("src/components/app/auth-forms.tsx"));
     assert.ok(found.length >= 5, `expected the five auth forms, found ${found.length}`);
     for (const form of found) {
-      assert.match(
-        form,
-        /method="post"/,
-        `an auth form defaults to GET, which puts its fields in the query string: ${form}`,
+      assert.ok(
+        posts(form),
+        `an auth form has neither method="post" nor a server action, so it defaults to GET: ${form}`,
       );
     }
   });
@@ -65,9 +77,8 @@ describe("credentials cannot be transmitted in a URL", () => {
       const source = read(file);
       if (!/type="password"/.test(source)) continue;
       for (const form of forms(source)) {
-        assert.match(
-          form,
-          /method="post"/,
+        assert.ok(
+          posts(form),
           `${file} has a password field and a form that defaults to GET: ${form}`,
         );
       }
@@ -82,7 +93,7 @@ describe("credentials cannot be transmitted in a URL", () => {
     const source = read("src/components/app/auth-forms.tsx");
     const reset = source.slice(source.indexOf("export function ResetPasswordForm"));
     const form = forms(reset)[0] ?? "";
-    assert.match(form, /method="post"/, "the reset-password form defaults to GET");
+    assert.ok(posts(form), "the reset-password form defaults to GET");
   });
 
   test("the observability payload cannot carry a query string", () => {
