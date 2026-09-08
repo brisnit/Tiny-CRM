@@ -34,3 +34,11 @@ regexes = [
   '''postgresql://tinycrm:tinycrm@(127\.0\.0\.1|localhost)''',
   '''postgresql://tinycrm_app:tinycrm_app@(127\.0\.0\.1|localhost)''',
 ]
+
+[[allowlists]]
+description = "Two false positives from the generic-api-key heuristic, matched as exact literals so they cannot shield anything else. The first is a fabricated Resend-shaped key in the redaction test — the fixture exists precisely to prove such a key is scrubbed, and it is assembled from fragments at runtime so no key-shaped literal is committed; this entry covers the one commit where it was written as a single literal. The second is a list of SQL migration filenames that happens to follow the word \"keys\". Neither is a credential, and neither has ever been valid anywhere."
+regexTarget = "match"
+regexes = [
+  '''TestKey", "0123456789abcdefghij''',
+  '''keys", "003_deferrable_constraints\.sql''',
+]
