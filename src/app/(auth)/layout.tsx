@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { appOrigin } from "@/lib/origin";
 import { LogoLockup } from "@/components/brand/logo";
 
 export default function AuthLayout({ children }: LayoutProps<"/">) {
@@ -13,7 +14,14 @@ export default function AuthLayout({ children }: LayoutProps<"/">) {
       </div>
       <p className="mt-10 text-center text-[12px] text-faint">
         <Link href="/" className="transition-colors hover:text-muted">
-          Back to tinycrm.app
+          {/*
+            Was the literal "tinycrm.app" — a domain that does not resolve —
+            shown on every sign-in, sign-up and password-reset page. The link
+            itself was relative and correct, so the text quietly named the
+            wrong product to anyone reading it while recovering their account.
+            Derived from the canonical origin now, so it cannot drift again.
+          */}
+          Back to {new URL(appOrigin()).hostname}
         </Link>
       </p>
     </div>
