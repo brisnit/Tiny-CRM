@@ -180,7 +180,9 @@ describe("a reset completes regardless of how the form was submitted", () => {
     assert.equal(result.ok, true, `a generated-style password was refused: ${JSON.stringify(result)}`);
 
     const user = await db.user.findUniqueOrThrow({ where: { id: userId }, select: { passwordHash: true } });
-    assert.ok(await bcrypt.compare(generated, user.passwordHash), "the new password was not the one submitted");
-    assert.ok(!user.passwordHash.includes(generated), "the password is stored in readable form");
+    const hash = user.passwordHash;
+    assert.ok(hash, "the account lost its password hash");
+    assert.ok(await bcrypt.compare(generated, hash), "the new password was not the one submitted");
+    assert.ok(!hash.includes(generated), "the password is stored in readable form");
   });
 });
