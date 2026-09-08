@@ -51,7 +51,10 @@ describe("account-security entry points exist", () => {
     // same template shape a few lines above, so an unanchored match finds that
     // one instead and the assertion silently tests the wrong thing.
     const resetBody = auth.slice(auth.indexOf("export async function requestPasswordReset"));
-    const path = /\$\{env\.appUrl\}(\/[a-z-]+)\?token=/.exec(resetBody)?.[1];
+    // Deliberately agnostic about how the origin is produced — that moved to
+    // appOrigin() when reset links were found going out on a deployment
+    // hostname. What this test is for is that the link and the route agree.
+    const path = /\$\{[^}]+\}(\/[a-z-]+)\?token=/.exec(resetBody)?.[1];
     assert.equal(path, "/reset-password", `the reset email links to ${path}`);
     assert.ok(existsSync(resolve(ROOT, `src/app/(auth)${path}/page.tsx`)));
   });
@@ -59,7 +62,7 @@ describe("account-security entry points exist", () => {
   test("the verification email's link matches the route that serves it", () => {
     const auth = read("src/lib/actions/auth.ts");
     const sendBody = auth.slice(auth.indexOf("async function sendVerificationEmail"));
-    const path = /\$\{env\.appUrl\}(\/[a-z-]+)\?token=/.exec(sendBody)?.[1];
+    const path = /\$\{[^}]+\}(\/[a-z-]+)\?token=/.exec(sendBody)?.[1];
     assert.equal(path, "/verify-email", `the verification email links to ${path}`);
     assert.ok(existsSync(resolve(ROOT, "src/app/(auth)/verify-email/page.tsx")));
   });

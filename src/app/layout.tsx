@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { appOrigin } from "@/lib/origin";
 import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "sonner";
@@ -22,7 +23,9 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
+  // Was `NEXT_PUBLIC_SITE_URL`, which is not configured on any environment, so
+  // every absolute metadata URL resolved to localhost in production.
+  metadataBase: new URL(appOrigin()),
   title: {
     default: "Tiny CRM — Your whole business. Organized.",
     template: "%s · Tiny CRM",

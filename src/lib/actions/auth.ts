@@ -9,7 +9,7 @@ import { recordAudit } from "@/lib/audit";
 import { PASSWORD_HASH_COST, PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
 import { revokeAllSessions, truncateIp } from "@/lib/auth/sessions";
 import { issueToken, redeemToken, revokeTokens } from "@/lib/auth/tokens";
-import { env } from "@/lib/env";
+import { appOrigin } from "@/lib/origin";
 import { log } from "@/lib/logger";
 import { passwordChangedEmail, passwordResetEmail, sendMail, verificationEmail } from "@/lib/mail";
 import { raiseAlert } from "@/lib/security/alerts";
@@ -65,7 +65,7 @@ async function sendVerificationEmail(
 ): Promise<{ sent: boolean }> {
   try {
     const { token, expiresAt } = await issueToken(userId, "email_verification", { requestIp: ip });
-    const link = `${env.appUrl}/verify-email?token=${encodeURIComponent(token)}`;
+    const link = `${appOrigin()}/verify-email?token=${encodeURIComponent(token)}`;
     const hours = Math.max(1, Math.round((expiresAt.getTime() - Date.now()) / 3_600_000));
     const result = await sendMail({ to: email, ...verificationEmail(link, hours) });
     if (!result.delivered) {
@@ -197,7 +197,7 @@ export async function requestPasswordReset(
   }
 
   const { token, expiresAt } = await issueToken(user.id, "password_reset", { requestIp: ip });
-  const link = `${env.appUrl}/reset-password?token=${encodeURIComponent(token)}`;
+  const link = `${appOrigin()}/reset-password?token=${encodeURIComponent(token)}`;
   const minutes = Math.round((expiresAt.getTime() - Date.now()) / 60_000);
 
   const result = await sendMail({ to: user.email, ...passwordResetEmail(link, minutes) });

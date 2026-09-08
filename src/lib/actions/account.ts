@@ -15,7 +15,7 @@ import {
 } from "@/lib/auth/mfa";
 import { raiseAlert } from "@/lib/security/alerts";
 import { AppError } from "@/lib/errors";
-import { env } from "@/lib/env";
+import { appOrigin } from "@/lib/origin";
 import { sendMail, verificationEmail } from "@/lib/mail";
 import { clientAddress, enforceRateLimit } from "@/lib/rate-limit";
 import { zId } from "@/lib/validation/common";
@@ -51,7 +51,7 @@ export async function requestEmailVerification(): Promise<ActionResult<{ sent: b
       const { token, expiresAt } = await issueToken(actor.identity.id, "email_verification", {
         requestIp: ip,
       });
-      const link = `${env.appUrl}/verify-email?token=${encodeURIComponent(token)}`;
+      const link = `${appOrigin()}/verify-email?token=${encodeURIComponent(token)}`;
       const hours = Math.round((expiresAt.getTime() - Date.now()) / 3_600_000);
 
       const result = await sendMail({
