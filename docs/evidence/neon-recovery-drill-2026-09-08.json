@@ -1,0 +1,154 @@
+{
+  "drill": "Neon provider recovery, 2026-09-08",
+  "project": "weathered-cherry-25475190",
+  "parentBranch": "br-bitter-mountain-ardohdic",
+  "recoveryBranch": {
+    "id": "br-frosty-silence-arz4nty0",
+    "name": "restore-drill-2026-09-08"
+  },
+  "requestedTimestamp": "2026-09-08T17:22:25Z",
+  "sourceLsn": "0/2241CF0",
+  "resolvedParentTimestamp": "2026-09-08T17:22:16Z",
+  "resolvedParentLsn": "0/2241D28",
+  "initSource": "parent-data",
+  "createdAt": "2026-09-08T17:22:49Z",
+  "branchApiAckMs": 688,
+  "branchReadyMs": 2668,
+  "sourceFingerprint": "1a371684472ed0047db4f92c91abd1bb0c3595c7224ac6d109fb818f5399fe92",
+  "fixtureRowCount": 24,
+  "tenants": {
+    "A": "c092c4fc1a49a4bffa0bc072cb21a48ce",
+    "B": "cfaefd7f4349c4a2a838401db3509f099"
+  },
+  "fixtureIds": {
+    "Workspace": [
+      {
+        "id": "c092c4fc1a49a4bffa0bc072cb21a48ce",
+        "note": "RESTORE_PROBE_A"
+      },
+      {
+        "id": "cfaefd7f4349c4a2a838401db3509f099",
+        "note": "RESTORE_PROBE_B"
+      }
+    ],
+    "User": [
+      {
+        "id": "cc71f3d4353e64ea4bed6a1ea1ff15751",
+        "note": "RESTORE_PROBE_A"
+      },
+      {
+        "id": "cf42e8e62aa8340699f9f3ece56133ebf",
+        "note": "RESTORE_PROBE_B"
+      }
+    ],
+    "WorkspaceMember": [
+      {
+        "id": "cb556ca9a662c4acba9ffb9a087e17ae7",
+        "note": "RESTORE_PROBE_A"
+      },
+      {
+        "id": "ca85b75a086e34e6db26094814ad8de3c",
+        "note": "RESTORE_PROBE_B"
+      }
+    ],
+    "Company": [
+      {
+        "id": "ceff2bb6529104c598fe66a5af3f1d271",
+        "note": "RESTORE_PROBE_A"
+      },
+      {
+        "id": "cd1792a8bdf84492daa6ef50c401ae2b4",
+        "note": "RESTORE_PROBE_B"
+      }
+    ],
+    "Contact": [
+      {
+        "id": "c61193868e59749c5ac839cfc2dcf6dc6",
+        "note": "RESTORE_PROBE_A"
+      },
+      {
+        "id": "c24e32c7d0494454ea02ad4bcb133d6e9",
+        "note": "RESTORE_PROBE_B"
+      }
+    ],
+    "Pipeline": [
+      {
+        "id": "c70c1fbc6f143420a8241db2ae36bea4e",
+        "note": "RESTORE_PROBE_A"
+      },
+      {
+        "id": "c07974d63d9ff4d23942dbaa4d909696e",
+        "note": "RESTORE_PROBE_B"
+      }
+    ],
+    "PipelineStage": [
+      {
+        "id": "ca20a7d81b90344f99a08a06c5bc5292e",
+        "note": "RESTORE_PROBE_A"
+      },
+      {
+        "id": "c5fc68da224a54b3d89264eeb266ec5cd",
+        "note": "RESTORE_PROBE_B"
+      }
+    ],
+    "Deal": [
+      {
+        "id": "c2ef58fbda36e41a9ac3955ed5467e13e",
+        "note": "RESTORE_PROBE_A"
+      },
+      {
+        "id": "cdf8a0c0d42134b98a711c086e40331a4",
+        "note": "RESTORE_PROBE_B"
+      }
+    ],
+    "Task": [
+      {
+        "id": "cf473e178b4564453a4adf69e25f17efc",
+        "note": "RESTORE_PROBE_A"
+      },
+      {
+        "id": "c7966770c76a148389e974e1b622cb780",
+        "note": "RESTORE_PROBE_B"
+      }
+    ],
+    "Note": [
+      {
+        "id": "c5d4f3f6a560a4abb9cd5e7df1f0397a2",
+        "note": "RESTORE_PROBE_A"
+      },
+      {
+        "id": "c08f530e324c14338a6b8fa3c74a423c2",
+        "note": "RESTORE_PROBE_B"
+      }
+    ],
+    "AuditLog": [
+      {
+        "id": "cb8ff458ad124457fbe24eef29c9802da",
+        "note": "RESTORE_PROBE_A"
+      },
+      {
+        "id": "cab790f00e1274e058d416bcec72724fe",
+        "note": "RESTORE_PROBE_B"
+      }
+    ],
+    "SecurityAlert": [
+      {
+        "id": "ce0ab22b084dd4ba99df73400ceee298e",
+        "note": "RESTORE_PROBE_A"
+      },
+      {
+        "id": "c901db966a5a84f27b43800cd8955d6b6",
+        "note": "RESTORE_PROBE_B"
+      }
+    ]
+  },
+  "result": "38 assertions passed, 0 failed, identically on production and on the recovery branch",
+  "schemaComparison": {
+    "tables": 47,
+    "columns": 539,
+    "constraints": 464,
+    "policies": 42,
+    "indexes": 190,
+    "identical": true
+  }
+}
