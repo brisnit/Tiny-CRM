@@ -123,4 +123,33 @@ describe("the outbound Sentry request carries no secrets", () => {
     }
     assert.match(body, /contacts\.ts/, `the failing file never reached Sentry:\n${body}`);
   });
+
+  test("no field capable of carrying an IP address or a location is ever sent", async () => {
+    // Sentry's UI showed "Geography: Ashburn, United States" under Contexts →
+    // User for an event this application triggered, which read as though we had
+    // transmitted a location. We had not: the event carried no `user` key at
+    // all, and Ashburn is where the Vercel function runs (x-vercel-id reported
+    // execution region iad1), not where the caller was — the caller's nearest
+    // edge on that same request was sfo1. Sentry infers the IP of whatever
+    // connection submits the event, so what it geolocated was our own server.
+    //
+    // This locks the property that made that conclusion possible: the payload
+    // is an allowlist, and none of the fields Sentry would read a person's
+    // location out of are in it. Without this a later field addition could
+    // start transmitting one and the UI would look exactly the same.
+    const body = await capturedBody();
+    for (const field of ["ip_address", "geo", "request", "server_name", "contexts", "breadcrumbs", "threads", "modules"]) {
+      assert.ok(!body.includes(`"${field}"`), `${field} is being transmitted:\n${body}`);
+    }
+  });
+
+  test("the user object carries an id and nothing else", async () => {
+    const body = await capturedBody({ route: "/contacts/[id]", operation: "GET" });
+    const { user } = JSON.parse(body);
+    // Unauthenticated errors send no user at all; authenticated ones send only
+    // an id. Either is fine — anything *else* in there is not.
+    if (user !== undefined) {
+      assert.deepEqual(Object.keys(user), ["id"], `the user object grew a field: ${JSON.stringify(user)}`);
+    }
+  });
 });
