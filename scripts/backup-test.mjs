@@ -434,8 +434,29 @@ async function main() {
   rmSync(BACKUP_DIR, { recursive: true, force: true });
 }
 
+// Interrupting this script used to leave the datasource on postgresql, which a
+// later `git add -A` committed. The signal handlers are the difference between
+// "restored unless something goes wrong" and "restored".
+let restored = false;
+function restoreSqlite() {
+  if (restored) return;
+  restored = true;
+  try {
+    execFileSync("node", ["scripts/use-provider.mjs", "sqlite"], { cwd: ROOT, stdio: "ignore" });
+  } catch {
+    console.error("Could not restore the SQLite datasource — run `node scripts/use-provider.mjs sqlite`.");
+  }
+}
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => {
+    restoreSqlite();
+    process.exit(130);
+  });
+}
+
 main().catch((error) => {
   console.error(error);
-  execFileSync("node", ["scripts/use-provider.mjs", "sqlite"], { cwd: ROOT, stdio: "ignore" });
+  restoreSqlite();
   process.exit(1);
 });

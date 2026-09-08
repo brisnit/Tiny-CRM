@@ -29,6 +29,46 @@ if (managed) {
   process.exit(2);
 }
 
+/**
+ * Puts the datasource back the way a fresh clone expects it.
+ *
+ * `finally` covers a normal exit and a thrown error. It does not cover Ctrl+C:
+ * Node's default SIGINT handling terminates the process without unwinding, so
+ * an interrupted run left prisma/schema.prisma on postgresql. A later
+ * `git add -A` then committed the flip — twice — and turned five CI jobs red
+ * on a commit that had nothing to do with the database.
+ *
+ * tests/unit/committed-datasource.test.ts is the backstop. This is the fix.
+ *
+ * One nuance, established by testing it rather than assuming: this script runs
+ * its children with `spawnSync`, and Node cannot dispatch a signal handler
+ * while blocked in a synchronous call. A SIGINT sent to this process alone is
+ * therefore queued until the child returns. That is not how Ctrl+C behaves —
+ * the terminal signals the whole process group, the child dies, the sync call
+ * returns, and the queued handler runs. Verified: a group SIGINT mid-run
+ * leaves the datasource on sqlite.
+ */
+let restored = false;
+function restoreSqlite() {
+  if (restored) return;
+  restored = true;
+  console.log("\nRestoring the SQLite datasource…");
+  try {
+    node(["scripts/use-provider.mjs", "sqlite"]);
+    execFileSync("npx", ["prisma", "generate"], { cwd: ROOT, stdio: "inherit" });
+  } catch (error) {
+    console.error("Could not restore the SQLite datasource:", error?.message ?? error);
+    console.error("Run `node scripts/use-provider.mjs sqlite` before committing.");
+  }
+}
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => {
+    restoreSqlite();
+    process.exit(130);
+  });
+}
+
 const env = { ...process.env, DATABASE_URL };
 
 console.log("\nSwitching the datasource to PostgreSQL…");
@@ -94,11 +134,7 @@ try {
   );
   status = result.status ?? 1;
 } finally {
-  // Always restore SQLite, or the next `npm test` runs against a schema whose
-  // provider no longer matches its migration history.
-  console.log("\nRestoring the SQLite datasource…");
-  node(["scripts/use-provider.mjs", "sqlite"]);
-  execFileSync("npx", ["prisma", "generate"], { cwd: ROOT, stdio: "inherit" });
+  restoreSqlite();
 }
 
 process.exit(status);

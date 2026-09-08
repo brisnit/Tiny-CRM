@@ -20,13 +20,20 @@ import { resolve } from "node:path";
  * This asserts on the *committed* blob rather than the working tree, precisely
  * so it stays true while `npm run test:pg` is mid-run and has the file
  * legitimately flipped.
+ *
+ * `DATASOURCE_GUARD_REV` exists so the guard itself can be proven rather than
+ * trusted. A guard that has only ever been observed passing is indistinguishable
+ * from one that cannot fail, and this one was written in response to a mistake
+ * that had already reached main twice. Pointing it at a revision known to carry
+ * the wrong provider is what demonstrates it detects anything at all.
  */
 describe("the committed schema is the one a fresh clone needs", () => {
   test("prisma/schema.prisma is committed with provider = sqlite", () => {
     const root = resolve(import.meta.dirname, "../..");
     let committed: string;
     try {
-      committed = execFileSync("git", ["show", "HEAD:prisma/schema.prisma"], {
+      const rev = process.env.DATASOURCE_GUARD_REV ?? "HEAD";
+      committed = execFileSync("git", ["show", `${rev}:prisma/schema.prisma`], {
         cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
       });
     } catch {

@@ -80,7 +80,7 @@ requires enforced MFA.
 | 21 | **Content-Security-Policy** | 🟢 GREEN | **Fixed a live defect.** A static `script-src 'self'` was blocking Next's own bootstrap and breaking hydration in production — invisible because E2E only ran against dev. Now nonce-based, verified in a browser against a production build with zero violations. |
 | 22 | **Database integrity** | 🟢 GREEN | Foreign keys throughout, compound uniqueness, indexes on every access path, `SetNull` below the workspace, and now deferrable constraints so a logical restore is possible at all. |
 | 23 | **Performance at scale** | 🟢 GREEN | Measured on both engines. At 100k contacts / 500k activities, every screen query under 83 ms on PostgreSQL, 260 ms on SQLite. `npm run test:perf` fails the build on a budget breach. |
-| 24 | **PostgreSQL portability** | 🟡 YELLOW | **Was GREEN — corrected downwards.** 433 tests, the seed, the differences probe and both load tiers execute against a real PostgreSQL 17.10, and two high-severity defects were found by executing rather than reasoning (`docs/POSTGRES-VERIFICATION.md`). **Gap found during the recovery drill: production runs PostgreSQL 18.6.** Every test in CI, and every claim in this document, is one major version behind the engine that actually serves customers. The drill itself ran against 18.6 and passed, which is real but narrow evidence. Until the matrix runs 18, portability is asserted rather than demonstrated. |
+| 24 | **PostgreSQL portability** | 🟢 GREEN | **Was downgraded to YELLOW, now earned back.** Production runs PostgreSQL 18.6 while the matrix ran only 17.10 — found by reading the server version during the recovery drill, not by any test. CI now runs **both** engines: run `34263437206` on `288ade4` shows `Test suite (PostgreSQL 17)` and `Test suite (PostgreSQL 18)` both green, 9/9 jobs. Independently, the full suite ran against a real PostgreSQL 18.6 Neon branch — the same engine *and* provider as production — 435 passed, 0 failed, 0 skipped. 17 is kept rather than replaced: it is the version two high-severity defects were found on. |
 
 ## Infrastructure and operations
 
@@ -98,6 +98,29 @@ requires enforced MFA.
 | 34 | **CI/CD** | 🟢 GREEN | **Was YELLOW.** Eight jobs covering static checks, both engines, RLS with a restricted login, the restore drill, the config gate in both directions, performance budgets, dependency evidence and a secret scan. **A full green run is now observed from a clean checkout** (`ff931ca`, all eight jobs). It earned its place immediately: the previous push went red on the secret scan, catching two false-positive fixtures before they became somebody's confusing build failure. The previous grade's stated reason — "no git remote, so GitHub has never executed it" — was already stale; 25 runs had executed. |
 | 35 | **File uploads** | 🟡 YELLOW | Disabled (`STORAGE_DRIVER=none`, flag off). Validation implemented and tested: extension allowlist with SVG deliberately excluded, magic bytes against the declared type, generated storage keys, attachment-only downloads. **Gap: no malware scanner. `REQUIRE_MALWARE_SCAN=true` fails uploads closed until one exists.** |
 | 36 | **Data retention & privacy** | 🔴 **RED** | `docs/DATA-CLASSIFICATION.md` classifies every store and derives storage, logging, AI, export and retention rules. Export exists; workspace deletion is a complete cascade; the audit trail survives it. **Gap: no automated purging of anything except sessions, tokens, completed jobs and rate-limit counters. No privacy notice. No data-processing agreement with the AI provider. A customer asking "how long do you keep my deleted data" gets "indefinitely".** |
+
+---
+
+---
+
+## Verification ledger
+
+Four different claims get made about PostgreSQL in this repository and they are
+not interchangeable. This table exists because they were once written as if they
+were, and because "CI GREEN" was claimed in the same breath as a CI run that had
+not finished — and which, when it did, was red for a reason introduced by the
+same commit.
+
+| Claim | What it means | Status |
+|---|---|---|
+| **PG 18 direct verification** | The suite run by hand against a real PostgreSQL 18.6 Neon branch — same engine and provider as production | 435 passed / 0 failed / 0 skipped |
+| **PG 17 CI verification** | The `Test suite (PostgreSQL 17)` job on a GitHub run | green — run `34263437206`, commit `288ade4` |
+| **PG 18 CI verification** | The `Test suite (PostgreSQL 18)` job on a GitHub run | green — run `34263437206`, commit `288ade4` |
+| **Full CI verification** | *Every* job on a completed GitHub run | green — 9/9, run `34263437206`, commit `288ade4` |
+
+**The rule this ledger encodes:** a GitHub run that has not completed is
+PENDING, never green, and a job's result is never inferred from another job's.
+A local run proves the engine; only a completed GitHub run proves CI.
 
 ---
 
