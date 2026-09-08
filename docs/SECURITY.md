@@ -568,3 +568,50 @@ alert — otherwise an attacker who triggers one alert, waits for it to be
 acknowledged and triggers it again would be invisible. Metadata passes through
 the same redaction as the audit log. **Without `ALERT_WEBHOOK_URL` nothing is
 delivered**; alerts are recorded and logged only.
+
+## What the error tracker receives
+
+Sentry is integrated without its SDK. The SDK's value is automatic
+instrumentation — breadcrumbs, request bodies, local variables, attached scope —
+which is precisely what must not happen for an application holding other
+people's customer records. The payload is assembled by hand in
+`src/lib/observability.ts` from an explicit allowlist:
+
+    the error's type and message, a stack trace, the request id, the route,
+    and the ids of the user and workspace.
+
+Never: CRM field values, note or document contents, AI prompts or completions,
+passwords, tokens, API keys, request bodies, cookies or headers.
+
+Message and stack are scrubbed by the same rule, because a Node stack *begins*
+with the error message. Tag values must be identifier-shaped or they are dropped
+and replaced by their length — deciding whether a string is customer data is not
+something a regular expression can do, but whether it looks like an identifier
+is. Query strings are stripped from the route at the sink, because Next hands
+`onRequestError` a path that includes one and this application serves
+`/api/search?q=...`.
+
+`tests/unit/observability-payload.test.ts` asserts these properties against the
+serialized request body rather than against the scrubbing functions, because
+every leak found so far was in the assembly and not in a function: each one was
+introduced while every per-function test passed.
+
+### Geography in the Sentry UI
+
+Sentry displays a `Geography` under Contexts → User. It is not ours.
+
+The application transmits no IP address and no location: there is no
+`ip_address`, `geo`, `request`, `server_name` or `contexts` field in the
+payload, and events raised on unauthenticated routes carry no `user` object at
+all. Sentry infers the IP of whatever connection submits an event, and every
+event is submitted by the server. The first verification event displayed
+"Ashburn, United States" — Ashburn is where the Vercel function runs
+(`x-vercel-id` reported execution region `iad1`), while the caller's nearest
+edge on that same request was `sfo1`. What Sentry geolocated was our own
+serverless function, not a user.
+
+If storing even that is unwanted, the authoritative control is Sentry's own
+project setting — Security & Privacy → **Prevent Storing of IP Addresses** —
+since the inference happens at ingest, after the payload leaves this
+application. There is nothing to change on our side to stop sending it; we do
+not send it.
