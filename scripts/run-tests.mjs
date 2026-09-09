@@ -9,6 +9,7 @@
 import { execSync, spawnSync } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
+import { ENGINE_SUITE_GLOB } from "./engine-suites.mjs";
 
 const TEST_DB = resolve(process.cwd(), "test.db");
 const DATABASE_URL = `file:${TEST_DB}`;
@@ -24,9 +25,7 @@ execSync("npx prisma migrate deploy", {
   env: { ...process.env, DATABASE_URL },
 });
 
-// tests/browser is deliberately excluded: those suites need the application
-// running and a Chromium to drive it, which `npm run test:browser` sets up.
-const pattern = process.argv[2] ?? "tests/{unit,integration,security,portability}/**/*.test.ts";
+const pattern = process.argv[2] ?? ENGINE_SUITE_GLOB;
 
 const result = spawnSync(
   "npx",

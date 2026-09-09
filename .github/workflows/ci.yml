@@ -169,8 +169,16 @@ jobs:
           DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
           NODE_OPTIONS: --require ./scripts/allow-server-modules.cjs
 
+      # `node --test` exits 0 when its pattern matches nothing, so a broken
+      # pattern would turn this job green having run no tests. This fails first.
+      - name: Every test file belongs to a suite
+        run: node scripts/engine-suites.mjs --check
+
       - name: Run every suite against PostgreSQL
-        run: npx tsx --test --test-concurrency=1 "tests/**/*.test.ts"
+        # The pattern comes from scripts/engine-suites.mjs so this cannot drift
+        # from what the runner scripts use — which is exactly how tests/browser
+        # ended up being run here with no application to drive.
+        run: npx tsx --test --test-concurrency=1 "$(node scripts/engine-suites.mjs --glob)"
         env:
           NODE_ENV: test
           NODE_OPTIONS: --require ./scripts/allow-server-modules.cjs

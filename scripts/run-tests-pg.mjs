@@ -11,6 +11,7 @@
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
+import { ENGINE_SUITE_GLOB } from "./engine-suites.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const node = (args, options = {}) =>
@@ -117,9 +118,7 @@ try {
     );
   }
 
-  // tests/browser is deliberately excluded: those suites need the application
-  // running and a Chromium to drive it, which `npm run test:browser` sets up.
-  const pattern = process.argv[2] ?? "tests/{unit,integration,security,portability}/**/*.test.ts";
+  const pattern = process.argv[2] ?? ENGINE_SUITE_GLOB;
   const result = spawnSync(
     "npx",
     ["tsx", "--test", "--test-reporter=spec", "--test-concurrency=1", pattern],
