@@ -33,6 +33,28 @@ export type DemoCredentials = { email: string; password: string };
  * production build entirely, rather than merely keeping the button hidden.
  */
 /**
+ * A full navigation, deliberately, not `router.push()` + `router.refresh()`.
+ *
+ * Those two race. The push starts an RSC fetch for the destination; the refresh
+ * invalidates the tree underneath it; and when the destination's layout answers
+ * with a server `redirect()` — which it does for any account that has no
+ * workspace yet — the two interleave and leave the router holding a shell with
+ * no page in it. The result is a blank screen that never settles: 34KB of HTML
+ * and nothing visible.
+ *
+ * Found by signing in as an account that had signed up and never finished
+ * onboarding. The server was innocent throughout — a hard reload of the very
+ * same URL rendered correctly, and so did fetching it directly.
+ *
+ * Crossing a session boundary is exactly where a full navigation is worth its
+ * cost: the new cookie is guaranteed to be on the request, and any redirect the
+ * layout wants to perform resolves server-side before anything renders.
+ */
+function goHard(href: string) {
+  window.location.assign(href);
+}
+
+/**
  * `method="post"` on every form here is a security control, not a formality.
  *
  * These forms submit through `onSubmit`, which calls `preventDefault()`, so in
@@ -64,7 +86,6 @@ export type DemoCredentials = { email: string; password: string };
  * and needs server actions, not a method attribute.
  */
 export function LoginForm({ demo = null }: { demo?: DemoCredentials | null }) {
-  const router = useRouter();
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -85,8 +106,7 @@ export function LoginForm({ demo = null }: { demo?: DemoCredentials | null }) {
       setPending(false);
       return;
     }
-    router.push("/home");
-    router.refresh();
+    goHard("/home");
   }
 
   return (
@@ -116,7 +136,6 @@ export function LoginForm({ demo = null }: { demo?: DemoCredentials | null }) {
 }
 
 export function SignupForm({ plan }: { plan: string }) {
-  const router = useRouter();
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -144,8 +163,7 @@ export function SignupForm({ plan }: { plan: string }) {
     // Sign straight in — asking someone to log in immediately after signing up
     // is friction with no purpose.
     await signIn("credentials", { email, password, redirect: false });
-    router.push(plan !== "free" ? `/welcome?plan=${plan}` : "/welcome");
-    router.refresh();
+    goHard(plan !== "free" ? `/welcome?plan=${plan}` : "/welcome");
   }
 
   return (
@@ -188,14 +206,12 @@ export function SignupForm({ plan }: { plan: string }) {
  * from shipping a working login to everyone.
  */
 function DemoHint({ credentials }: { credentials: DemoCredentials }) {
-  const router = useRouter();
   const [pending, setPending] = React.useState(false);
 
   async function useDemo() {
     setPending(true);
     await signIn("credentials", { ...credentials, redirect: false });
-    router.push("/home");
-    router.refresh();
+    goHard("/home");
   }
 
   return (
@@ -281,6 +297,35 @@ export function ResetPasswordForm({ token }: { token: string }) {
   const [state, formAction, pending] = React.useActionState(resetPasswordAction, null);
 
   /**
+   * Controlled, because React resets an uncontrolled form after a form action
+   * completes — including when the action *failed*.
+   *
+   * That reset is what produced the loop. Chrome's "Use Strong Password" fills
+   * and submits; if the two fields disagree at that moment the server answers
+   * "those passwords do not match"; React then wiped both fields, so the person
+   * was returned to an empty form with no way to correct anything. Repeating
+   * the suggestion repeated the wipe.
+   *
+   * Holding the values in state survives the reset, so a mismatch now leaves
+   * both fields exactly as they were with the message above them.
+   *
+   * The mount sync below is the other half. A password manager can fill before
+   * React hydrates, and a value React never saw would be erased by the first
+   * render. This reads whatever is already in the DOM and adopts it.
+   */
+  const [password, setPassword] = React.useState("");
+  const [confirm, setConfirm] = React.useState("");
+  const passwordRef = React.useRef<HTMLInputElement>(null);
+  const confirmRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    const filled = passwordRef.current?.value ?? "";
+    const filledConfirm = confirmRef.current?.value ?? "";
+    if (filled) setPassword((current) => current || filled);
+    if (filledConfirm) setConfirm((current) => current || filledConfirm);
+  }, []);
+
+  /**
    * A form *action*, not an onSubmit handler.
    *
    * The previous version submitted through `onSubmit` and called
@@ -320,22 +365,28 @@ export function ResetPasswordForm({ token }: { token: string }) {
       <input type="hidden" name="token" value={token} />
       <Field label="New password" htmlFor="password" hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}>
         <Input
+          ref={passwordRef}
           id="password"
           name="password"
           type="password"
           autoComplete="new-password"
           required
           minLength={PASSWORD_MIN_LENGTH}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
         />
       </Field>
       <Field label="Confirm new password" htmlFor="confirm">
         <Input
+          ref={confirmRef}
           id="confirm"
           name="confirm"
           type="password"
           autoComplete="new-password"
           required
           minLength={PASSWORD_MIN_LENGTH}
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
         />
       </Field>
       <Button type="submit" variant="brand" size="lg" className="w-full" loading={pending}>

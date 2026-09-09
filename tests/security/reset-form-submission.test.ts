@@ -80,18 +80,29 @@ describe("a reset completes regardless of how the form was submitted", () => {
     );
   });
 
-  test("the password fields stay uncontrolled", () => {
-    // A password manager writes straight to the DOM. Controlled state here
-    // would race with it — the thing this form is being fixed for.
+  test("the password fields are controlled, with onChange", () => {
+    // This assertion is the reverse of what it said first, and the reversal is
+    // the point.
+    //
+    // The original theory was that controlled state races a password manager,
+    // so the fields were left uncontrolled. Testing in Chromium disproved it: a
+    // simulated fill survived a re-render intact, and the real mechanism turned
+    // out to be React resetting an uncontrolled form after a form action — so a
+    // failed action wiped both fields and produced the loop.
+    //
+    // Controlled values survive that reset. Autofill still works because Chrome
+    // dispatches an input event, which onChange receives; a fill that lands
+    // before hydration is adopted by the mount sync asserted below.
     const forms = read("src/components/app/auth-forms.tsx");
     const reset = forms.slice(
       forms.indexOf("export function ResetPasswordForm"),
       forms.indexOf("export function ResendVerificationForm"),
     );
-    const passwordInputs = [...reset.matchAll(/<Input[^>]*type="password"[\s\S]*?\/>/g)];
-    assert.equal(passwordInputs.length, 2, "expected the new-password and confirm fields");
-    for (const [input] of passwordInputs) {
-      assert.doesNotMatch(input, /\svalue=/, `a password field became controlled: ${input.slice(0, 80)}`);
+    const inputs = [...reset.matchAll(/<Input[\s\S]*?\/>/g)].map(([m]) => m).filter((m) => /type="password"/.test(m));
+    assert.equal(inputs.length, 2, "expected the new-password and confirm fields");
+    for (const input of inputs) {
+      assert.match(input, /value=\{/, `a password field is uncontrolled, so a failed action clears it: ${input.slice(0, 60)}`);
+      assert.match(input, /onChange=\{/, "a controlled password field without onChange cannot receive an autofill");
     }
   });
 
@@ -184,5 +195,55 @@ describe("a reset completes regardless of how the form was submitted", () => {
     assert.ok(hash, "the account lost its password hash");
     assert.ok(await bcrypt.compare(generated, hash), "the new password was not the one submitted");
     assert.ok(!hash.includes(generated), "the password is stored in readable form");
+  });
+
+  test("a failed action cannot clear the password fields", () => {
+    // The loop's real mechanism. React resets an uncontrolled form after a form
+    // action completes — including when it failed — so a "passwords do not
+    // match" answer wiped both fields and returned the person to an empty form
+    // with nothing to correct. Chrome's strong-password flow hits that answer,
+    // which is why repeating the suggestion repeated the wipe.
+    //
+    // Controlled values survive the reset. Reproduced against production before
+    // the fix: both fields went from filled to empty on a mismatch.
+    const forms = read("src/components/app/auth-forms.tsx");
+    const reset = forms.slice(
+      forms.indexOf("export function ResetPasswordForm"),
+      forms.indexOf("export function ResendVerificationForm"),
+    );
+    for (const field of ["password", "confirm"]) {
+      const input = new RegExp(`id="${field}"[\\s\\S]{0,320}?/>`, "m").exec(reset)?.[0] ?? "";
+      assert.match(input, /value=\{/, `the ${field} field is uncontrolled, so a failed action clears it`);
+      assert.match(input, /onChange=\{/, `the ${field} field has no onChange, so a password manager's fill is lost`);
+    }
+  });
+
+  test("a value filled before hydration is adopted rather than erased", () => {
+    // A password manager can fill before React hydrates. Without this, the
+    // first render would replace a value React never saw with an empty string.
+    const forms = read("src/components/app/auth-forms.tsx");
+    const reset = forms.slice(forms.indexOf("export function ResetPasswordForm"));
+    assert.match(reset, /useEffect\(/, "nothing adopts a pre-hydration autofill");
+    assert.match(reset, /passwordRef|confirmRef/, "the fields are not reachable to read what the browser filled");
+  });
+
+  test("crossing the session boundary uses a full navigation", () => {
+    // Separate bug, same screen. router.push() + router.refresh() race: the
+    // push fetches the destination, the refresh invalidates underneath it, and
+    // when the layout answers with a server redirect the two interleave and
+    // leave a shell with no page in it — a blank screen that never settles.
+    //
+    // Verified against production: the client-side path was blank while a hard
+    // reload of the identical URL rendered correctly.
+    for (const file of ["src/components/app/auth-forms.tsx", "src/components/app/onboarding.tsx"]) {
+      const source = read(file);
+      const racing = source.split("\n").filter((line, i, all) =>
+        /router\.push\(/.test(line) && /router\.refresh\(\)/.test(all[i + 1] ?? ""));
+      assert.equal(
+        racing.length,
+        0,
+        `${file} still pairs router.push with router.refresh, which blanks the screen on a redirect`,
+      );
+    }
   });
 });

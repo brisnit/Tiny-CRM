@@ -54,8 +54,10 @@ export function OnboardingFlow({
   function finish() {
     startTransition(async () => {
       await completeOnboarding();
-      router.push(selectedPlan && selectedPlan !== "free" ? "/settings/billing" : "/home");
-      router.refresh();
+      // A full navigation, not push + refresh: completing onboarding changes
+      // what the layout will do with this account, and the two racing left a
+      // blank screen that never settled. See auth-forms.tsx.
+      window.location.assign(selectedPlan && selectedPlan !== "free" ? "/settings/billing" : "/home");
     });
   }
 
