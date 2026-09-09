@@ -6,7 +6,12 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { recordAudit } from "@/lib/audit";
-import { PASSWORD_HASH_COST, PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
+import {
+  PASSWORD_HASH_COST,
+  PASSWORD_MAX_BYTES,
+  PASSWORD_MIN_LENGTH,
+  passwordByteLength,
+} from "@/lib/auth/password";
 import { revokeAllSessions, truncateIp } from "@/lib/auth/sessions";
 import { issueToken, redeemToken, revokeTokens } from "@/lib/auth/tokens";
 import { appOrigin } from "@/lib/origin";
@@ -33,15 +38,28 @@ import { zEmail, zShortText } from "@/lib/validation/common";
  *    before storage; the plaintext is never logged or audited.
  */
 
+/**
+ * The one password rule, shared by sign-up and reset so the two cannot drift.
+ *
+ * The upper bound is measured in bytes rather than characters because that is
+ * the unit bcrypt truncates on; see PASSWORD_MAX_BYTES. This is the
+ * authoritative check. The `maxLength` attributes in the forms are a UX
+ * convenience and are counted in a different unit, so they neither replace this
+ * nor can they reject something this would have allowed.
+ */
+const zPassword = z
+  .string()
+  .min(PASSWORD_MIN_LENGTH, `Use at least ${PASSWORD_MIN_LENGTH} characters`)
+  .refine((value) => passwordByteLength(value) <= PASSWORD_MAX_BYTES, {
+    message:
+      `That password is too long — the limit is ${PASSWORD_MAX_BYTES} bytes. ` +
+      "Most characters count as one, but accented letters and emoji count as several.",
+  });
+
 const signUpSchema = z.object({
   name: zShortText.min(1, "What should we call you?"),
   email: zEmail,
-  password: z
-    .string()
-    .min(PASSWORD_MIN_LENGTH, `Use at least ${PASSWORD_MIN_LENGTH} characters`)
-    // bcrypt silently truncates beyond 72 bytes, so a longer value is a lie
-    // about strength rather than extra security.
-    .max(72, "Passwords are limited to 72 characters"),
+  password: zPassword,
 });
 
 export type SignUpResult = { ok: true } | { ok: false; error: string; field?: string };
@@ -219,10 +237,7 @@ export async function requestPasswordReset(
 
 const resetSchema = z.object({
   token: z.string().trim().min(20).max(200),
-  password: z
-    .string()
-    .min(PASSWORD_MIN_LENGTH, `Use at least ${PASSWORD_MIN_LENGTH} characters`)
-    .max(72, "Passwords are limited to 72 characters"),
+  password: zPassword,
 });
 
 export type ResetResult = { ok: true } | { ok: false; error: string; field?: string };
@@ -422,14 +437,23 @@ export async function resendVerification(
  * finish.
  *
  * Reproduced in Chromium by submitting the form without firing the submit
- * event. What did *not* reproduce, and had to be ruled out first: React
- * clobbering the autofilled value. The inputs are uncontrolled, and a
- * simulated password-manager fill survived a re-render intact.
+ * event. A form action fixes the class rather than the symptom: the submission
+ * is handled wherever it comes from — React, a password manager, or a browser
+ * with no JavaScript at all — because the server receives the POST and acts on
+ * it instead of re-rendering a blank form.
  *
- * A form action fixes the class rather than the symptom. The submission is now
- * handled wherever it comes from — React, a password manager, or a browser with
- * no JavaScript at all — because the server receives the POST and acts on it
- * instead of re-rendering a blank form.
+ * The first attempt at that fix was wrong in a way worth recording. React
+ * clobbering the autofilled value *was* real — an earlier run said otherwise,
+ * but it forced re-renders with blur and resize events, which do not re-render
+ * a component whose state has not changed, so it never exercised the path. The
+ * fix for the blank form introduced controlled inputs; React's input
+ * reconciliation compares its prop against the live DOM value, so the empty
+ * state overwrote Chrome's generated password the moment the action started.
+ * The form is uncontrolled again, and has one password field rather than two —
+ * see the component for why the second field is what made state look necessary.
+ *
+ * There is deliberately no confirm-password check here any more. It was not a
+ * security boundary, and its only failure mode was the one that wiped the form.
  *
  * Everything security-relevant stays in `resetPassword` below it: token
  * hashing, expiry, single use, session revocation, the notification email and
@@ -441,13 +465,8 @@ export async function resetPasswordAction(
 ): Promise<ResetResult> {
   const token = String(formData.get("token") ?? "");
   const password = String(formData.get("password") ?? "");
-  const confirm = String(formData.get("confirm") ?? "");
 
-  // Checked on the server so it also holds when the form is submitted without
-  // JavaScript, and so the two fields cannot disagree silently.
-  if (password !== confirm) {
-    return { ok: false, error: "Those passwords do not match.", field: "confirm" };
-  }
-
+  // Length and byte-length are enforced by `resetSchema` inside `resetPassword`,
+  // so they hold for a submission that arrives without JavaScript too.
   return resetPassword({ token, password });
 }

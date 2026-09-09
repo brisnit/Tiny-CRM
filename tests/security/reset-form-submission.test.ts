@@ -23,13 +23,20 @@ const read = (p: string) => readFileSync(resolve(ROOT, p), "utf8");
  * Chrome does exactly that after "Use Strong Password" — which is why it then
  * offers "Update password?": from the browser's side the form *was* submitted.
  *
- * What was ruled out first, by simulating a password-manager fill in Chromium:
- * React clobbering the value. The inputs are uncontrolled and the filled value
- * survived a re-render intact. The failure was the submission path, not state.
+ * The fix for that produced a second regression, and then a third, which is
+ * why the shape of this form is now pinned from two directions. React resets an
+ * uncontrolled form after a completed action, so a failed one wiped the fields;
+ * making the fields controlled fixed that and introduced the worse bug, because
+ * React's input reconciliation compares its prop against the live DOM value and
+ * overwrote a password manager's write with empty state.
  *
- * These cover the token semantics that make the loop survivable and the fix
- * correct. The browser half — that a real password manager can drive it — is
- * not something a server test can prove, and is not claimed here.
+ * An earlier run reported that the clobber "did not reproduce". It was wrong:
+ * it forced re-renders with blur and resize events, which do not re-render a
+ * component whose state has not changed, so it never exercised the path. The
+ * behavioural half of this now lives in tests/browser/password-reset.test.ts,
+ * where a real Chromium fills the field the way a password manager does. What
+ * is left here is the token semantics that make the loop survivable, and the
+ * structural properties that the browser suite would only catch after the fact.
  */
 
 const created: string[] = [];
@@ -80,30 +87,41 @@ describe("a reset completes regardless of how the form was submitted", () => {
     );
   });
 
-  test("the password fields are controlled, with onChange", () => {
-    // This assertion is the reverse of what it said first, and the reversal is
-    // the point.
+  test("the password field is uncontrolled, and there is only one of it", () => {
+    // Both halves are load-bearing, and this assertion has now been written in
+    // both directions, so the reasoning is recorded rather than the verdict.
     //
-    // The original theory was that controlled state races a password manager,
-    // so the fields were left uncontrolled. Testing in Chromium disproved it: a
-    // simulated fill survived a re-render intact, and the real mechanism turned
-    // out to be React resetting an uncontrolled form after a form action — so a
-    // failed action wiped both fields and produced the loop.
+    // Uncontrolled, because Chrome's generated-password flow writes to the DOM
+    // without dispatching an event React can see. Any state mirroring this
+    // field stays empty, and React's reconciliation writes that empty value
+    // back over the browser's — reproduced in Chromium, and the reason the
+    // field emptied itself mid-submit.
     //
-    // Controlled values survive that reset. Autofill still works because Chrome
-    // dispatches an input event, which onChange receives; a fill that lands
-    // before hydration is adopted by the mount sync asserted below.
+    // One field, because the confirm field is what made state look necessary:
+    // its mismatch answer was the only failure worth preserving values across.
+    // Without it the remaining failures are a password below the minimum and a
+    // dead token, and neither wants the old value back.
     const forms = read("src/components/app/auth-forms.tsx");
     const reset = forms.slice(
       forms.indexOf("export function ResetPasswordForm"),
       forms.indexOf("export function ResendVerificationForm"),
     );
-    const inputs = [...reset.matchAll(/<Input[\s\S]*?\/>/g)].map(([m]) => m).filter((m) => /type="password"/.test(m));
-    assert.equal(inputs.length, 2, "expected the new-password and confirm fields");
-    for (const input of inputs) {
-      assert.match(input, /value=\{/, `a password field is uncontrolled, so a failed action clears it: ${input.slice(0, 60)}`);
-      assert.match(input, /onChange=\{/, "a controlled password field without onChange cannot receive an autofill");
-    }
+
+    assert.doesNotMatch(reset, /id="confirm"/, "the confirm field is back");
+    assert.equal(
+      [...reset.matchAll(/<PasswordInput/g)].length,
+      1,
+      "the reset form no longer has exactly one password field",
+    );
+
+    const input = /<PasswordInput[\s\S]*?\/>/.exec(reset)?.[0] ?? "";
+    assert.doesNotMatch(input, /value=\{/, "the password field is controlled again");
+    assert.doesNotMatch(input, /onChange=\{/, "the password field mirrors into state again");
+    assert.doesNotMatch(
+      reset,
+      /useState/,
+      "the reset form holds React state, which is how the password got overwritten",
+    );
   });
 
   test("password-manager metadata is correct on every auth form", () => {
@@ -111,9 +129,8 @@ describe("a reset completes regardless of how the form was submitted", () => {
     // A password manager needs a stable name, a stable id and the right
     // autocomplete token to offer generation and to save afterwards.
     for (const [label, needle] of [
-      ["sign-in password", /id="password"\s+name="password"\s+type="password"\s+autoComplete="current-password"/],
-      ["new password", /id="password"[\s\S]{0,120}autoComplete="new-password"/],
-      ["confirm password", /id="confirm"[\s\S]{0,120}autoComplete="new-password"/],
+      ["sign-in password", /id="password"\s+name="password"\s+autoComplete="current-password"/],
+      ["new password", /id="password"[\s\S]{0,160}autoComplete="new-password"/],
       ["email", /id="email"\s+name="email"\s+type="email"\s+autoComplete="email"/],
     ] as const) {
       assert.match(forms, needle, `${label} is missing password-manager metadata`);
@@ -154,9 +171,10 @@ describe("a reset completes regardless of how the form was submitted", () => {
     assert.equal(second.ok, false, "a spent reset token was accepted a second time");
   });
 
-  test("a mismatch is refused without spending the token", async () => {
-    // The user can try again — which is the whole point of not consuming a
-    // token on anything short of success.
+  test("a password below the minimum is refused without spending the token", async () => {
+    // The confirm field is gone, so this is the failure mode that replaced the
+    // mismatch: the person can try again, which is the whole point of not
+    // consuming a token on anything short of success.
     const userId = await account();
     const { issueToken } = await import("../../src/lib/auth/tokens");
     const { resetPasswordAction } = await import("../../src/lib/actions/auth");
@@ -164,13 +182,39 @@ describe("a reset completes regardless of how the form was submitted", () => {
 
     const form = new FormData();
     form.set("token", token);
-    form.set("password", "one-password-here-11");
-    form.set("confirm", "a-different-password-22");
+    form.set("password", "short");
     const result = await resetPasswordAction(null, form);
-    assert.equal(result.ok, false);
+    assert.equal(result.ok, false, "a five-character password was accepted");
 
     const row = await db.authToken.findFirst({ where: { userId }, select: { usedAt: true } });
-    assert.equal(row?.usedAt, null, "a mismatched attempt spent the token");
+    assert.equal(row?.usedAt, null, "a rejected password spent the token");
+  });
+
+  test("the length limit is enforced in bytes, on the server", async () => {
+    // bcrypt truncates at 72 *bytes* and says nothing about it, so anything
+    // past that is a lie about strength. The forms carry a `maxlength`, but it
+    // counts UTF-16 code units: 72 emoji are 288 bytes and would sail through
+    // it. The check that matters is therefore the server's, and it has to be
+    // measured in the unit bcrypt actually truncates on.
+    const userId = await account();
+    const { issueToken } = await import("../../src/lib/auth/tokens");
+    const { resetPasswordAction } = await import("../../src/lib/actions/auth");
+    const { PASSWORD_MAX_BYTES, passwordByteLength } = await import("../../src/lib/auth/password");
+
+    // Comfortably inside any character count, comfortably past the byte limit.
+    const overLimit = "🔐".repeat(20); // 20 characters, 80 bytes
+    assert.ok(overLimit.length < PASSWORD_MAX_BYTES, "the fixture is not shorter than the limit in characters");
+    assert.ok(passwordByteLength(overLimit) > PASSWORD_MAX_BYTES, "the fixture is not over the limit in bytes");
+
+    const { token } = await issueToken(userId, "password_reset", {});
+    const form = new FormData();
+    form.set("token", token);
+    form.set("password", overLimit);
+    const result = await resetPasswordAction(null, form);
+    assert.equal(result.ok, false, "a password past bcrypt's byte limit was accepted");
+
+    const row = await db.authToken.findFirst({ where: { userId }, select: { usedAt: true } });
+    assert.equal(row?.usedAt, null, "an over-long password spent the token");
   });
 
   test("a value arriving only in FormData still completes the reset", async () => {
@@ -186,7 +230,6 @@ describe("a reset completes regardless of how the form was submitted", () => {
     const form = new FormData();
     form.set("token", token);
     form.set("password", generated);
-    form.set("confirm", generated);
     const result = await resetPasswordAction(null, form);
     assert.equal(result.ok, true, `a generated-style password was refused: ${JSON.stringify(result)}`);
 
@@ -197,34 +240,49 @@ describe("a reset completes regardless of how the form was submitted", () => {
     assert.ok(!hash.includes(generated), "the password is stored in readable form");
   });
 
-  test("a failed action cannot clear the password fields", () => {
-    // The loop's real mechanism. React resets an uncontrolled form after a form
-    // action completes — including when it failed — so a "passwords do not
-    // match" answer wiped both fields and returned the person to an empty form
-    // with nothing to correct. Chrome's strong-password flow hits that answer,
-    // which is why repeating the suggestion repeated the wipe.
-    //
-    // Controlled values survive the reset. Reproduced against production before
-    // the fix: both fields went from filled to empty on a mismatch.
-    const forms = read("src/components/app/auth-forms.tsx");
-    const reset = forms.slice(
-      forms.indexOf("export function ResetPasswordForm"),
-      forms.indexOf("export function ResendVerificationForm"),
-    );
-    for (const field of ["password", "confirm"]) {
-      const input = new RegExp(`id="${field}"[\\s\\S]{0,320}?/>`, "m").exec(reset)?.[0] ?? "";
-      assert.match(input, /value=\{/, `the ${field} field is uncontrolled, so a failed action clears it`);
-      assert.match(input, /onChange=\{/, `the ${field} field has no onChange, so a password manager's fill is lost`);
+  test("every password field in the product can be revealed", () => {
+    // A masked field the person cannot check is how a typo becomes a lockout,
+    // and it is the reason a confirm field felt necessary in the first place.
+    // The control replaces it, so it has to actually be everywhere.
+    for (const [file, expected] of [
+      ["src/components/app/auth-forms.tsx", 3], // sign in, sign up, reset
+      ["src/components/app/security-settings.tsx", 1], // turning two-factor off
+    ] as const) {
+      const source = read(file);
+      assert.doesNotMatch(
+        source,
+        /<Input[^>]*type="password"/,
+        `${file} has a raw password input with no way to reveal it`,
+      );
+      assert.equal(
+        [...source.matchAll(/<PasswordInput/g)].length,
+        expected,
+        `${file} does not have the expected number of password fields`,
+      );
     }
   });
 
-  test("a value filled before hydration is adopted rather than erased", () => {
-    // A password manager can fill before React hydrates. Without this, the
-    // first render would replace a value React never saw with an empty string.
-    const forms = read("src/components/app/auth-forms.tsx");
-    const reset = forms.slice(forms.indexOf("export function ResetPasswordForm"));
-    assert.match(reset, /useEffect\(/, "nothing adopts a pre-hydration autofill");
-    assert.match(reset, /passwordRef|confirmRef/, "the fields are not reachable to read what the browser filled");
+  test("the reveal control cannot submit the form it sits in", () => {
+    // A bare <button> inside a form defaults to type="submit", which would turn
+    // "let me check what I typed" into a submission — and on the reset form,
+    // into a spent token.
+    const source = read("src/components/ui/password-input.tsx");
+    assert.match(source, /<button\s+type="button"/, "the reveal control can submit the form");
+    assert.match(
+      source,
+      /aria-label=\{label\}/,
+      "the control's accessible name does not track its state",
+    );
+  });
+
+  test("the reveal control holds no password state", () => {
+    // It toggles an attribute on the same node. Anything that mirrors the value
+    // — or that keys the input off visibility, remounting it — loses whatever
+    // the browser wrote there.
+    const source = read("src/components/ui/password-input.tsx");
+    assert.doesNotMatch(source, /useState<string>|useState\(""\)/, "the control mirrors the password into state");
+    assert.doesNotMatch(source, /key=\{/, "the input is keyed, so toggling remounts it and drops the value");
+    assert.match(source, /type=\{visible \? "text" : "password"\}/, "visibility is not a plain attribute swap");
   });
 
   test("crossing the session boundary uses a full navigation", () => {

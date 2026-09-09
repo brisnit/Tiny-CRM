@@ -1,15 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { AlertCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Field } from "@/components/ui/label";
 import { requestPasswordReset, resendVerification, resetPasswordAction, signUp } from "@/lib/actions/auth";
-import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
+import { PASSWORD_MAX_BYTES, PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
 
 function ErrorNote({ children }: { children: React.ReactNode }) {
   if (!children) return null;
@@ -116,7 +116,7 @@ export function LoginForm({ demo = null }: { demo?: DemoCredentials | null }) {
         <Input id="email" name="email" type="email" autoComplete="email" required placeholder="you@company.com" />
       </Field>
       <Field label="Password" htmlFor="password">
-        <Input id="password" name="password" type="password" autoComplete="current-password" required />
+        <PasswordInput id="password" name="password" autoComplete="current-password" required />
       </Field>
       <div className="-mt-1 text-right">
         <a
@@ -180,14 +180,13 @@ export function SignupForm({ plan }: { plan: string }) {
         htmlFor="password"
         hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}
       >
-        <Input
+        <PasswordInput
           id="password"
           name="password"
-          type="password"
           autoComplete="new-password"
           required
           minLength={PASSWORD_MIN_LENGTH}
-          maxLength={72}
+          maxLength={PASSWORD_MAX_BYTES}
         />
       </Field>
       <Button type="submit" variant="brand" size="lg" className="w-full" loading={pending}>
@@ -293,56 +292,37 @@ export function ForgotPasswordForm() {
 
 /** Completes a password reset with the token from the emailed link. */
 export function ResetPasswordForm({ token }: { token: string }) {
-  const router = useRouter();
   const [state, formAction, pending] = React.useActionState(resetPasswordAction, null);
 
   /**
-   * Controlled, because React resets an uncontrolled form after a form action
-   * completes — including when the action *failed*.
+   * One password field, and it is uncontrolled. Both halves of that are the fix
+   * for a P0 that this form produced twice.
    *
-   * That reset is what produced the loop. Chrome's "Use Strong Password" fills
-   * and submits; if the two fields disagree at that moment the server answers
-   * "those passwords do not match"; React then wiped both fields, so the person
-   * was returned to an empty form with no way to correct anything. Repeating
-   * the suggestion repeated the wipe.
+   * **Uncontrolled**, because the browser writes here and React must not argue.
+   * Chrome's "Use Strong Password" sets the DOM value without dispatching an
+   * event React can see, so React state stays empty; React's input
+   * reconciliation compares its prop against the *live DOM value*, finds them
+   * different, and writes the empty prop back. The field visibly emptied the
+   * instant the action started — reproduced in Chromium, and exactly what the
+   * bug report described. Nothing here mirrors the password into state.
    *
-   * Holding the values in state survives the reset, so a mismatch now leaves
-   * both fields exactly as they were with the message above them.
+   * **One field**, because the second one is what made state look necessary.
+   * React resets an uncontrolled form after a form action completes, including
+   * a failed one, so a "those passwords do not match" answer wiped both fields
+   * and left nothing to correct. Controlling them preserved the values and
+   * caused the clobber above. Deleting the confirm field removes the failure
+   * mode instead of defending against it: the two remaining failures are a
+   * password under the minimum — where the value is worth nothing anyway — and
+   * a dead token, where the person needs a fresh link rather than their typing
+   * back. Confirmation was never a security boundary, and the show/hide control
+   * covers the typo it existed for. It also leaves a single
+   * `autocomplete="new-password"` field on the page, which is what Chrome's
+   * generation flow expects.
    *
-   * The mount sync below is the other half. A password manager can fill before
-   * React hydrates, and a value React never saw would be erased by the first
-   * render. This reads whatever is already in the DOM and adopts it.
-   */
-  const [password, setPassword] = React.useState("");
-  const [confirm, setConfirm] = React.useState("");
-  const passwordRef = React.useRef<HTMLInputElement>(null);
-  const confirmRef = React.useRef<HTMLInputElement>(null);
-
-  React.useEffect(() => {
-    const filled = passwordRef.current?.value ?? "";
-    const filledConfirm = confirmRef.current?.value ?? "";
-    if (filled) setPassword((current) => current || filled);
-    if (filledConfirm) setConfirm((current) => current || filledConfirm);
-  }, []);
-
-  /**
-   * A form *action*, not an onSubmit handler.
-   *
-   * The previous version submitted through `onSubmit` and called
-   * `preventDefault()`. Anything that submitted the form another way never ran
-   * that handler, so the browser posted to the page, Next answered 200, and the
-   * person landed back on a freshly rendered empty form with the token still in
-   * the URL — able to repeat it forever without ever consuming the token.
-   *
-   * Chrome does exactly that after "Use Strong Password", which is why it then
-   * offers to update the saved credential: from the browser's point of view the
-   * password form *was* submitted. With a form action the submission is handled
-   * wherever it originates — React, a password manager, or no JavaScript at all.
-   *
-   * The fields stay uncontrolled deliberately. A password manager writes
-   * straight to the DOM, and the value it writes is what FormData reads; adding
-   * controlled state here would create the very race this form is being fixed
-   * for.
+   * A form *action*, not `onSubmit`: a handler calling `preventDefault()` is
+   * skipped by anything that submits the form another way, which is how the
+   * original loop posted to the page, got a 200, and re-rendered an empty form
+   * with the token still live and unconsumed.
    */
   if (state?.ok) {
     return (
@@ -350,7 +330,9 @@ export function ResetPasswordForm({ token }: { token: string }) {
         <p className="text-body">
           Your password is changed, and every other session has been signed out.
         </p>
-        <Button variant="brand" size="lg" className="w-full" onClick={() => router.push("/login")}>
+        {/* A full navigation. The reset revoked every session, so the client
+            router's cached tree belongs to an identity that no longer exists. */}
+        <Button variant="brand" size="lg" className="w-full" onClick={() => goHard("/login")}>
           Sign in
         </Button>
       </div>
@@ -363,30 +345,22 @@ export function ResetPasswordForm({ token }: { token: string }) {
       {/* The token already travels in the URL; carrying it in the form is what
           lets a submission from any source complete the reset. */}
       <input type="hidden" name="token" value={token} />
-      <Field label="New password" htmlFor="password" hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}>
-        <Input
-          ref={passwordRef}
+      <Field
+        label="New password"
+        htmlFor="password"
+        hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}
+      >
+        <PasswordInput
           id="password"
           name="password"
-          type="password"
           autoComplete="new-password"
           required
           minLength={PASSWORD_MIN_LENGTH}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-      </Field>
-      <Field label="Confirm new password" htmlFor="confirm">
-        <Input
-          ref={confirmRef}
-          id="confirm"
-          name="confirm"
-          type="password"
-          autoComplete="new-password"
-          required
-          minLength={PASSWORD_MIN_LENGTH}
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
+          // Convenience only, and counted in a different unit than the rule it
+          // approximates: the real limit is PASSWORD_MAX_BYTES bytes and lives
+          // in the schema. Being looser in bytes than the server, it cannot
+          // reject a password the server would have taken.
+          maxLength={PASSWORD_MAX_BYTES}
         />
       </Field>
       <Button type="submit" variant="brand" size="lg" className="w-full" loading={pending}>

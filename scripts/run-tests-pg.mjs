@@ -117,7 +117,9 @@ try {
     );
   }
 
-  const pattern = process.argv[2] ?? "tests/**/*.test.ts";
+  // tests/browser is deliberately excluded: those suites need the application
+  // running and a Chromium to drive it, which `npm run test:browser` sets up.
+  const pattern = process.argv[2] ?? "tests/{unit,integration,security,portability}/**/*.test.ts";
   const result = spawnSync(
     "npx",
     ["tsx", "--test", "--test-reporter=spec", "--test-concurrency=1", pattern],

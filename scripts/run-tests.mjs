@@ -24,7 +24,9 @@ execSync("npx prisma migrate deploy", {
   env: { ...process.env, DATABASE_URL },
 });
 
-const pattern = process.argv[2] ?? "tests/**/*.test.ts";
+// tests/browser is deliberately excluded: those suites need the application
+// running and a Chromium to drive it, which `npm run test:browser` sets up.
+const pattern = process.argv[2] ?? "tests/{unit,integration,security,portability}/**/*.test.ts";
 
 const result = spawnSync(
   "npx",

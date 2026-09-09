@@ -16,6 +16,35 @@ export const PASSWORD_HASH_COST = 12;
 export const PASSWORD_MIN_LENGTH = 12;
 
 /**
+ * The upper bound, in **bytes** — not characters.
+ *
+ * bcrypt truncates its input at 72 bytes and says nothing about it, so a longer
+ * password is a lie about strength: every candidate sharing the first 72 bytes
+ * opens the account. The limit therefore has to be refused rather than silently
+ * absorbed.
+ *
+ * Bytes, because that is the unit bcrypt actually counts. A JavaScript string's
+ * `.length` is UTF-16 code units, and an HTML `maxlength` counts something
+ * similar; either measure lets 72 "characters" of accented Latin, CJK or emoji
+ * cross the byte limit unnoticed. `maxlength` in the markup is a convenience
+ * that keeps a runaway paste out of the request — it is never the check, and it
+ * is deliberately looser in bytes than this one so it cannot reject a password
+ * the server would have accepted.
+ */
+export const PASSWORD_MAX_BYTES = 72;
+
+/**
+ * UTF-8 byte length, measured the same way in a browser and on the server.
+ *
+ * `TextEncoder` rather than `Buffer`, because this constant and its helper are
+ * imported by client components for their length hints, and `Buffer` is not a
+ * browser global.
+ */
+export function passwordByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+/**
  * True when a stored hash was produced with weaker parameters than current
  * policy, so it can be transparently upgraded on the user's next sign-in.
  */

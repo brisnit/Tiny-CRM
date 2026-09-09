@@ -49,6 +49,29 @@ jobs:
       - run: npm test
 
   # ---------------------------------------------------------------------------
+  # The behaviour that only exists in a browser.
+  #
+  # The password reset loop was fixed three times on reasoning alone and each
+  # fix shipped the next regression, because the mechanism — React's input
+  # reconciliation racing a password manager's DOM write — is invisible to a
+  # server test and to JSDOM. This job starts the app and drives Chromium
+  # against it, filling password fields the way Chrome's generated-password
+  # flow does: through the native setter, dispatching no events.
+  # ---------------------------------------------------------------------------
+  browser:
+    name: Browser regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Password reset and password visibility, in a real browser
+        run: npm run test:browser
+
+  # ---------------------------------------------------------------------------
   # The same suite against real PostgreSQL, plus row-level security.
   #
   # This is the job that proves portability and the second isolation layer. The

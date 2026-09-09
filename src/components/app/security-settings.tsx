@@ -9,6 +9,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Field } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Panel, PanelHeader } from "@/components/ui/surface";
@@ -242,7 +243,14 @@ export function TwoFactor({ state }: { state: MfaState }) {
   const [codes, setCodes] = React.useState<string[] | null>(null);
   const [code, setCode] = React.useState("");
   const [disabling, setDisabling] = React.useState(false);
-  const [password, setPassword] = React.useState("");
+  /**
+   * A ref, not state — the same reason the reset form holds no password state.
+   * Chrome can fill a saved `current-password` without dispatching an event
+   * React sees; mirroring the field into state would leave that state empty,
+   * and the next render (typing the code re-renders this component) would write
+   * the empty value back over what Chrome put there.
+   */
+  const passwordRef = React.useRef<HTMLInputElement>(null);
   const [pending, startTransition] = React.useTransition();
 
   return (
@@ -301,7 +309,7 @@ export function TwoFactor({ state }: { state: MfaState }) {
                 <Button variant="outline" size="xs" onClick={() => { setCode(""); setCodes(null); setDisabling(false); setEnrolling(null); regenerate(); }}>
                   New recovery codes
                 </Button>
-                <Button variant="ghost" size="xs" className="text-rose-600 hover:text-rose-700 dark:text-rose-400" onClick={() => { setCode(""); setPassword(""); setDisabling(true); }}>
+                <Button variant="ghost" size="xs" className="text-rose-600 hover:text-rose-700 dark:text-rose-400" onClick={() => { setCode(""); setDisabling(true); }}>
                   Turn off
                 </Button>
               </div>
@@ -432,12 +440,11 @@ export function TwoFactor({ state }: { state: MfaState }) {
           </DialogHeader>
           <DialogBody className="space-y-3">
             <Field label="Current password" htmlFor="mfa-password">
-              <Input
+              <PasswordInput
+                ref={passwordRef}
                 id="mfa-password"
-                type="password"
                 autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                required
               />
             </Field>
             <Field label="Code, or a recovery code" htmlFor="mfa-off-code">
@@ -454,10 +461,13 @@ export function TwoFactor({ state }: { state: MfaState }) {
             <Button
               variant="danger"
               loading={pending}
-              disabled={!password || !code}
+              disabled={!code}
               onClick={() =>
                 startTransition(async () => {
-                  const result = await disableMfa({ password, code });
+                  const result = await disableMfa({
+                    password: passwordRef.current?.value ?? "",
+                    code,
+                  });
                   if (result.ok) {
                     toast.success("Two-factor authentication turned off");
                     setDisabling(false);

@@ -72,3 +72,7 @@ build.db
 .mail/
 
 .backup-test/
+
+# Throwaway database for the browser regression suite
+browser-test.db
+browser-test.db-*
