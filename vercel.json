@@ -1,6 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
+  "regions": [
+    "pdx1"
+  ],
   "buildCommand": "node scripts/use-provider.mjs auto && prisma generate && next build",
   "crons": [
     {
