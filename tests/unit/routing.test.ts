@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "../..");
@@ -22,78 +22,100 @@ const read = (p: string) => readFileSync(resolve(ROOT, p), "utf8");
  * — "the layout never redirects into its own segment unguarded" — is visible in
  * the source.
  */
-describe("route group layouts cannot redirect to themselves", () => {
-  const layout = read("src/app/(app)/layout.tsx");
+describe("onboarding is not inside the shell-bearing route group", () => {
+  const appLayout = read("src/app/(app)/layout.tsx");
 
-  test("every in-group redirect target is excluded from the shell", () => {
-    // Targets this layout redirects to, e.g. redirect("/welcome").
-    const targets = [...layout.matchAll(/redirect\(\s*["'](\/[^"']*)["']\s*\)/g)].map((m) => m[1]);
-    assert.ok(targets.length > 0, "expected the layout to contain at least one redirect");
+  /**
+   * The original bug: `(app)/layout.tsx` sent an account with no workspace to
+   * /welcome, which lived in the same route group, so the layout ran again, saw
+   * no workspace, and redirected forever.
+   *
+   * The first fix kept /welcome in the group and had the layout read the
+   * `x-pathname` header, returning bare children for that one path. That traded
+   * the loop for something subtler: one layout rendering two structurally
+   * different trees depending on a request header. The client router cannot
+   * follow that — a navigation to /home that server-redirects to /welcome was
+   * reconciled against the layout already in hand and produced an empty tree.
+   * A blank white page, on the only screen such an account can reach, while a
+   * hard load of the identical URL rendered correctly.
+   *
+   * Separate route groups mean separate layouts, so the redirect crosses a
+   * boundary and the router rebuilds instead of reconciling. These assert that
+   * separation rather than the mechanism that replaced it.
+   */
 
-    // Which of those paths are actually served by this same route group?
-    const groupDir = resolve(ROOT, "src/app/(app)");
-    const inGroup = new Set(
-      readdirSync(groupDir, { withFileTypes: true })
-        .filter((e) => e.isDirectory() && !e.name.startsWith("("))
-        .map((e) => `/${e.name}`),
+  test("/welcome is not in the (app) route group", () => {
+    assert.ok(
+      !existsSync(resolve(ROOT, "src/app/(app)/welcome/page.tsx")),
+      "/welcome is back inside the shell-bearing group, where the layout redirects to it",
     );
-
-    for (const target of targets) {
-      if (!inGroup.has(target)) continue; // e.g. /login, outside the group
-      assert.match(
-        layout,
-        new RegExp(`WITHOUT_SHELL[\\s\\S]{0,200}${target.replace("/", "\\/")}`),
-        `${target} is inside the (app) route group and this layout redirects to it, ` +
-          `so it must appear in WITHOUT_SHELL or the redirect is infinite`,
-      );
-    }
+    assert.ok(
+      existsSync(resolve(ROOT, "src/app/(onboarding)/welcome/page.tsx")),
+      "/welcome is missing from the onboarding route group",
+    );
   });
 
-  test("the layout resolves the current path before deciding to redirect", () => {
-    assert.match(layout, /x-pathname/, "the layout must read the forwarded pathname");
+  test("the onboarding group has its own layout", () => {
+    assert.ok(
+      existsSync(resolve(ROOT, "src/app/(onboarding)/layout.tsx")),
+      "without its own layout the onboarding group inherits the root one and loses its auth check",
+    );
+    const layout = read("src/app/(onboarding)/layout.tsx");
+    assert.match(layout, /getActor|requireActor/, "the onboarding layout does not check authentication");
+    assert.match(layout, /redirect\("\/login"\)/, "an unauthenticated visitor is not sent to sign in");
+  });
+
+  test("the app layout does not branch on a request header", () => {
+    // The specific shape that broke the client router.
+    // Code only. The comment above the layout explains why the header is gone,
+    // and matching that would make this test fail on its own explanation.
+    const code = appLayout
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    assert.doesNotMatch(
+      code,
+      /x-pathname/,
+      "the app layout is reading x-pathname again, which makes its tree shape depend on the request",
+    );
+    assert.doesNotMatch(code, /WITHOUT_SHELL/, "the conditional-shell exclusion is back");
+  });
+
+  test("the app layout still redirects an account with no workspace", () => {
+    // The premise. If this changes, the tests above are guarding nothing.
     assert.match(
-      layout,
-      /WITHOUT_SHELL\.has\(pathname\)[\s\S]{0,120}return/,
-      "the exclusion must return before the workspace redirect is reached",
+      appLayout,
+      /workspaces\.length === 0\)\s*redirect\("\/welcome"\)/,
+      "the app layout no longer redirects on an empty workspace list — revisit these assertions",
     );
   });
 
-  test("the proxy forwards the pathname the layout depends on", () => {
-    const proxy = read("src/proxy.ts");
-    assert.match(
-      proxy,
-      /requestHeaders\.set\(\s*["']x-pathname["']/,
-      "src/proxy.ts must set x-pathname on the request, or the layout cannot see it",
+  test("the app layout redirects out of its own route group", () => {
+    // What makes the redirect safe: /welcome is now a different group, so this
+    // cannot loop back into the layout that issued it.
+    assert.ok(
+      !existsSync(resolve(ROOT, "src/app/(app)/welcome")),
+      "the redirect target is inside the redirecting layout's own group",
     );
   });
 
-  test("the onboarding route is matched by the proxy", () => {
-    // If /welcome were excluded from the matcher, x-pathname would be absent
-    // and the loop would return.
-    const proxy = read("src/proxy.ts");
-    const matcher = /matcher:\s*\[([\s\S]*?)\]/.exec(proxy)?.[1] ?? "";
-    assert.doesNotMatch(matcher, /welcome/, "/welcome must not be excluded from the proxy matcher");
+  test("onboarding offers a way out", () => {
+    // Sign out lives in the app shell, which onboarding does not render. An
+    // account that cannot finish setup had no way to sign out and nothing to do
+    // if the screen failed — which is precisely what happened.
+    const escape = read("src/components/app/onboarding-escape.tsx");
+    assert.match(escape, /signOut/, "onboarding has no sign-out, so a rendering failure is an account trap");
+    const layout = read("src/app/(onboarding)/layout.tsx");
+    assert.match(layout, /OnboardingEscape/, "the onboarding layout does not render the escape hatch");
   });
 });
 
-/**
- * The second loop, found by an external tester rather than by this file.
- *
- * The layout sends an account with no workspace to /welcome. /welcome only
- * steps aside once a workspace exists. "Skip setup" set `onboardedAt` and
- * created nothing, so the two guards disagreed permanently and every app route
- * bounced back to onboarding — reported as *"not working for me when I skipped
- * setup. Now its a blank screen."*
- *
- * The behaviour is covered by tests/integration/onboarding-zero-state.test.ts,
- * which is where the real assertion lives. These are the structural companions:
- * they fail fast if someone later "simplifies" the action back into the shape
- * that caused it, without needing a database to notice.
- */
+
 describe("skipping setup cannot recreate the onboarding loop", () => {
   const onboarding = read("src/lib/actions/onboarding.ts");
   const layout = read("src/app/(app)/layout.tsx");
-  const welcome = read("src/app/(app)/welcome/page.tsx");
+  const welcome = read("src/app/(onboarding)/welcome/page.tsx");
 
   test("the layout still redirects an account with no workspace to /welcome", () => {
     // The premise of everything below. If this stops being true the loop is

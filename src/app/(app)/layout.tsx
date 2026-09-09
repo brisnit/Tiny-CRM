@@ -1,4 +1,3 @@
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app/shell";
@@ -7,16 +6,23 @@ import { getActor, resolveReadScope } from "@/lib/auth/access";
 import { readProjectFocus, readScope } from "@/lib/scope";
 
 /**
- * Onboarding lives inside this route group but must not be wrapped in the shell
- * — the shell needs a workspace, and the whole point of /welcome is that there
- * is not one yet. Without this exclusion the layout redirects /welcome to
- * /welcome forever, and a brand-new account can never get past sign-up.
+ * Every route in this group renders the application shell, unconditionally.
  *
- * This was invisible locally: the seeded demo account already has a workspace
- * and `onboardedAt` set, so every local run entered at /home and never rendered
- * /welcome at all. It took a real sign-up on the deployed build to surface it.
+ * It did not always. Onboarding used to live here too, and since the shell
+ * needs a workspace — the one thing an account in onboarding lacks — the layout
+ * read the `x-pathname` header and returned bare children for /welcome instead.
+ * One layout, two structurally different trees, chosen by a request header.
+ *
+ * The client router cannot follow that. Navigating to /home with no workspace
+ * server-redirects to /welcome; the router reconciled the redirect against the
+ * layout it was already holding and produced an empty tree — a blank white page
+ * on the only screen such an account can reach. A hard load of the same URL was
+ * fine, which is what disguised it as an account problem.
+ *
+ * /welcome now lives in its own route group with its own layout, so that
+ * redirect crosses a layout boundary and the router rebuilds rather than
+ * reconciles. Nothing here branches on a header any more, and nothing should.
  */
-const WITHOUT_SHELL = new Set(["/welcome"]);
 
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   // A signed-out visitor is redirected rather than shown an error. src/proxy.ts
@@ -25,9 +31,6 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
   // account (expired, deactivated, deleted).
   const actor = await getActor();
   if (!actor) redirect("/login");
-
-  const pathname = (await headers()).get("x-pathname") ?? "";
-  if (WITHOUT_SHELL.has(pathname)) return <>{children}</>;
 
   const workspaces = actor.memberships;
 
