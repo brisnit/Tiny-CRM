@@ -34,6 +34,7 @@ const companySchema = z.object({
   relationshipStatus: z.enum(RELATIONSHIP_STATUS.values).default("prospect"),
   description: zOptionalText(LIMITS.longText),
   primaryContactId: zOptionalId,
+  ownerId: zOptionalId,
   tags: zTags,
 });
 
@@ -48,6 +49,7 @@ type CompanyUpdate = z.input<typeof companyUpdateSchema>;
 const EDITABLE = [
   "name", "domain", "website", "industry", "size", "location", "revenueRange",
   "type", "leadSource", "relationshipStatus", "description", "primaryContactId",
+  "ownerId",
 ] as const;
 
 export async function createCompany(
@@ -61,7 +63,12 @@ export async function createCompany(
         const workspaceId = actor.workspaceId;
 
         await assertWithinLimit(actor, "companies");
-        await assertRelations(workspaceId, { primaryContactId: data.primaryContactId ?? null });
+        await assertRelations(workspaceId, {
+          primaryContactId: data.primaryContactId ?? null,
+          // Membership-checked in assertRelations: a user who is not a member of
+          // this workspace cannot be made the owner of one of its records.
+          ownerId: data.ownerId ?? null,
+        });
 
         const company = await transaction(async (tx) => {
           const created = await tx.company.create({
@@ -81,7 +88,9 @@ export async function createCompany(
               relationshipStatus: data.relationshipStatus,
               description: data.description ?? null,
               primaryContactId: data.primaryContactId ?? null,
-              ownerId: actor.identity.id,
+              // Defaults to the creator; an explicit owner is accepted only
+              // after assertRelations has confirmed workspace membership.
+              ownerId: data.ownerId ?? actor.identity.id,
             },
             select: { id: true, name: true },
           });
@@ -139,7 +148,12 @@ export async function updateCompany(
           },
         });
 
-        await assertRelations(workspaceId, { primaryContactId: data.primaryContactId ?? null });
+        await assertRelations(workspaceId, {
+          primaryContactId: data.primaryContactId ?? null,
+          // Membership-checked in assertRelations: a user who is not a member of
+          // this workspace cannot be made the owner of one of its records.
+          ownerId: data.ownerId ?? null,
+        });
 
         const patch = pickDefined(data, EDITABLE);
 

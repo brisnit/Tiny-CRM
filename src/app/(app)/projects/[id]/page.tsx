@@ -29,7 +29,7 @@ import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatCompact, formatMoney } from "@/lib/money";
-import { describeDeadline, formatDate, formatDay, timeAgo } from "@/lib/dates";
+import { dateInputValue, describeDeadline, formatDate, formatDay, timeAgo } from "@/lib/dates";
 import { PROJECT_HEALTH, PROJECT_PRIORITY, PROJECT_TYPE, SUBMISSION_STATUS } from "@/lib/enums";
 
 export async function generateMetadata({ params }: PageProps<"/projects/[id]">) {
@@ -123,8 +123,15 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
                 description: project.description,
                 companyId: project.companyId,
                 statusId: project.statusId,
-                targetDate: project.targetDate ? project.targetDate.toISOString().slice(0, 10) : "",
+                targetDate: dateInputValue(project.targetDate),
                 priority: project.priority,
+                startDate: dateInputValue(project.startDate),
+                type: project.type,
+                budgetCents: project.budgetCents === null ? "" : String(project.budgetCents / 100),
+                revenueCents: project.revenueCents === null ? "" : String(project.revenueCents / 100),
+                nextAction: project.nextAction,
+                nextActionDueAt: dateInputValue(project.nextActionDueAt),
+                ownerId: project.ownerId,
               }}
             />
           </>

@@ -29,7 +29,7 @@ export async function getShellData(
     const endOfToday = new Date(now);
     endOfToday.setHours(23, 59, 59, 999);
 
-    const [overdue, tasksToday, projects, notifications, unreadCount, pipelines, statuses] =
+    const [overdue, tasksToday, projects, notifications, unreadCount, pipelines, statuses, memberships] =
       await Promise.all([
         db.task.count({
           where: { ...where, status: { in: ["open", "in_progress"] }, dueAt: { lt: now } },
@@ -74,6 +74,13 @@ export async function getShellData(
           select: { id: true, name: true, workspaceId: true },
           orderBy: { order: "asc" },
         }),
+        // Assignable owners: the membership table for these workspaces, nothing
+        // wider. The server refuses an owner who is not a member, so a broader
+        // list here would only offer choices that fail.
+        db.workspaceMember.findMany({
+          where,
+          select: { workspaceId: true, user: { select: { id: true, name: true, email: true } } },
+        }),
       ]);
 
     const workspaceNames = new Map(workspaces.map((w) => [w.id, w.name]));
@@ -113,6 +120,13 @@ export async function getShellData(
         defaultWorkspaceId: scope !== "all" ? scope : (workspaces[0]?.id ?? null),
         pipelines,
         statuses,
+        members: memberships
+          .map((m) => ({
+            id: m.user.id,
+            name: m.user.name?.trim() || m.user.email,
+            workspaceId: m.workspaceId,
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
       },
       ai: { providerLabel: provider.label, modelBacked: isModelBacked() },
     };
@@ -148,10 +162,11 @@ export async function getEditContext(
   defaultWorkspaceId: string | null;
   pipelines: { id: string; name: string; workspaceId: string; stages: { id: string; name: string }[] }[];
   statuses: { id: string; name: string; workspaceId: string }[];
+  members: { id: string; name: string; workspaceId: string }[];
 }> {
   return withTenantContext({ workspaceIds }, async () => {
     const where = { workspaceId: { in: workspaceIds } };
-    const [pipelines, statuses] = await Promise.all([
+    const [pipelines, statuses, memberships] = await Promise.all([
       db.pipeline.findMany({
         where: { ...where, kind: "deal" },
         select: {
@@ -165,6 +180,13 @@ export async function getEditContext(
         select: { id: true, name: true, workspaceId: true },
         orderBy: { order: "asc" },
       }),
+      // Who a record may be assigned to. The list is the membership table for
+      // these workspaces and nothing wider, so the picker cannot offer — and the
+      // server will not accept — a user from outside the tenant.
+      db.workspaceMember.findMany({
+        where,
+        select: { workspaceId: true, user: { select: { id: true, name: true, email: true } } },
+      }),
     ]);
     return {
       workspaces: actor.memberships
@@ -173,6 +195,13 @@ export async function getEditContext(
       defaultWorkspaceId: workspaceIds[0] ?? null,
       pipelines,
       statuses,
+      members: memberships
+        .map((m) => ({
+          id: m.user.id,
+          name: m.user.name?.trim() || m.user.email,
+          workspaceId: m.workspaceId,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
     };
   });
 }

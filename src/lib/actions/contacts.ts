@@ -48,6 +48,7 @@ const contactSchema = z.object({
   location: zOptionalText(LIMITS.shortText),
   relationshipType: z.enum(RELATIONSHIP_TYPE.values).default("prospect"),
   leadSource: z.enum(LEAD_SOURCE.values).nullish(),
+  ownerId: zOptionalId,
   description: zOptionalText(LIMITS.longText),
   importance: zOptionalInt(0, 100),
   lastContactedAt: zOptionalDate,
@@ -84,7 +85,12 @@ export async function createContact(
         const workspaceId = actor.workspaceId;
 
         await assertWithinLimit(actor, "contacts");
-        await assertRelations(workspaceId, { companyId: data.companyId ?? null });
+        await assertRelations(workspaceId, {
+          companyId: data.companyId ?? null,
+          // Membership-checked in assertRelations: a user who is not a member of
+          // this workspace cannot be made the owner of one of its records.
+          ownerId: data.ownerId ?? null,
+        });
 
         const fullName = `${data.firstName} ${data.lastName}`.trim();
 
@@ -108,8 +114,11 @@ export async function createContact(
               importance: data.importance ?? null,
               lastContactedAt: data.lastContactedAt ?? null,
               nextFollowUpAt: data.nextFollowUpAt ?? null,
-              // Ownership comes from the session, never from the request.
-              ownerId: actor.identity.id,
+              // Defaults to the creator. An explicit owner is allowed, but only
+              // after assertRelations has confirmed they belong to this
+              // workspace — an unchecked id here would hand the record to
+              // someone outside the tenant.
+              ownerId: data.ownerId ?? actor.identity.id,
             },
             select: { id: true, fullName: true, companyId: true },
           });
@@ -175,7 +184,12 @@ export async function updateContact(
           },
         });
 
-        await assertRelations(workspaceId, { companyId: data.companyId ?? null });
+        await assertRelations(workspaceId, {
+          companyId: data.companyId ?? null,
+          // Membership-checked in assertRelations: a user who is not a member of
+          // this workspace cannot be made the owner of one of its records.
+          ownerId: data.ownerId ?? null,
+        });
 
         const firstName = data.firstName ?? existing.firstName;
         const lastName = data.lastName ?? existing.lastName;
@@ -189,7 +203,7 @@ export async function updateContact(
           ...pickDefined(data, [
             "jobTitle", "companyId", "email", "phone", "website", "linkedin", "location",
             "relationshipType", "leadSource", "description", "importance",
-            "lastContactedAt", "nextFollowUpAt",
+            "lastContactedAt", "nextFollowUpAt", "ownerId",
           ]),
         };
 

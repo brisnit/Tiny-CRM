@@ -24,7 +24,7 @@ import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatCompact } from "@/lib/money";
-import { formatDate, formatDay, timeAgo, daysSince } from "@/lib/dates";
+import { dateInputValue, formatDate, formatDay, timeAgo, daysSince } from "@/lib/dates";
 import { LEAD_SOURCE, RELATIONSHIP_STRENGTH, RELATIONSHIP_TYPE } from "@/lib/enums";
 
 export async function generateMetadata({ params }: PageProps<"/contacts/[id]">) {
@@ -108,13 +108,25 @@ export default async function ContactPage({ params }: PageProps<"/contacts/[id]"
               name={contact.fullName}
               version={contact.version}
               context={editContext}
+              // Every field the form can write has to start from what is
+              // stored. A field left out here would open blank and then save
+              // that blank over the real value.
               initial={{
                 firstName: contact.firstName,
                 lastName: contact.lastName,
                 email: contact.email,
+                phone: contact.phone,
                 jobTitle: contact.jobTitle,
                 companyId: contact.companyId,
                 relationshipType: contact.relationshipType,
+                location: contact.location,
+                linkedin: contact.linkedin,
+                website: contact.website,
+                leadSource: contact.leadSource,
+                ownerId: contact.ownerId,
+                description: contact.description,
+                lastContactedAt: dateInputValue(contact.lastContactedAt),
+                nextFollowUpAt: dateInputValue(contact.nextFollowUpAt),
               }}
             />
           </>

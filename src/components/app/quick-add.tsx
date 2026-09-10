@@ -4,7 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
-  Building2, CalendarDays, CheckSquare, FileText, FolderKanban, Landmark, Target, Users,
+  Building2, CalendarDays, CheckSquare, FileText, FolderKanban, Landmark, Plus, Target, Users,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,10 @@ import { Field } from "@/components/ui/label";
 import { OptionSelect } from "@/components/ui/select";
 import { RecordPicker } from "@/components/app/record-picker";
 import { cn } from "@/lib/utils";
-import { PROJECT_PRIORITY, RELATIONSHIP_TYPE, TASK_PRIORITY } from "@/lib/enums";
+import {
+  COMPANY_SIZE, COMPANY_TYPE, LEAD_SOURCE, PROJECT_PRIORITY, PROJECT_TYPE,
+  RELATIONSHIP_STATUS, RELATIONSHIP_TYPE, REVENUE_RANGE, TASK_PRIORITY,
+} from "@/lib/enums";
 import { createContact } from "@/lib/actions/contacts";
 import { createCompany } from "@/lib/actions/companies";
 import { createProject } from "@/lib/actions/projects";
@@ -33,6 +36,12 @@ export type QuickAddContext = {
   defaultWorkspaceId: string | null;
   pipelines: { id: string; name: string; workspaceId: string; stages: { id: string; name: string }[] }[];
   statuses: { id: string; name: string; workspaceId: string }[];
+  /**
+   * Who a record can be assigned to. Only members of the workspaces in scope —
+   * the server refuses an owner who is not one, so offering a wider list here
+   * would only produce errors.
+   */
+  members: { id: string; name: string; workspaceId: string }[];
   /** Pre-links the new record when quick-add is opened from a record page. */
   prefill?: Partial<Record<"contactId" | "companyId" | "dealId" | "projectId" | "opportunityId", string>>;
 };
@@ -145,6 +154,7 @@ export function QuickAddDialog({
             workspaceId={workspaceId}
             dealPipeline={dealPipeline}
             statuses={context.statuses.filter((s) => s.workspaceId === workspaceId)}
+            members={context.members.filter((m) => m.workspaceId === workspaceId)}
           />
         </DialogBody>
 
@@ -162,6 +172,33 @@ export function QuickAddDialog({
 }
 
 /**
+ * Everything past the essentials, folded away.
+ *
+ * Quick add exists to be quick, and a record now has every column it always
+ * had — a dozen inputs in the create dialog would defeat the point. Editing
+ * passes `expanded`, so the same fields are simply all open there.
+ *
+ * A disclosure rather than a second form: the create and edit dialogs render
+ * one component, so a field added here cannot appear in one and be silently
+ * missing from the other. That drift is what made most of a contact
+ * uneditable in the first place.
+ */
+function MoreFields({ expanded, children }: { expanded: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = React.useState(expanded);
+  if (expanded || open) return <div className="space-y-3">{children}</div>;
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen(true)}
+      className="inline-flex items-center gap-1 text-[12px] font-medium text-brand-600 hover:underline dark:text-brand-400"
+    >
+      <Plus className="size-3" />
+      More fields
+    </button>
+  );
+}
+
+/**
  * The fields for one record kind, driven by a plain `form` record.
  *
  * Exported because editing renders exactly these. A separate edit form would
@@ -169,7 +206,7 @@ export function QuickAddDialog({
  * dialog would gain a field the edit dialog silently could not change.
  */
 export function QuickAddFields({
-  kind, form, set, workspaceId, dealPipeline, statuses,
+  kind, form, set, workspaceId, dealPipeline, statuses, members = [], expanded = false,
 }: {
   kind: QuickAddKind;
   form: Record<string, string | null>;
@@ -177,7 +214,21 @@ export function QuickAddFields({
   workspaceId: string;
   dealPipeline?: QuickAddContext["pipelines"][number];
   statuses: { id: string; name: string }[];
+  members?: { id: string; name: string }[];
+  /** Editing shows every field; quick add folds the extras away. */
+  expanded?: boolean;
 }) {
+  const ownerField = (
+    <Field label="Owner">
+      <OptionSelect
+        value={form.ownerId ?? null}
+        onValueChange={set("ownerId")}
+        options={members.map((m) => ({ value: m.id, label: m.name }))}
+        placeholder="Unassigned"
+      />
+    </Field>
+  );
+
   const linkFields = (
     <div className="grid gap-3 sm:grid-cols-2">
       <Field label="Contact">
@@ -233,10 +284,39 @@ export function QuickAddFields({
             <Field label="Company">
               <RecordPicker type="company" value={form.companyId ?? null} onChange={set("companyId")} workspaceId={workspaceId} emptyLabel="No company" />
             </Field>
+            <Field label="Phone">
+              <Input type="tel" value={form.phone ?? ""} onChange={(e) => set("phone")(e.target.value)} />
+            </Field>
             <Field label="Relationship">
               <OptionSelect value={form.relationshipType ?? "prospect"} onValueChange={set("relationshipType")} options={RELATIONSHIP_TYPE.options} />
             </Field>
           </div>
+          <MoreFields expanded={expanded}>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Location">
+                <Input placeholder="City, State" value={form.location ?? ""} onChange={(e) => set("location")(e.target.value)} />
+              </Field>
+              <Field label="LinkedIn">
+                <Input placeholder="https://" value={form.linkedin ?? ""} onChange={(e) => set("linkedin")(e.target.value)} />
+              </Field>
+              <Field label="Website">
+                <Input placeholder="https://" value={form.website ?? ""} onChange={(e) => set("website")(e.target.value)} />
+              </Field>
+              <Field label="Lead source">
+                <OptionSelect value={form.leadSource ?? null} onValueChange={set("leadSource")} options={LEAD_SOURCE.options} placeholder="Unknown" />
+              </Field>
+              {ownerField}
+              <Field label="Last contacted">
+                <Input type="date" value={form.lastContactedAt ?? ""} onChange={(e) => set("lastContactedAt")(e.target.value)} />
+              </Field>
+              <Field label="Next follow-up">
+                <Input type="date" value={form.nextFollowUpAt ?? ""} onChange={(e) => set("nextFollowUpAt")(e.target.value)} />
+              </Field>
+            </div>
+            <Field label="Notes">
+              <Textarea rows={3} value={form.description ?? ""} onChange={(e) => set("description")(e.target.value)} />
+            </Field>
+          </MoreFields>
         </>
       );
 
@@ -254,6 +334,38 @@ export function QuickAddFields({
               <Input value={form.industry ?? ""} onChange={(e) => set("industry")(e.target.value)} />
             </Field>
           </div>
+          <MoreFields expanded={expanded}>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Size">
+                <OptionSelect value={form.size ?? null} onValueChange={set("size")} options={COMPANY_SIZE.options} placeholder="Unknown" />
+              </Field>
+              <Field label="Revenue">
+                <OptionSelect value={form.revenueRange ?? null} onValueChange={set("revenueRange")} options={REVENUE_RANGE.options} placeholder="Unknown" />
+              </Field>
+              <Field label="Location">
+                <Input placeholder="City, State" value={form.location ?? ""} onChange={(e) => set("location")(e.target.value)} />
+              </Field>
+              <Field label="Type">
+                <OptionSelect value={form.type ?? null} onValueChange={set("type")} options={COMPANY_TYPE.options} placeholder="Unknown" />
+              </Field>
+              <Field label="Lead source">
+                <OptionSelect value={form.leadSource ?? null} onValueChange={set("leadSource")} options={LEAD_SOURCE.options} placeholder="Unknown" />
+              </Field>
+              <Field label="Relationship">
+                <OptionSelect value={form.relationshipStatus ?? "prospect"} onValueChange={set("relationshipStatus")} options={RELATIONSHIP_STATUS.options} />
+              </Field>
+              {ownerField}
+              <Field label="Primary contact">
+                <RecordPicker type="contact" value={form.primaryContactId ?? null} onChange={set("primaryContactId")} workspaceId={workspaceId} emptyLabel="No contact" />
+              </Field>
+              <Field label="Domain" hint="Used to match incoming email to this company.">
+                <Input placeholder="example.com" value={form.domain ?? ""} onChange={(e) => set("domain")(e.target.value)} />
+              </Field>
+            </div>
+            <Field label="Notes">
+              <Textarea rows={3} value={form.description ?? ""} onChange={(e) => set("description")(e.target.value)} />
+            </Field>
+          </MoreFields>
         </>
       );
 
@@ -313,6 +425,29 @@ export function QuickAddFields({
               <OptionSelect value={form.priority ?? "medium"} onValueChange={set("priority")} options={PROJECT_PRIORITY.options} />
             </Field>
           </div>
+          <MoreFields expanded={expanded}>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Start date">
+                <Input type="date" value={form.startDate ?? ""} onChange={(e) => set("startDate")(e.target.value)} />
+              </Field>
+              <Field label="Type">
+                <OptionSelect value={form.type ?? null} onValueChange={set("type")} options={PROJECT_TYPE.options} placeholder="Unspecified" />
+              </Field>
+              <Field label="Budget">
+                <Input inputMode="decimal" placeholder="0" value={form.budgetCents ?? ""} onChange={(e) => set("budgetCents")(e.target.value)} />
+              </Field>
+              <Field label="Revenue">
+                <Input inputMode="decimal" placeholder="0" value={form.revenueCents ?? ""} onChange={(e) => set("revenueCents")(e.target.value)} />
+              </Field>
+              {ownerField}
+              <Field label="Next action due">
+                <Input type="date" value={form.nextActionDueAt ?? ""} onChange={(e) => set("nextActionDueAt")(e.target.value)} />
+              </Field>
+            </div>
+            <Field label="Next action">
+              <Input placeholder="What moves this forward?" value={form.nextAction ?? ""} onChange={(e) => set("nextAction")(e.target.value)} />
+            </Field>
+          </MoreFields>
         </>
       );
 

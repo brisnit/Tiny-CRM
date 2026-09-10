@@ -95,10 +95,22 @@ export default async function CompanyPage({ params }: PageProps<"/companies/[id]
               name={company.name}
               version={company.version}
               context={editContext}
+              // Every field the form can write starts from what is stored; one
+              // left out would open blank and save that blank over the value.
               initial={{
                 name: company.name,
                 website: company.website,
                 industry: company.industry,
+                domain: company.domain,
+                size: company.size,
+                revenueRange: company.revenueRange,
+                location: company.location,
+                type: company.type,
+                leadSource: company.leadSource,
+                relationshipStatus: company.relationshipStatus,
+                primaryContactId: company.primaryContactId,
+                ownerId: company.ownerId,
+                description: company.description,
               }}
             />
           </>

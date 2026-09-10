@@ -222,6 +222,12 @@ const RELATION_FIELD: Record<string, ScopedModel> = {
  *
  * `stageId` is special-cased because PipelineStage has no `workspaceId` of its
  * own; it is reached through its pipeline.
+ *
+ * `ownerId` is special-cased for the same reason and matters more: a User has no
+ * workspace at all, so the only thing that makes an owner legitimate is a
+ * membership row. Without this check, assigning an owner would accept any user
+ * id in the system — handing a record to someone outside the tenant, and
+ * confirming that account exists by whether the save succeeded.
  */
 export async function assertRelations(
   workspaceId: string,
@@ -255,6 +261,21 @@ export async function assertRelations(
           // it exists somewhere. It is available here for debugging only.
           void missing;
         }
+      })(),
+    );
+  }
+
+  // An owner is legitimate only if they are a member of this workspace.
+  if (input.ownerId) {
+    checks.push(
+      (async () => {
+        const membership = await db.workspaceMember.findFirst({
+          where: { workspaceId, userId: input.ownerId! },
+          select: { id: true },
+        });
+        // The same answer as any other unreachable relation, so this cannot be
+        // used to probe which user ids exist.
+        if (!membership) throw noSuchRecord();
       })(),
     );
   }

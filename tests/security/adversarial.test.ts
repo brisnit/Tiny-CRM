@@ -16,13 +16,21 @@ import { createTenant, cleanupTenants, db, type Tenant } from "../helpers/fixtur
  */
 
 let A: Tenant;
+/**
+ * A second, unrelated tenant. Its users are real accounts that simply do not
+ * belong to A — which is what makes the ownership checks meaningful: a random
+ * string would be refused for being unknown, and would prove nothing about
+ * whether membership is enforced.
+ */
+let B: Tenant;
 
 describe("adversarial", () => {
   before(async () => {
     A = await createTenant("Adversary");
+    B = await createTenant("Bystander");
   });
   after(async () => {
-    await cleanupTenants([A]);
+    await cleanupTenants([A, B]);
     await db.$disconnect();
   });
 
@@ -112,7 +120,16 @@ describe("adversarial", () => {
       assert.equal(contact?.workspaceId, A.workspaceId, "workspaceId was reassigned");
     });
 
-    test("cannot set ownerId through a create", async () => {
+    /**
+     * Ownership used to be session-only, and this test asserted a request could
+     * never set it. Assigning a record to a colleague is an ordinary thing to
+     * want, so it is now allowed — but only to somebody who is actually in the
+     * workspace, which is the property these two tests pin down.
+     *
+     * The blanket ban was the easy version of the rule. The real one is that an
+     * owner must be a member, and it needs testing from both sides.
+     */
+    test("can set ownerId through a create, to a member of the workspace", async () => {
       const { createContact } = await import("../../src/lib/actions/contacts");
       const result = await asMember(() =>
         createContact({
@@ -128,8 +145,51 @@ describe("adversarial", () => {
           where: { id: result.data.id },
           select: { ownerId: true },
         });
-        assert.equal(created?.ownerId, A.memberId, "ownerId came from the request, not the session");
+        assert.equal(created?.ownerId, A.viewerId, "an assignable owner was not honoured");
       }
+    });
+
+    test("cannot set ownerId to a user outside the workspace", async () => {
+      // B's member is a real user, so this is not rejected for being unknown —
+      // it is rejected for not belonging here. Without the membership check the
+      // record would be handed to another tenant's user, and the difference
+      // between "no such user" and "not your user" would leak through whether
+      // the save succeeded.
+      const { createContact } = await import("../../src/lib/actions/contacts");
+      const result = await asMember(() =>
+        createContact({
+          workspaceId: A.workspaceId,
+          firstName: "Foreign",
+          lastName: "Owner",
+          ownerId: B.memberId,
+        } as never),
+      );
+      assert.equal(result.ok, false, "a non-member was accepted as an owner");
+
+      const leaked = await db.contact.findFirst({
+        where: { workspaceId: A.workspaceId, ownerId: B.memberId },
+        select: { id: true },
+      });
+      assert.equal(leaked, null, "a record was created owned by another tenant's user");
+    });
+
+    test("cannot reassign an existing record to a user outside the workspace", async () => {
+      const { updateContact } = await import("../../src/lib/actions/contacts");
+      const before = await db.contact.findUnique({
+        where: { id: A.contactId },
+        select: { ownerId: true, version: true },
+      });
+
+      const result = await asMember(() =>
+        updateContact(A.contactId, { version: before!.version, ownerId: B.memberId } as never),
+      );
+      assert.equal(result.ok, false, "a non-member was accepted as an owner on update");
+
+      const after = await db.contact.findUnique({
+        where: { id: A.contactId },
+        select: { ownerId: true },
+      });
+      assert.equal(after?.ownerId, before?.ownerId, "ownership crossed a tenant boundary");
     });
 
     test("cannot change plan through the profile action", async () => {
@@ -701,14 +761,20 @@ describe("the server-action surface", () => {
   });
 
   test("no action writes an ownership column from the request", () => {
-    // Ownership and authorship come from the session. Writing `ownerId` from a
-    // parsed payload lets a caller create records attributed to someone else.
+    // Authorship comes from the session. Writing one of these from a parsed
+    // payload lets a caller create records attributed to someone else.
     //
     // `userId` is deliberately absent from this list: in membership management
     // it is the *target* of the operation, not the acting identity, and those
     // actions authorize the caller separately.
+    //
+    // `ownerId` is also absent, and is covered by the test below instead. It is
+    // assignable now — you can hand a record to a colleague — so the invariant
+    // is no longer "never from the request" but "never without checking they
+    // are in the workspace". A blanket ban here would have to be deleted to let
+    // that ship, which would leave nothing checking the real rule.
     for (const file of actionModules()) {
-      for (const column of ["ownerId", "actorId", "authorId", "uploaderId"]) {
+      for (const column of ["actorId", "authorId", "uploaderId"]) {
         const pattern = new RegExp(`${column}:\\s*(data|input|body|payload|parsed)\\.`);
         const match = pattern.exec(file.text);
         assert.equal(
@@ -717,6 +783,23 @@ describe("the server-action surface", () => {
           `${file.name} writes ${column} from the request (${match?.[0]}) instead of from the session`,
         );
       }
+    }
+  });
+
+  test("an action that writes ownerId from the request also membership-checks it", () => {
+    // The rule that replaced the blanket ban. `assertRelations` is where the
+    // membership lookup lives, so writing an owner without routing it through
+    // there is the mistake this catches — and it is an easy one to make, since
+    // the write itself looks harmless next to every other assignment.
+    for (const file of actionModules()) {
+      const writesOwner = /ownerId:\s*(data|input|body|payload|parsed)[.?]/.test(file.text);
+      if (!writesOwner) continue;
+      assert.match(
+        file.text,
+        /assertRelations\([\s\S]*?ownerId:/,
+        `${file.name} writes ownerId from the request without passing it to assertRelations, ` +
+          "so a user outside the workspace could be made the owner",
+      );
     }
   });
 

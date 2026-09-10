@@ -33,6 +33,7 @@ const projectSchema = z.object({
   revenueCents: zOptionalMoney,
   nextAction: zOptionalText(LIMITS.mediumText),
   nextActionDueAt: zOptionalDate,
+  ownerId: zOptionalId,
 });
 
 const projectUpdateSchema = projectSchema
@@ -46,6 +47,7 @@ type ProjectUpdate = z.input<typeof projectUpdateSchema>;
 const EDITABLE = [
   "name", "companyId", "statusId", "type", "description", "priority",
   "startDate", "targetDate", "budgetCents", "revenueCents", "nextAction", "nextActionDueAt",
+  "ownerId",
 ] as const;
 
 export async function createProject(
@@ -62,6 +64,9 @@ export async function createProject(
         await assertRelations(workspaceId, {
           companyId: data.companyId ?? null,
           statusId: data.statusId ?? null,
+          // Membership-checked in assertRelations: a user who is not a member of
+          // this workspace cannot be made the owner of one of its records.
+          ownerId: data.ownerId ?? null,
         });
 
         // Fall back to the workspace's default status so a project always has a
@@ -92,7 +97,9 @@ export async function createProject(
               revenueCents: data.revenueCents ?? null,
               nextAction: data.nextAction ?? null,
               nextActionDueAt: data.nextActionDueAt ?? null,
-              ownerId: actor.identity.id,
+              // Defaults to the creator; an explicit owner is accepted only
+              // after assertRelations has confirmed workspace membership.
+              ownerId: data.ownerId ?? actor.identity.id,
               lastActivityAt: new Date(),
             },
             select: { id: true, name: true, companyId: true },
@@ -150,6 +157,9 @@ export async function updateProject(
         await assertRelations(workspaceId, {
           companyId: data.companyId ?? null,
           statusId: data.statusId ?? null,
+          // Membership-checked in assertRelations: a user who is not a member of
+          // this workspace cannot be made the owner of one of its records.
+          ownerId: data.ownerId ?? null,
         });
 
         const statusChanged = Boolean(data.statusId && data.statusId !== existing.statusId);

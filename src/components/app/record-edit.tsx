@@ -13,7 +13,13 @@ import { updateCompany } from "@/lib/actions/companies";
 import { updateDeal } from "@/lib/actions/deals";
 import { updateProject } from "@/lib/actions/projects";
 import { updateOpportunity } from "@/lib/actions/opportunities";
+import {
+  COMPANY_SIZE, COMPANY_TYPE, LEAD_SOURCE, PROJECT_TYPE, REVENUE_RANGE,
+} from "@/lib/enums";
 import type { ActionResult } from "@/lib/actions/base";
+
+/** The value union behind one of the enum maps in lib/enums. */
+type EnumValue<M extends { values: readonly string[] }> = M["values"][number];
 
 export type EditableKind = "contact" | "company" | "deal" | "project" | "opportunity";
 
@@ -91,6 +97,10 @@ export function RecordEditDialog({
             workspaceId={workspaceId}
             dealPipeline={pipeline}
             statuses={context.statuses.filter((s) => s.workspaceId === workspaceId)}
+            members={context.members.filter((m) => m.workspaceId === workspaceId)}
+            // Editing shows every field. Quick add folds the extras away to stay
+            // quick; a record page is where someone fills in the rest.
+            expanded
           />
         </DialogBody>
         <DialogFooter>
@@ -165,17 +175,33 @@ async function runUpdate(
   // on the server, so this only narrows for TypeScript.
   const s = (key: string) => form[key] ?? undefined;
   const asEnum = <T extends string>(key: string, fallback: T): T => (form[key] ?? fallback) as T;
+  // An optional enum the person can clear. "" means "no value" and has to reach
+  // the server as null, not as the empty string, which no enum accepts.
+  const nullableEnum = <T extends string>(key: string): T | null =>
+    form[key] ? (form[key] as T) : null;
 
   switch (kind) {
     case "contact":
       return updateContact(id, {
         version, firstName: s("firstName"), lastName: s("lastName"), email: s("email"),
-        jobTitle: s("jobTitle"), companyId: s("companyId") ?? null,
+        phone: s("phone"), jobTitle: s("jobTitle"), companyId: s("companyId") ?? null,
         relationshipType: asEnum("relationshipType", "prospect" as const),
+        location: s("location"), linkedin: s("linkedin"), website: s("website"),
+        leadSource: nullableEnum<EnumValue<typeof LEAD_SOURCE>>("leadSource"),
+        ownerId: s("ownerId") ?? null, description: s("description"),
+        lastContactedAt: s("lastContactedAt"), nextFollowUpAt: s("nextFollowUpAt"),
       });
     case "company":
       return updateCompany(id, {
         version, name: s("name"), website: s("website"), industry: s("industry"),
+        domain: s("domain"), location: s("location"),
+        size: nullableEnum<EnumValue<typeof COMPANY_SIZE>>("size"),
+        revenueRange: nullableEnum<EnumValue<typeof REVENUE_RANGE>>("revenueRange"),
+        type: nullableEnum<EnumValue<typeof COMPANY_TYPE>>("type"),
+        leadSource: nullableEnum<EnumValue<typeof LEAD_SOURCE>>("leadSource"),
+        relationshipStatus: asEnum("relationshipStatus", "prospect" as const),
+        primaryContactId: s("primaryContactId") ?? null,
+        ownerId: s("ownerId") ?? null, description: s("description"),
       });
     case "deal":
       return updateDeal(id, {
@@ -189,6 +215,10 @@ async function runUpdate(
         version, name: s("name"), description: s("description"),
         companyId: s("companyId") ?? null, statusId: s("statusId"),
         targetDate: s("targetDate"), priority: asEnum("priority", "medium" as const),
+        startDate: s("startDate"), type: nullableEnum<EnumValue<typeof PROJECT_TYPE>>("type"),
+        budgetCents: s("budgetCents"), revenueCents: s("revenueCents"),
+        nextAction: s("nextAction"), nextActionDueAt: s("nextActionDueAt"),
+        ownerId: s("ownerId") ?? null,
       });
     case "opportunity":
       return updateOpportunity(id, {
