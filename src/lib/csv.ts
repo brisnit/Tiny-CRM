@@ -49,12 +49,18 @@ export class CsvError extends Error {
 }
 
 /**
- * Parses CSV into records.
+ * Parses CSV into a raw grid, with no assumption about where the header is.
+ *
+ * `parseCsv` below treats the first non-empty row as the header, which is right
+ * for a file exported by another CRM. A spreadsheet somebody actually works in
+ * is different: it opens with a title, a note about what the tab is for, and a
+ * blank row before the real header. Finding that header is a separate problem
+ * from tokenising the file, so the grid is exposed and the two stay apart.
  *
  * Bounded by row count and byte length: an unbounded parser is a denial-of-
  * service primitive, and this one is reachable from an upload form.
  */
-export function parseCsv(text: string, options: ParseOptions = {}): Record<string, string>[] {
+export function parseCsvGrid(text: string, options: ParseOptions = {}): string[][] {
   const maxRows = options.maxRows ?? 10_000;
   const maxBytes = options.maxBytes ?? 10 * 1024 * 1024;
 
@@ -67,7 +73,12 @@ export function parseCsv(text: string, options: ParseOptions = {}): Record<strin
   let field = "";
   let quoted = false;
 
-  const input = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  // A UTF-8 BOM survives an Excel "Save as CSV" and would otherwise become
+  // part of the first header, so the first column never matches anything.
+  const input = text
+    .replace(/^﻿/, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
 
   for (let i = 0; i < input.length; i++) {
     const char = input[i]!;
@@ -99,6 +110,18 @@ export function parseCsv(text: string, options: ParseOptions = {}): Record<strin
     row.push(field);
     rows.push(row);
   }
+
+  return rows;
+}
+
+/**
+ * Parses CSV into records, treating the first non-empty row as the header.
+ *
+ * The shape the existing importer and its callers expect. Anything that needs
+ * to decide for itself where the header is should use `parseCsvGrid`.
+ */
+export function parseCsv(text: string, options: ParseOptions = {}): Record<string, string>[] {
+  const rows = parseCsvGrid(text, options);
 
   const [header, ...body] = rows.filter((r) => r.some((cell) => cell.trim() !== ""));
   if (!header) return [];
