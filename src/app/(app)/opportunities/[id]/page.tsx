@@ -176,6 +176,8 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
                   </li>
                 ))}
               </ul>
+
+              {opportunity.importedFrom ? <SourceComparison source={opportunity.importedFrom} /> : null}
             </div>
           </Panel>
 
@@ -388,5 +390,51 @@ function recLabel(rec: string) {
 function recTone(rec: string) {
   return (
     { go: TONE.green, lean_go: TONE.brand, lean_no: TONE.amber, no_bid: TONE.rose }[rec] ?? TONE.neutral
+  );
+}
+
+/**
+ * What the spreadsheet said, beside what Tiny says.
+ *
+ * The source figures were true when the file was exported and are frozen;
+ * Tiny's move as the deadline closes in. Showing only Tiny's throws away the
+ * working history somebody built up over months, and showing only the source's
+ * presents a stale number as current. So both, labelled, with the date the
+ * import happened so it is obvious which one is old.
+ *
+ * Only columns the person recognises are surfaced — the scoring model, the
+ * verdict and the notes. The whole row is still on the import record.
+ */
+function SourceComparison({
+  source,
+}: {
+  source: { fileName: string; importedAt: Date; rowIndex: number; values: Record<string, string> };
+}) {
+  const interesting = Object.entries(source.values).filter(
+    ([key, value]) =>
+      value.trim() !== "" &&
+      /score|verdict|rating|days? left|runway|recommend|decision|bump/i.test(key),
+  );
+  if (interesting.length === 0) return null;
+
+  return (
+    <div className="mt-4 border-t border-hairline pt-4">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-faint">
+        As imported
+      </p>
+      <p className="mt-0.5 text-[12px] text-muted">
+        From {source.fileName}, row {source.rowIndex + 1}, on {formatDate(source.importedAt)}. These are the
+        spreadsheet&rsquo;s own figures, kept as they were. Tiny&rsquo;s assessment above is recalculated and is
+        the current one.
+      </p>
+      <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5">
+        {interesting.map(([key, value]) => (
+          <div key={key} className="text-[12px]">
+            <dt className="text-faint">{key}</dt>
+            <dd className="font-medium tabular text-body">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }

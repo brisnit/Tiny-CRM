@@ -3,6 +3,7 @@ import "server-only";
 import { contains, db, isSearchable } from "@/lib/db";
 import { tagsForEntities } from "@/lib/actions/tags";
 import { withTenantContext } from "@/lib/tenant-db";
+import { parseJson } from "@/lib/json";
 
 /**
  * Opportunity fit and go / no-go.
@@ -261,9 +262,36 @@ export async function getOpportunity(workspaceIds: string[], id: string) {
     if (!opportunity) return null;
     const tags = await tagsForEntities("opportunity", [id]);
 
+    // What the spreadsheet said, if this record came from one.
+    //
+    // Kept beside Tiny's own assessment rather than replacing it. The source
+    // score and verdict were true when the file was exported and are frozen;
+    // Tiny's move as the deadline closes in. Showing one without the other
+    // either throws away the working history or presents a stale number as
+    // current, and both are worse than showing both and saying which is which.
+    const source = opportunity.sourceBatchId
+      ? await db.importRow
+          .findFirst({
+            where: {
+              batch: { id: opportunity.sourceBatchId, workspaceId: opportunity.workspaceId },
+              outcome: { contains: opportunity.id },
+            },
+            select: { raw: true, rowIndex: true, batch: { select: { sourceName: true, createdAt: true } } },
+          })
+          .catch(() => null)
+      : null;
+
     return {
       ...opportunity,
       tags: tags.get(id) ?? [],
+      importedFrom: source
+        ? {
+            fileName: source.batch.sourceName,
+            importedAt: source.batch.createdAt,
+            rowIndex: source.rowIndex,
+            values: parseJson<Record<string, string>>(source.raw, {}),
+          }
+        : null,
       assessment: assessOpportunity({
         fitScore: opportunity.fitScore,
         strategicValue: opportunity.strategicValue,

@@ -1,7 +1,10 @@
-import { Database, Download, Upload } from "lucide-react";
+import { Database, Download, History, Upload } from "lucide-react";
 
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { ImportExport } from "@/components/app/import-export";
+import { SpreadsheetImport } from "@/components/app/spreadsheet-import";
+import { ImportHistory } from "@/components/app/import-history";
+import { formatDate } from "@/lib/dates";
 import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
@@ -26,8 +29,62 @@ export default async function DataSettings() {
     ]);
   });
 
+  const batches = await scopedRead(workspaceIds, () =>
+    db.importBatch.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select: {
+        id: true, sourceName: true, sheetName: true, status: true, rowCount: true,
+        createdCount: true, matchedCount: true, skippedCount: true, errorCount: true,
+        createdAt: true, committedAt: true, rolledBackAt: true, lastError: true,
+        actor: { select: { name: true } },
+      },
+    }),
+  );
+
   return (
     <div className="space-y-5">
+      <Panel>
+        <PanelHeader
+          title="Bring a spreadsheet in"
+          description="Tiny reads it, shows you what it will do, and does nothing until you agree"
+          icon={<Upload />}
+        />
+        <div className="border-t border-hairline p-4">
+          <SpreadsheetImport
+            workspaces={workspaces.map((w) => ({ id: w.id, name: w.name }))}
+            defaultWorkspaceId={workspaceId}
+          />
+        </div>
+      </Panel>
+
+      {batches.length > 0 ? (
+        <Panel>
+          <PanelHeader title="Import history" icon={<History />} />
+          <div className="border-t border-hairline">
+            <ImportHistory
+              workspaceId={workspaceId ?? ""}
+              batches={batches.map((b) => ({
+                id: b.id,
+                sourceName: b.sourceName,
+                sheetName: b.sheetName,
+                status: b.status,
+                rowCount: b.rowCount,
+                createdCount: b.createdCount,
+                matchedCount: b.matchedCount,
+                skippedCount: b.skippedCount,
+                errorCount: b.errorCount,
+                when: formatDate(b.committedAt ?? b.createdAt),
+                who: b.actor?.name ?? "—",
+                rolledBack: b.rolledBackAt != null,
+                lastError: b.lastError,
+              }))}
+            />
+          </div>
+        </Panel>
+      ) : null}
+
       <Panel>
         <PanelHeader
           title="Export"
@@ -46,8 +103,8 @@ export default async function DataSettings() {
 
       <Panel>
         <PanelHeader
-          title="Import"
-          description="Bring contacts or companies in from a CSV"
+          title="Import contacts or companies"
+          description="The older path, for a plain contact or company list"
           icon={<Upload />}
         />
         <div className="border-t border-hairline p-4">
