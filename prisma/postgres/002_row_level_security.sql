@@ -122,7 +122,7 @@ DECLARE
     'Pipeline', 'Deal', 'Opportunity', 'Task', 'Note', 'Activity',
     'FileAsset', 'Tag', 'TagLink', 'CustomFieldDef', 'CustomFieldValue',
     'Automation', 'AiThread', 'Integration', 'EmailMessage', 'CalendarEvent',
-    'DomainEvent'
+    'DomainEvent', 'ImportBatch'
   ];
 BEGIN
   FOREACH t IN ARRAY direct LOOP
@@ -252,6 +252,17 @@ CREATE POLICY tenant_isolation ON "FeatureFlag"
 -- is itself protected — so the subquery is evaluated with RLS applied and a row
 -- whose parent is invisible is invisible too.
 -- ---------------------------------------------------------------------------
+
+-- An import row belongs to a workspace through its batch. Without this the
+-- staged copy of a spreadsheet — which holds every cell of it, including rows
+-- the person never committed — would be readable across tenants even though
+-- the records it produced are not.
+ALTER TABLE "ImportRow" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "ImportRow" FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON "ImportRow";
+CREATE POLICY tenant_isolation ON "ImportRow"
+  USING (EXISTS (SELECT 1 FROM "ImportBatch" b WHERE b.id = "batchId" AND app_can_see_workspace(b."workspaceId")))
+  WITH CHECK (EXISTS (SELECT 1 FROM "ImportBatch" b WHERE b.id = "batchId" AND app_can_see_workspace(b."workspaceId")));
 
 ALTER TABLE "Milestone" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "Milestone" FORCE ROW LEVEL SECURITY;

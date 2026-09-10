@@ -136,6 +136,7 @@ export const SCOPED_MODELS = [
   "contact", "company", "deal", "project", "opportunity",
   "task", "note", "activity", "fileAsset", "pipeline", "automation",
   "projectStatus", "customFieldDef", "tag", "aiInsight", "milestone",
+  "importBatch",
 ] as const;
 export type ScopedModel = (typeof SCOPED_MODELS)[number];
 

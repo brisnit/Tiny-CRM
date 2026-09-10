@@ -90,6 +90,7 @@ model User {
   authTokens      AuthToken[]
   sessions        UserSession[]
   mfaCredentials  MfaCredential[]
+  importBatches   ImportBatch[]     @relation("ImportActor")
   recoveryCodes   MfaRecoveryCode[]
 
   @@index([plan])
@@ -156,6 +157,7 @@ model Workspace {
   domainEvents   DomainEvent[]
   featureFlags   FeatureFlag[]
   securityAlerts SecurityAlert[]
+  importBatches  ImportBatch[]
 
   @@unique([ownerId, slug])
   @@index([ownerId, archivedAt])
@@ -218,6 +220,11 @@ model Company {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
+  /// The import that created this row, if any. Rollback deletes exactly the
+  /// rows carrying one batch id, which is why it can be exact rather than
+  /// best-effort — and why the record can show what the spreadsheet said.
+  sourceBatchId String?
+
   workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   owner          User?     @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   primaryContact Contact?  @relation("CompanyPrimaryContact", fields: [primaryContactId], references: [id], onDelete: SetNull)
@@ -267,6 +274,11 @@ model Contact {
   version    Int       @default(0)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+
+  /// The import that created this row, if any. Rollback deletes exactly the
+  /// rows carrying one batch id, which is why it can be exact rather than
+  /// best-effort — and why the record can show what the spreadsheet said.
+  sourceBatchId String?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   company   Company?  @relation("ContactCompany", fields: [companyId], references: [id], onDelete: SetNull)
@@ -537,6 +549,11 @@ model Opportunity {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
+  /// The import that created this row, if any. Rollback deletes exactly the
+  /// rows carrying one batch id, which is why it can be exact rather than
+  /// best-effort — and why the record can show what the spreadsheet said.
+  sourceBatchId String?
+
   workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   company   Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
   project   Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
@@ -601,6 +618,11 @@ model Task {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  /// The import that created this row, if any. Rollback deletes exactly the
+  /// rows carrying one batch id, which is why it can be exact rather than
+  /// best-effort — and why the record can show what the spreadsheet said.
+  sourceBatchId String?
 
   workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   owner       User?        @relation("TaskOwner", fields: [ownerId], references: [id], onDelete: SetNull)
@@ -848,6 +870,87 @@ model SavedView {
   @@unique([userId, entityType, name])
   @@index([userId, entityType, order])
   @@index([workspaceId, entityType])
+}
+
+// ---------------------------------------------------------------------------
+// Spreadsheet import
+// ---------------------------------------------------------------------------
+
+/// One attempt at importing a file, from the moment it is parsed to the moment
+/// it is committed or rolled back.
+///
+/// The batch exists so that preview and commit cannot disagree. The previous
+/// importer re-parsed the raw file on confirm and rebuilt the mapping from
+/// scratch, so what the person approved and what was written were two separate
+/// computations that merely tended to match. Here the parsed rows and the
+/// agreed mapping are stored once, and the commit reads them back.
+model ImportBatch {
+  id          String  @id @default(cuid())
+  workspaceId String
+  actorId     String?
+
+  /// The file as the person named it, for the history list.
+  sourceName String
+  /// csv | xlsx
+  sourceKind String
+  /// Which sheet of the workbook this batch came from.
+  sheetName  String?
+
+  /// draft | previewed | committed | rolled_back | failed
+  status String @default("draft")
+
+  /// JSON: the agreed column mapping, keyed by column index.
+  mapping String @default("[]")
+  /// JSON: counts by entity, plus issue totals. Written at preview and commit.
+  stats   String @default("{}")
+
+  rowCount     Int @default(0)
+  createdCount Int @default(0)
+  matchedCount Int @default(0)
+  skippedCount Int @default(0)
+  errorCount   Int @default(0)
+
+  committedAt  DateTime?
+  rolledBackAt DateTime?
+  /// Why a commit failed, for the history list. Never the file's contents.
+  lastError    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor     User?       @relation("ImportActor", fields: [actorId], references: [id], onDelete: SetNull)
+  rows      ImportRow[]
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, status])
+}
+
+/// One row of the source file, kept verbatim.
+///
+/// `raw` is the whole original row, which is what makes source provenance
+/// possible: a column Tiny recalculates, or has no field for, is still here
+/// afterwards and can be shown beside the record it produced. Nothing is lost
+/// by being unmapped — it is only not written onto the record.
+model ImportRow {
+  id       String @id @default(cuid())
+  batchId  String
+  /// Position in the source sheet, so an issue can be pointed at.
+  rowIndex Int
+
+  /// JSON: { header: value } exactly as parsed, before coercion.
+  raw      String
+  /// JSON: per-entity decisions and the ids created, filled in at commit.
+  outcome  String @default("{}")
+  /// create | update | skip | error — what the preview said would happen.
+  decision String @default("create")
+  /// JSON: the coercions that refused, so the preview can list them.
+  issues   String @default("[]")
+
+  batch ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, rowIndex])
+  @@index([batchId, decision])
 }
 
 // ---------------------------------------------------------------------------
