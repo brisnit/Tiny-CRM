@@ -2,7 +2,7 @@ import "server-only";
 
 import { contains, db } from "@/lib/db";
 import { getProvider, isModelBacked } from "@/lib/ai/provider";
-import { SYSTEM_PROMPTS } from "@/lib/ai/prompts";
+import { SYSTEM_PROMPTS, withContext } from "@/lib/ai/prompts";
 import { parseJson } from "@/lib/json";
 import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
 import type { Actor } from "@/lib/auth/access";
@@ -171,7 +171,20 @@ async function extractWithModel(actor: Actor, text: string): Promise<RawExtracti
     system: SYSTEM_PROMPTS.classify,
     effort: "low",
     maxTokens: 1400,
-    messages: [{ role: "user", content: text }],
+    // Delimited, like every other call. This text is pasted by the user but
+    // authored by someone else — an email thread, a meeting note, a listing —
+    // so it is the same untrusted content the ground rules describe, and it
+    // arrives here as a raw blob with no instruction of its own. Sending it as
+    // a bare user message made the whole message look like the request, which
+    // is exactly the shape a forged instruction needs. `withContext` also runs
+    // `stripDelimiters`, so a paste containing </crm_context> cannot close the
+    // block early and continue as if it were the user speaking.
+    messages: [
+      {
+        role: "user",
+        content: withContext("Extract the people, companies, work and dates.", text),
+      },
+    ],
   });
   await recordUsage(actor.identity.id, "ai_requests");
 
