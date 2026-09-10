@@ -25,6 +25,10 @@ export type ImportHistoryRow = {
   lastError: string | null;
 };
 
+const PLURALS: Record<string, string> = {
+  company: "companies", contact: "contacts", opportunity: "opportunities", task: "tasks",
+};
+
 const TONE: Record<string, "green" | "amber" | "stone" | "rose"> = {
   committed: "green",
   previewed: "amber",
@@ -61,7 +65,7 @@ export function ImportHistory({
       }
       const removed = Object.entries(result.data.removed)
         .filter(([, n]) => n > 0)
-        .map(([entity, n]) => `${n} ${entity}${n === 1 ? "" : "s"}`)
+        .map(([entity, n]) => `${n} ${n === 1 ? entity : PLURALS[entity] ?? `${entity}s`}`)
         .join(", ");
       toast.success(removed ? `Removed ${removed}` : "Import rolled back");
       router.refresh();

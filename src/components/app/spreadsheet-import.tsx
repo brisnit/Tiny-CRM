@@ -32,6 +32,19 @@ import { FIELD_TARGETS } from "@/lib/import/targets";
 
 type Step = "choose" | "review" | "done";
 
+/** "company" pluralises to "companies", not "companys". */
+const PLURALS: Record<string, string> = {
+  company: "companies",
+  contact: "contacts",
+  opportunity: "opportunities",
+  task: "tasks",
+};
+
+function plural(entity: string, n: number): string {
+  if (n === 1) return entity;
+  return PLURALS[entity] ?? `${entity}s`;
+}
+
 const TARGET_OPTIONS = [
   { value: "", label: "Do not import" },
   ...FIELD_TARGETS.map((t) => ({
@@ -138,7 +151,7 @@ export function SpreadsheetImport({
             <p className="mt-0.5 text-[12px] text-muted">
               {Object.entries(result.created)
                 .filter(([, n]) => n > 0)
-                .map(([entity, n]) => `${n} ${entity}${n === 1 ? "" : "s"}`)
+                .map(([entity, n]) => `${n} ${plural(entity, n)}`)
                 .join(" · ")}
             </p>
           </div>
@@ -244,7 +257,7 @@ function ReviewStep({
       {/* What will be created */}
       <section className="rounded-lg border border-hairline bg-panel p-4">
         <p className="text-[13px] font-medium text-body">
-          {counts.map(([entity, n]) => `${n} ${entity}${n === 1 ? "" : "s"}`).join(" · ") || "Nothing"}
+          {counts.map(([entity, n]) => `${n} ${plural(entity, n)}`).join(" · ") || "Nothing"}
         </p>
         <p className="mt-1 text-[12px] text-muted">
           from {preview.summary.rows} row{preview.summary.rows === 1 ? "" : "s"}
