@@ -90,10 +90,17 @@ function headerScore(row: string[], following: string[][]): number {
  */
 function looksLikeProse(row: string[], columns: number): boolean {
   const filled = row.map((c) => c.trim()).filter((c) => c !== "");
-  if (filled.length === 0) return false;
-  const single = filled.length === 1 && columns > 2;
-  const veryLong = filled.some((c) => c.length > 180);
-  return single && veryLong;
+  if (filled.length !== 1 || columns <= 2) return false;
+
+  const text = filled[0]!;
+  // Length alone is not enough. "Footnote: unpurchased listings were removed on
+  // 08-Sep-2026." is under sixty characters and is still a footnote, while a
+  // record's first cell is an identifier or a name — short, and rarely a
+  // sentence. So a lone cell in a wide table is prose when it is long, or when
+  // it reads like a sentence: several words and some punctuation.
+  if (text.length > 120) return true;
+  const words = text.split(/\s+/).length;
+  return words >= 6 && /[.:;]/.test(text);
 }
 
 /**

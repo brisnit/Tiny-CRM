@@ -32,6 +32,12 @@ export type EntityDraft = {
   values: Record<string, string | number | boolean | Date | null>;
   /** For a reference column: the name to match a parent record by. */
   referenceName?: string;
+  /**
+   * True when this draft exists only because another column pointed at it.
+   * Two rows naming the same agency are one company, not two, so these are
+   * counted by distinct name rather than by row.
+   */
+  viaReference?: boolean;
 };
 
 export type RowPlan = {
@@ -101,6 +107,7 @@ export function planRow(
         const parent = draftFor(target.referenceTo);
         const required = REQUIRED_FIELD[target.referenceTo];
         if (parent.values[required] == null) parent.values[required] = name;
+        parent.viaReference = true;
       }
       continue;
     }
@@ -200,9 +207,18 @@ export function summarise(
 ): PlanSummary {
   const byEntity: Record<string, number> = {};
   let withIssues = 0;
+  // Records reached through a reference are counted by distinct name: three
+  // rows naming Boulder County produce one company, and a preview that
+  // promised three would be wrong the moment it was believed.
+  const seen = new Set<string>();
   for (const plan of plans) {
     if (plan.issues.length > 0) withIssues++;
     for (const draft of plan.drafts) {
+      if (draft.viaReference) {
+        const key = `${draft.entity}:${String(draft.values[REQUIRED_FIELD[draft.entity]] ?? "").toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
       byEntity[draft.entity] = (byEntity[draft.entity] ?? 0) + 1;
     }
   }

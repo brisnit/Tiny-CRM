@@ -176,7 +176,7 @@ describe("a real tracker, from CSV text to a plan", () => {
     const { summary } = pipeline();
     assert.equal(summary.rows, 6);
     assert.equal(summary.byEntity.opportunity, 6);
-    assert.equal(summary.byEntity.company, 5, "the row with no agency should not make a company");
+    assert.equal(summary.byEntity.company, 5, "distinct agencies were miscounted");
     assert.equal(summary.byEntity.task, 5);
     assert.deepEqual(summary.derivedColumns.sort(), ["Days Left", "Score", "Verdict"]);
   });
