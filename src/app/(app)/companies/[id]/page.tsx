@@ -24,7 +24,7 @@ import { getCompany } from "@/lib/data/companies";
 import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
-import { formatCompact, formatMoney } from "@/lib/money";
+import { formatCompact, formatMoneyOrDash } from "@/lib/money";
 import { daysSince, formatDayOnly, timeAgo } from "@/lib/dates";
 import {
   COMPANY_SIZE, COMPANY_TYPE, LEAD_SOURCE, RELATIONSHIP_STATUS, REVENUE_RANGE, SUBMISSION_STATUS,
@@ -294,7 +294,7 @@ export default async function CompanyPage({ params }: PageProps<"/companies/[id]
                 id: opp.id,
                 href: `/opportunities/${opp.id}`,
                 title: opp.name,
-                subtitle: `Due ${formatDayOnly(opp.deadlineAt, "unset")} · ${formatMoney(opp.estimatedValueCents)}`,
+                subtitle: `Due ${formatDayOnly(opp.deadlineAt, "unset")} · ${formatMoneyOrDash(opp.estimatedValueCents, "value not set")}`,
                 trailing: (
                   <Badge tone={SUBMISSION_STATUS.tone(opp.submissionStatus)}>
                     {SUBMISSION_STATUS.label(opp.submissionStatus)}

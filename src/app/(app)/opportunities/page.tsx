@@ -12,7 +12,7 @@ import { NewRecordButton } from "@/components/app/new-record-button";
 import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { listOpportunities } from "@/lib/data/opportunities";
-import { formatCompact, formatMoney } from "@/lib/money";
+import { formatCompact, formatMoneyOrDash } from "@/lib/money";
 import { describeDateOnlyDeadline, formatDayOnly } from "@/lib/dates";
 import {
   COMPETITION_LEVEL, OPPORTUNITY_TYPE, STRATEGIC_VALUE, SUBMISSION_STATUS, TONE,
@@ -133,7 +133,7 @@ async function OpportunityList({
                   <div className="flex items-center gap-3 text-right">
                     <div>
                       <div className="text-[15px] font-semibold tabular text-body">
-                        {formatMoney(opp.estimatedValueCents)}
+                        {formatMoneyOrDash(opp.estimatedValueCents)}
                       </div>
                       <div className="text-[11px] text-faint">Estimated value</div>
                     </div>

@@ -25,7 +25,7 @@ import { getOpportunity } from "@/lib/data/opportunities";
 import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
-import { formatMoney } from "@/lib/money";
+import { formatMoneyOrDash } from "@/lib/money";
 import { dateOnlyInputValue, describeDateOnlyDeadline, formatDate, formatDateOnly, formatDay } from "@/lib/dates";
 import {
   COMPETITION_LEVEL, OPPORTUNITY_TYPE, STRATEGIC_VALUE, SUBMISSION_STATUS, TONE,
@@ -87,7 +87,7 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
             {opportunity.solicitationNumber ? (
               <MetaItem label="Solicitation">{opportunity.solicitationNumber}</MetaItem>
             ) : null}
-            <MetaItem label="Value">{formatMoney(opportunity.estimatedValueCents)}</MetaItem>
+            <MetaItem label="Value">{formatMoneyOrDash(opportunity.estimatedValueCents)}</MetaItem>
           </>
         }
         actions={

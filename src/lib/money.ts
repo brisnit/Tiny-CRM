@@ -45,6 +45,21 @@ export function formatMoney(cents: number | null | undefined) {
   return full.format(fromCents(cents));
 }
 
+/**
+ * "$1,200,000" — or a dash when no amount was ever recorded.
+ *
+ * A null estimated value is not a zero one. Every display below used
+ * `formatMoney`, which folds null to 0 for arithmetic's sake, so an
+ * opportunity nobody had priced yet read "$0" — a claim the record never
+ * made. Importing a real pipeline made it obvious: twenty-three of
+ * twenty-four rows carried no figure and the list said every one was worth
+ * nothing. Anywhere a person reads the number rather than adds it up, absence
+ * has to look like absence.
+ */
+export function formatMoneyOrDash(cents: number | null | undefined, dash = "—") {
+  return cents === null || cents === undefined ? dash : full.format(fromCents(cents));
+}
+
 /** "$1,200,000.00" — for inputs and anywhere exactness is the point. */
 export function formatMoneyPrecise(cents: number | null | undefined) {
   return precise.format(fromCents(cents));

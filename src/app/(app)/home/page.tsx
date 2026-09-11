@@ -425,7 +425,9 @@ export default async function HomePage() {
                             >
                               {deadline.label}
                             </span>
-                            <span className="text-[11px] text-faint">· {formatMoney(opp.estimatedValueCents)}</span>
+                            {opp.estimatedValueCents != null ? (
+                              <span className="text-[11px] text-faint">· {formatMoney(opp.estimatedValueCents)}</span>
+                            ) : null}
                             <Badge tone={SUBMISSION_STATUS.tone(opp.submissionStatus)}>
                               {SUBMISSION_STATUS.label(opp.submissionStatus)}
                             </Badge>
