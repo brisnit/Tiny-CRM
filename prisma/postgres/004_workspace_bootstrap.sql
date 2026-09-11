@@ -37,10 +37,22 @@ CREATE POLICY workspace_bootstrap_owner_only ON "Workspace"
 -- The first membership is created in the same statement graph as the workspace
 -- and is covered by the workspace's own context. This restrictive policy makes
 -- the intent explicit at the database: the row that grants access to a brand-new
--- workspace may only ever grant it to the person creating it. Later invitations
--- are UPDATEs/INSERTs made from inside an established context by a member with
--- the right permission, and are unaffected — this applies to INSERT only, and
--- only when the actor is not already a member of that workspace.
+-- workspace may only ever grant it to the person creating it.
+--
+-- There are exactly three ways a membership row may legitimately appear, and
+-- each is an arm of the check below:
+--
+--   1. An existing member adds someone. The application has already checked
+--      `members:manage`; the database only needs to know the actor belongs here.
+--   2. The bootstrap row, granting the creator access to the workspace they own.
+--   3. **Someone accepting an invitation addressed to them.** This arm was
+--      missing, and without it the whole invite flow is refused by the database:
+--      an invitee is by definition not yet a member (arm 1 fails) and does not
+--      own the workspace (arm 2 fails). The fix is not to trust the application
+--      instead — it is to let the database check the invitation itself, which it
+--      can do completely: a live, unexpired, unaccepted, unrevoked invitation
+--      addressed to this user's own email address, granting membership to that
+--      same user and nobody else.
 DROP POLICY IF EXISTS member_bootstrap_self_only ON "WorkspaceMember";
 CREATE POLICY member_bootstrap_self_only ON "WorkspaceMember"
   AS RESTRICTIVE
@@ -54,13 +66,34 @@ CREATE POLICY member_bootstrap_self_only ON "WorkspaceMember"
         AND existing."userId" = app_user_id()
     )
     -- … or this is the bootstrap row, granting the creator access to the
-    -- workspace they own.
+    -- workspace they own …
     OR (
       "userId" = app_user_id()
       AND EXISTS (
         SELECT 1 FROM "Workspace" w
         WHERE w.id = "WorkspaceMember"."workspaceId"
           AND w."ownerId" = app_user_id()
+      )
+    )
+    -- … or this user is accepting a live invitation addressed to them.
+    --
+    -- Every condition matters. `"userId" = app_user_id()` means a token can only
+    -- ever add the person holding it, never a third party. The email join means
+    -- an invitation to one address cannot be redeemed by another account. The
+    -- three null/expiry checks mean a revoked, already-accepted or expired row
+    -- grants nothing, so the database reaches the same verdict as the
+    -- application rather than taking its word for it.
+    OR (
+      "userId" = app_user_id()
+      AND EXISTS (
+        SELECT 1
+        FROM "WorkspaceInvitation" i
+        JOIN "User" u ON u.id = "WorkspaceMember"."userId"
+        WHERE i."workspaceId" = "WorkspaceMember"."workspaceId"
+          AND lower(i.email) = lower(u.email)
+          AND i."acceptedAt" IS NULL
+          AND i."revokedAt" IS NULL
+          AND i."expiresAt" > now()
       )
     )
   );

@@ -55,6 +55,21 @@ function goHard(href: string) {
 }
 
 /**
+ * Where to land after signing in or up.
+ *
+ * Only a path within this application is ever accepted. A `next` that arrives
+ * as an absolute URL, a protocol-relative `//evil.example` or anything without
+ * a leading slash is discarded in favour of the default — otherwise the sign-in
+ * page becomes an open redirect, which is the classic way a phishing link is
+ * made to look legitimate.
+ */
+function safeNext(next: string | null | undefined, fallback: string): string {
+  if (!next) return fallback;
+  if (!next.startsWith("/") || next.startsWith("//")) return fallback;
+  return next;
+}
+
+/**
  * `method="post"` on every form here is a security control, not a formality.
  *
  * These forms submit through `onSubmit`, which calls `preventDefault()`, so in
@@ -85,7 +100,14 @@ function goHard(href: string) {
  * password into history. Making these work without JavaScript is separate work
  * and needs server actions, not a method attribute.
  */
-export function LoginForm({ demo = null }: { demo?: DemoCredentials | null }) {
+export function LoginForm({
+  demo = null,
+  next = null,
+}: {
+  demo?: DemoCredentials | null;
+  /** Where to go once signed in. Validated; see safeNext. */
+  next?: string | null;
+}) {
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -106,7 +128,7 @@ export function LoginForm({ demo = null }: { demo?: DemoCredentials | null }) {
       setPending(false);
       return;
     }
-    goHard("/home");
+    goHard(safeNext(next, "/home"));
   }
 
   return (
@@ -135,7 +157,22 @@ export function LoginForm({ demo = null }: { demo?: DemoCredentials | null }) {
   );
 }
 
-export function SignupForm({ plan }: { plan: string }) {
+export function SignupForm({
+  plan,
+  next = null,
+  fixedEmail = null,
+}: {
+  plan: string;
+  /** Where to go once the account exists. Validated; see safeNext. */
+  next?: string | null;
+  /**
+   * Pre-filled and read-only. Set when the account is being created to
+   * accept an invitation: the invitation is bound to one address, and
+   * letting the field be edited would only produce an account that cannot
+   * redeem it.
+   */
+  fixedEmail?: string | null;
+}) {
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -163,7 +200,7 @@ export function SignupForm({ plan }: { plan: string }) {
     // Sign straight in — asking someone to log in immediately after signing up
     // is friction with no purpose.
     await signIn("credentials", { email, password, redirect: false });
-    goHard(plan !== "free" ? `/welcome?plan=${plan}` : "/welcome");
+    goHard(safeNext(next, plan !== "free" ? `/welcome?plan=${plan}` : "/welcome"));
   }
 
   return (
@@ -173,7 +210,16 @@ export function SignupForm({ plan }: { plan: string }) {
         <Input id="name" name="name" autoComplete="name" required placeholder="Alex Rivera" />
       </Field>
       <Field label="Email" htmlFor="email">
-        <Input id="email" name="email" type="email" autoComplete="email" required placeholder="you@company.com" />
+        <Input
+          id="email"
+          name="email"
+          type="email"
+          autoComplete="email"
+          required
+          placeholder="you@company.com"
+          defaultValue={fixedEmail ?? undefined}
+          readOnly={Boolean(fixedEmail)}
+        />
       </Field>
       <Field
         label="Password"

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Bot, CreditCard, Database, Layers, Plug, ShieldCheck, SlidersHorizontal, Tag, Target,
-  Trash2, User, Workflow,
+  Trash2, User, Users, Workflow,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -23,6 +23,7 @@ const GROUPS: { label: string; items: { href: string; label: string; icon: React
     label: "Workspace",
     items: [
       { href: "/settings/workspaces", label: "Workspaces & roles", icon: Layers },
+      { href: "/settings/team", label: "Team", icon: Users },
       { href: "/settings/pipelines", label: "Pipelines", icon: Target },
       { href: "/settings/statuses", label: "Project statuses", icon: Workflow },
       { href: "/settings/fields", label: "Custom fields", icon: SlidersHorizontal },

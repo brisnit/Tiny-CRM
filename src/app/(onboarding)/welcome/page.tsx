@@ -1,7 +1,9 @@
 import { redirect } from "next/navigation";
 
 import { OnboardingFlow } from "@/components/app/onboarding";
+import { PendingInvitations } from "@/components/app/pending-invitations";
 import { requireActor } from "@/lib/auth/access";
+import { pendingInvitationsFor } from "@/lib/auth/invitations";
 
 export const metadata = { title: "Welcome" };
 
@@ -21,11 +23,31 @@ export default async function WelcomePage({ searchParams }: PageProps<"/welcome"
   const resuming = params.resume === "1";
   if (workspaces.length > 0 && actor.identity.onboardedAt && !resuming) redirect("/home");
 
+  // Somebody may have invited this person before they ever got here. Onboarding
+  // provisions a workspace for anyone who arrives without one, which is right
+  // for a founder and exactly wrong for an invited teammate — and the guard
+  // cannot tell them apart. So the invitation is offered first, and creating a
+  // workspace of their own stays one click away below.
+  const invitations = await pendingInvitationsFor({
+    id: actor.identity.id,
+    email: actor.identity.email,
+  });
+
   return (
-    <OnboardingFlow
-      firstName={actor.identity.name.split(" ")[0] ?? "there"}
-      hasWorkspace={workspaces.length > 0}
-      selectedPlan={typeof params.plan === "string" ? params.plan : null}
-    />
+    <>
+      <PendingInvitations
+        invitations={invitations.map((invitation) => ({
+          id: invitation.id,
+          workspaceName: invitation.workspaceName,
+          role: invitation.role,
+          invitedByName: invitation.invitedByName,
+        }))}
+      />
+      <OnboardingFlow
+        firstName={actor.identity.name.split(" ")[0] ?? "there"}
+        hasWorkspace={workspaces.length > 0}
+        selectedPlan={typeof params.plan === "string" ? params.plan : null}
+      />
+    </>
   );
 }

@@ -122,7 +122,7 @@ DECLARE
     'Pipeline', 'Deal', 'Opportunity', 'Task', 'Note', 'Activity',
     'FileAsset', 'Tag', 'TagLink', 'CustomFieldDef', 'CustomFieldValue',
     'Automation', 'AiThread', 'Integration', 'EmailMessage', 'CalendarEvent',
-    'DomainEvent', 'ImportBatch'
+    'DomainEvent', 'ImportBatch', 'WorkspaceInvitation'
   ];
 BEGIN
   FOREACH t IN ARRAY direct LOOP
@@ -263,6 +263,87 @@ DROP POLICY IF EXISTS tenant_isolation ON "ImportRow";
 CREATE POLICY tenant_isolation ON "ImportRow"
   USING (EXISTS (SELECT 1 FROM "ImportBatch" b WHERE b.id = "batchId" AND app_can_see_workspace(b."workspaceId")))
   WITH CHECK (EXISTS (SELECT 1 FROM "ImportBatch" b WHERE b.id = "batchId" AND app_can_see_workspace(b."workspaceId")));
+
+-- ---------------------------------------------------------------------------
+-- Reading one invitation by the token it was sent with
+--
+-- An invitation exists to be opened by somebody who is not yet a member of
+-- anything, so `tenant_isolation` above — "is this row's workspace in my
+-- context?" — can never be satisfied on the read that matters. The first
+-- implementation tried to sidestep that by reading through `rootDb`, on the
+-- reasoning that it bypasses the ambient transaction. It does; it does **not**
+-- bypass row-level security, because it connects as the same restricted role.
+-- Every acceptance test failed on PostgreSQL and passed on SQLite, which is
+-- exactly the shape of a policy gap.
+--
+-- The honest fix is to express the rule rather than route around it. The token
+-- *is* the credential here: 32 bytes of CSPRNG output, stored only as a SHA-256
+-- and spendable once. So the policy says so — you may read the single row whose
+-- hash you can already produce, and nothing else.
+--
+-- Permissive policies OR together, so this widens reads by exactly one row for
+-- a caller who holds the token, and changes nothing for anyone who does not.
+-- The setting is transaction-local (`set_config(..., true)`) for the same
+-- reason `app.workspace_ids` is: a pooled connection must not carry it into the
+-- next request.
+-- ---------------------------------------------------------------------------
+DROP POLICY IF EXISTS invitation_by_token ON "WorkspaceInvitation";
+CREATE POLICY invitation_by_token ON "WorkspaceInvitation"
+  FOR SELECT
+  USING (
+    coalesce(current_setting('app.invitation_token', true), '') <> ''
+    AND "tokenHash" = current_setting('app.invitation_token', true)
+  );
+
+-- And the other read a non-member legitimately makes: "has anyone invited me?"
+--
+-- The welcome screen asks this so an invited person is offered the workspace
+-- they were invited to before the button that creates one of their own. It is
+-- keyed on the caller's own authenticated identity, so it discloses only what
+-- was already sent to their inbox — never that some *other* address was
+-- invited, which would make this table an account-enumeration oracle.
+DROP POLICY IF EXISTS invitation_addressed_to_me ON "WorkspaceInvitation";
+CREATE POLICY invitation_addressed_to_me ON "WorkspaceInvitation"
+  FOR SELECT
+  USING (
+    app_user_id() IS NOT NULL
+    AND lower(email) = (SELECT lower(u.email) FROM "User" u WHERE u.id = app_user_id())
+  );
+
+-- An invitee must be able to read the *name* of the workspace they were invited
+-- to, and nothing else about it.
+--
+-- Without this the acceptance page cannot say what it is offering: the
+-- invitation row is readable through the two policies above, but the workspace
+-- it points at is not, so the join comes back null and the page throws. The
+-- rule is the same one, applied to the other end of the relation, and it grants
+-- exactly one column's worth of knowledge — the name of a workspace somebody
+-- has already emailed you an invitation to.
+--
+-- No recursion: this subquery reads WorkspaceInvitation, whose own policies
+-- consult only a GUC and the User table, and neither consults Workspace.
+DROP POLICY IF EXISTS workspace_visible_to_invitee ON "Workspace";
+CREATE POLICY workspace_visible_to_invitee ON "Workspace"
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM "WorkspaceInvitation" i
+      WHERE i."workspaceId" = "Workspace".id
+        AND i."acceptedAt" IS NULL
+        AND i."revokedAt" IS NULL
+        AND i."expiresAt" > now()
+        AND (
+          (
+            coalesce(current_setting('app.invitation_token', true), '') <> ''
+            AND i."tokenHash" = current_setting('app.invitation_token', true)
+          )
+          OR (
+            app_user_id() IS NOT NULL
+            AND lower(i.email) = (SELECT lower(u.email) FROM "User" u WHERE u.id = app_user_id())
+          )
+        )
+    )
+  );
 
 ALTER TABLE "Milestone" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "Milestone" FORCE ROW LEVEL SECURITY;

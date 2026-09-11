@@ -7,8 +7,13 @@ import { env } from "@/lib/env";
 
 export const metadata = { title: "Sign in" };
 
-export default async function LoginPage() {
+export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   if (await getIdentity()) redirect("/home");
+
+  // Only ever a path inside this application — `safeNext` in the form discards
+  // anything else, so the sign-in page cannot be turned into an open redirect.
+  const params = await searchParams;
+  const next = typeof params.next === "string" ? params.next : null;
 
   return (
     <div className="rounded-2xl border border-hairline bg-panel p-6 shadow-panel">
@@ -21,6 +26,7 @@ export default async function LoginPage() {
           the demo credentials out of the client bundle entirely, rather than
           merely hiding the button that uses them. */}
       <LoginForm
+        next={next}
         demo={
           env.allowDemoAuth ? { email: env.demoEmail, password: env.demoPassword } : null
         }

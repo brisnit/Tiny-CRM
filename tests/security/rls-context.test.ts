@@ -32,7 +32,7 @@ const TENANT_MODELS = [
   "savedView", "automation", "automationRun", "aiInsight", "aiThread", "aiMessage",
   "notification", "integration", "emailMessage", "calendarEvent", "eventAttendee",
   "auditLog", "domainEvent", "jobRun", "securityAlert", "projectContact",
-  "dealContact", "opportunityContact",
+  "dealContact", "opportunityContact", "importBatch", "workspaceInvitation",
 ];
 
 /** Establishes tenant context; a call inside one of these is compliant. */
@@ -100,6 +100,13 @@ const EXCEPTIONS: Record<string, string> = {
   "src/lib/workspaces/provision.ts": "the workspace bootstrap; runs in the new workspace's context",
   "src/lib/data/scoped.ts": "defines the page-level wrapper",
   "src/lib/data/trash.ts": "wrapped at each export",
+  "src/lib/auth/invitations.ts":
+    "the token lookup is the one read that cannot run inside a tenant context — " +
+    "an invitee has no membership, so any context would return nothing. The " +
+    "token is the credential (256 bits, hashed at rest, single use, expiring), " +
+    "exactly as for a password reset. Every write here wraps in the " +
+    "invitation's own workspace, and prisma/postgres/004 makes the database " +
+    "check the invitation independently rather than trusting this file",
 };
 
 function walk(dir: string, out: string[] = []): string[] {

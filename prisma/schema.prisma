@@ -91,6 +91,8 @@ model User {
   sessions        UserSession[]
   mfaCredentials  MfaCredential[]
   importBatches   ImportBatch[]     @relation("ImportActor")
+  invitationsSent     WorkspaceInvitation[] @relation("InvitationsSent")
+  invitationsAccepted WorkspaceInvitation[] @relation("InvitationsAccepted")
   recoveryCodes   MfaRecoveryCode[]
 
   @@index([plan])
@@ -158,6 +160,7 @@ model Workspace {
   featureFlags   FeatureFlag[]
   securityAlerts SecurityAlert[]
   importBatches  ImportBatch[]
+  invitations    WorkspaceInvitation[]
 
   @@unique([ownerId, slug])
   @@index([ownerId, archivedAt])
@@ -177,6 +180,56 @@ model WorkspaceMember {
 
   @@unique([workspaceId, userId])
   @@index([userId])
+}
+
+/// An outstanding offer to join a workspace.
+///
+/// Not an `AuthToken`: that table's `userId` is required and foreign-keyed to
+/// `User`, and an invitation is addressed to an email that may have no account
+/// yet. The *technique* is the same — 32 CSPRNG bytes, only the SHA-256 stored,
+/// single use through a conditional update, short-lived.
+///
+/// `scopeMode` and `scope` are carried from the first migration even though
+/// only "workspace" is offered at first. A pending invitation has to survive
+/// the arrival of scoped access without a data migration, and an invitation
+/// that silently changed meaning between issue and acceptance would be a
+/// security bug rather than an inconvenience.
+model WorkspaceInvitation {
+  id          String @id @default(cuid())
+  workspaceId String
+  invitedById String?
+
+  /// Normalised to lower case at issue. The address the invite was sent to, and
+  /// the address the accepting account must have.
+  email String
+  /// owner | admin | manager | member | viewer — validated against the
+  /// inviter's own rank at issue AND again at acceptance.
+  role  String @default("member")
+
+  /// workspace | restricted
+  scopeMode String @default("workspace")
+  /// JSON: [{ "entityType": "project" | "opportunity", "entityId": "..." }]
+  scope     String @default("[]")
+
+  /// SHA-256 of the token that was emailed. The token itself is never stored.
+  tokenHash String    @unique
+  expiresAt DateTime
+
+  acceptedAt       DateTime?
+  acceptedByUserId String?
+  revokedAt        DateTime?
+  revokedById      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy  User?     @relation("InvitationsSent", fields: [invitedById], references: [id], onDelete: SetNull)
+  acceptedBy User?     @relation("InvitationsAccepted", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, acceptedAt, revokedAt])
+  @@index([email])
+  @@index([expiresAt])
 }
 
 /// Rolling per-period counters that back plan limits (AI calls, etc.)

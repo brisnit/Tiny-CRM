@@ -273,6 +273,44 @@ export function verificationEmail(link: string, expiresInHours: number): Omit<Ma
 }
 
 /**
+ * The one invitation email.
+ *
+ * Says who, which workspace and which role before the link, because the
+ * question a person actually has on opening it is "is this real and do I want
+ * it" — not "where do I click". The inviter's name is included on purpose: an
+ * invitation from a stranger to a workspace you have never heard of should look
+ * exactly as suspicious as it is.
+ */
+export function invitationEmail(options: {
+  link: string;
+  inviterName: string | null;
+  workspaceName: string;
+  roleLabel: string;
+  expiresInDays: number;
+}): Omit<MailMessage, "to"> {
+  const who = options.inviterName?.trim() || "Someone";
+  const headline = `${who} invited you to join ${options.workspaceName} on Tiny CRM`;
+  return {
+    subject: headline,
+    sensitive: true,
+    text:
+      `${headline}.\n\n` +
+      `Role: ${options.roleLabel}\n\n` +
+      `${options.link}\n\n` +
+      `This link expires in ${options.expiresInDays} days and can be used once.\n\n` +
+      `If you were not expecting this, you can ignore it — nothing happens until ` +
+      `you open the link and accept.\n`,
+    html:
+      `<p>${escapeHtml(headline)}.</p>` +
+      `<p>Role: <strong>${escapeHtml(options.roleLabel)}</strong></p>` +
+      `<p><a href="${escapeHtml(options.link)}">Join ${escapeHtml(options.workspaceName)}</a></p>` +
+      `<p>This link expires in ${options.expiresInDays} days and can be used once.</p>` +
+      `<p>If you were not expecting this, you can ignore it — nothing happens ` +
+      `until you open the link and accept.</p>`,
+  };
+}
+
+/**
  * Sent *after* a password changes, to the address that owns the account.
  *
  * The one email that matters most in an account takeover: it is how the real
