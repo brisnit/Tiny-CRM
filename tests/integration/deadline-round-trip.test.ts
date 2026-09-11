@@ -1,10 +1,8 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
-
 import { runAsTestIdentity } from "../../src/lib/auth/context";
 import { createTenant, cleanupTenants, db, type Tenant } from "../helpers/fixtures";
+import { dateOnlyInputValue } from "../../src/lib/dates";
 
 /**
  * A deadline must survive being saved, read back, and saved again.
@@ -15,22 +13,23 @@ import { createTenant, cleanupTenants, db, type Tenant } from "../helpers/fixtur
  * has not moved. In Pacific it used to move one day per round trip, so a
  * record edited twice for an unrelated reason had its deadline two days early.
  *
- * The formatting half runs in a child process with TZ set, because a process
- * cannot change its own timezone after the date code has initialised.
+ * The timezone sweep is in the unit suite; this one sets TZ in-process for the
+ * few pre-fill assertions it needs, because Node re-reads it on the next Date
+ * operation.
  */
 
-const ROOT = resolve(import.meta.dirname, "../..");
 const ZONES = ["America/Los_Angeles", "America/New_York", "UTC", "Europe/London", "Asia/Tokyo"];
+const ORIGINAL_TZ = process.env.TZ;
 
 /** What the edit form would show for a stored value, in a given timezone. */
 function prefillIn(tz: string, iso: string): string {
-  return execFileSync(
-    "npx",
-    ["tsx", "--eval",
-     `import { dateOnlyInputValue } from "./src/lib/dates";
-      process.stdout.write(dateOnlyInputValue(new Date("${iso}")));`],
-    { cwd: ROOT, env: { ...process.env, TZ: tz }, encoding: "utf8" },
-  ).trim();
+  process.env.TZ = tz;
+  try {
+    return dateOnlyInputValue(new Date(iso));
+  } finally {
+    if (ORIGINAL_TZ === undefined) delete process.env.TZ;
+    else process.env.TZ = ORIGINAL_TZ;
+  }
 }
 
 let A: Tenant;
