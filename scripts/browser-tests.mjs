@@ -19,6 +19,7 @@
  * React's input reconciliation — the thing under test — is identical either way.
  */
 import { execSync, spawn, spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { existsSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -34,6 +35,42 @@ for (const suffix of ["", "-journal", "-wal", "-shm"]) {
 
 console.log("Preparing the browser test database…");
 execSync("npx prisma migrate deploy", { stdio: "inherit", env: { ...process.env, DATABASE_URL } });
+
+/**
+ * Write-ahead logging, because two processes share this file.
+ *
+ * The suite is unusual in that the *test* process writes the database (fixtures
+ * creating accounts and workspaces) while the *dev server* writes it too
+ * (sessions, audit rows, whatever the page under test does). SQLite's default
+ * rollback journal gives a writer an exclusive lock on the whole database, so
+ * those two collide — intermittently, under load, and nowhere else in the
+ * suite, because this is the only harness with two writers.
+ *
+ * It showed up exactly as you would expect and exactly as it is easy to
+ * misread: one local run where a single test took 298 seconds and passed, one
+ * that failed, one clean, and a red browser job in CI. The temptation is to
+ * raise a timeout. The cause is the lock.
+ *
+ * In WAL mode readers never block the writer and the writer never blocks
+ * readers; only two concurrent writers contend, briefly. `journal_mode` is
+ * stored in the file header, so setting it once here applies to every
+ * connection that opens it afterwards — both processes.
+ *
+ * Local to this harness. Production is PostgreSQL and unaffected.
+ */
+{
+  const require = createRequire(import.meta.url);
+  const Database = require("better-sqlite3");
+  const handle = new Database(TEST_DB);
+  const mode = handle.pragma("journal_mode = WAL", { simple: true });
+  handle.pragma("busy_timeout = 15000");
+  handle.close();
+  if (mode !== "wal") {
+    console.error(`Could not enable WAL on the test database (mode is "${mode}").`);
+    process.exit(1);
+  }
+  console.log("Test database is in WAL mode.");
+}
 
 const serverEnv = {
   ...process.env,
@@ -78,7 +115,17 @@ async function waitForServer() {
       const response = await fetch(`${BASE_URL}/reset-password?token=warmup`, {
         signal: AbortSignal.timeout(60_000),
       });
-      if (response.ok) return;
+      if (response.ok) {
+        // Every other public route the suites drive, for the same reason. A
+        // route compiled inside a locator's timeout is a flake waiting for a
+        // slow machine; CI is a slow machine.
+        for (const route of ["/login", "/signup", "/invite/warmup"]) {
+          await fetch(`${BASE_URL}${route}`, { signal: AbortSignal.timeout(120_000) }).catch(
+            () => {},
+          );
+        }
+        return;
+      }
     } catch {
       // Not up yet.
     }

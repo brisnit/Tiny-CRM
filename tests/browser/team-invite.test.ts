@@ -67,6 +67,23 @@ async function inviteLink(workspaceId: string, invitedById: string, email: strin
 describe("joining a workspace from an invitation", () => {
   before(async () => {
     browser = await chromium.launch();
+
+    // Pay the dev server's first compile of the authenticated shell here,
+    // outside any assertion's timeout.
+    //
+    // The harness warms the public routes, but /settings/team sits behind the
+    // signed-out redirect, so an anonymous fetch never reaches the page and
+    // never compiles it. The cost then lands inside whichever locator waits
+    // first, which is how a 60-second timeout becomes a flake on a loaded
+    // machine. Budgeted generously and asserted on nothing: if it is slow, it
+    // is slow here rather than mid-test.
+    const warm = await browser.newPage();
+    const host = await owner("Warmup");
+    await signIn(warm, host.email);
+    await warm
+      .goto(`${BASE_URL}/settings/team`, { waitUntil: "domcontentloaded", timeout: 300_000 })
+      .catch(() => {});
+    await warm.close();
   });
 
   after(async () => {
