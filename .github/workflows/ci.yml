@@ -34,6 +34,11 @@ jobs:
         run: npm run typecheck
       - name: Lint
         run: npm run lint
+      # The manifest /api/ready compares against is generated and committed, so
+      # a migration added without regenerating it would silently stop being
+      # checked. This is the only thing keeping the two in step.
+      - name: The migration manifest matches the migrations on disk
+        run: node scripts/migration-manifest.mjs --check
 
   # ---------------------------------------------------------------------------
   # The full suite on SQLite: unit, security, integration, portability.
