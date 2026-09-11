@@ -29,7 +29,7 @@ import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatCompact, formatMoney } from "@/lib/money";
-import { dateInputValue, describeDeadline, formatDate, formatDay, timeAgo } from "@/lib/dates";
+import { dateOnlyInputValue, describeDateOnlyDeadline, describeDeadline, formatDateOnly, formatDay, formatDayOnly, timeAgo } from "@/lib/dates";
 import { PROJECT_HEALTH, PROJECT_PRIORITY, PROJECT_TYPE, SUBMISSION_STATUS } from "@/lib/enums";
 
 export async function generateMetadata({ params }: PageProps<"/projects/[id]">) {
@@ -58,7 +58,7 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
 
   const editContext = await getEditContext(actor, [project.workspaceId]);
 
-  const deadline = describeDeadline(project.targetDate);
+  const deadline = describeDateOnlyDeadline(project.targetDate);
   const completedMilestones = project.milestones.filter((m) => m.completedAt).length;
   const progress =
     project.milestones.length > 0
@@ -123,14 +123,14 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
                 description: project.description,
                 companyId: project.companyId,
                 statusId: project.statusId,
-                targetDate: dateInputValue(project.targetDate),
+                targetDate: dateOnlyInputValue(project.targetDate),
                 priority: project.priority,
-                startDate: dateInputValue(project.startDate),
+                startDate: dateOnlyInputValue(project.startDate),
                 type: project.type,
                 budgetCents: project.budgetCents === null ? "" : String(project.budgetCents / 100),
                 revenueCents: project.revenueCents === null ? "" : String(project.revenueCents / 100),
                 nextAction: project.nextAction,
-                nextActionDueAt: dateInputValue(project.nextActionDueAt),
+                nextActionDueAt: dateOnlyInputValue(project.nextActionDueAt),
                 ownerId: project.ownerId,
               }}
             />
@@ -149,7 +149,7 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
         <StatRow>
           <StatTile
             label="Deadline"
-            value={formatDay(project.targetDate, "Not set")}
+            value={formatDayOnly(project.targetDate, "Not set")}
             hint={deadline.label}
             tone={deadline.overdue ? "danger" : deadline.urgent ? "warn" : "default"}
             icon={<CalendarDays />}
@@ -312,8 +312,8 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
                   </span>
                 ) : null}
               </Row>
-              <Row label="Start">{formatDate(project.startDate, "Not set")}</Row>
-              <Row label="Target">{formatDate(project.targetDate, "Not set")}</Row>
+              <Row label="Start">{formatDateOnly(project.startDate, "Not set")}</Row>
+              <Row label="Target">{formatDateOnly(project.targetDate, "Not set")}</Row>
               <Row label="Budget">{project.budgetCents ? formatMoney(project.budgetCents) : null}</Row>
               <Row label="Revenue">{project.revenueCents ? formatMoney(project.revenueCents) : null}</Row>
               <Row label="Last activity">{timeAgo(project.lastActivityAt)}</Row>
@@ -409,7 +409,7 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
                 id: opp.id,
                 href: `/opportunities/${opp.id}`,
                 title: opp.name,
-                subtitle: `Due ${formatDay(opp.deadlineAt, "unset")}`,
+                subtitle: `Due ${formatDayOnly(opp.deadlineAt, "unset")}`,
                 trailing: (
                   <Badge tone={SUBMISSION_STATUS.tone(opp.submissionStatus)}>
                     {SUBMISSION_STATUS.label(opp.submissionStatus)}

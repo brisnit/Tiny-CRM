@@ -9,7 +9,7 @@ import {
 import { assertWithinLimit } from "@/lib/entitlements";
 import { CsvError, matchColumn, parseCsv, toCsv } from "@/lib/csv";
 import { fromCents } from "@/lib/money";
-import { formatDate } from "@/lib/dates";
+import { formatDate, formatDateOnly } from "@/lib/dates";
 import { LIMITS } from "@/lib/validation/limits";
 import { zId } from "@/lib/validation/common";
 
@@ -94,7 +94,7 @@ async function build(entity: (typeof EXPORT_ENTITIES)[number], where: { workspac
             "Lead Source": c.leadSource,
             Owner: c.owner?.name,
             "Last Contacted": formatDate(c.lastContactedAt, ""),
-            "Next Follow-Up": formatDate(c.nextFollowUpAt, ""),
+            "Next Follow-Up": formatDateOnly(c.nextFollowUpAt, ""),
             Notes: c.description,
             Created: formatDate(c.createdAt),
           })),
@@ -155,7 +155,7 @@ async function build(entity: (typeof EXPORT_ENTITIES)[number], where: { workspac
             Pipeline: d.pipeline.name,
             Stage: d.stage.name,
             Value: fromCents(d.valueCents),
-            "Expected Close": formatDate(d.expectedCloseAt, ""),
+            "Expected Close": formatDateOnly(d.expectedCloseAt, ""),
             Source: d.source,
             "Next Step": d.nextStep,
             "Closed At": formatDate(d.closedAt, ""),
@@ -182,8 +182,8 @@ async function build(entity: (typeof EXPORT_ENTITIES)[number], where: { workspac
             Type: p.type,
             Priority: p.priority,
             Health: p.health,
-            "Start Date": formatDate(p.startDate, ""),
-            "Target Date": formatDate(p.targetDate, ""),
+            "Start Date": formatDateOnly(p.startDate, ""),
+            "Target Date": formatDateOnly(p.targetDate, ""),
             Budget: p.budgetCents ? fromCents(p.budgetCents) : "",
             Revenue: p.revenueCents ? fromCents(p.revenueCents) : "",
             "Next Action": p.nextAction,
@@ -209,9 +209,9 @@ async function build(entity: (typeof EXPORT_ENTITIES)[number], where: { workspac
             Type: o.type,
             Source: o.source,
             "Solicitation Number": o.solicitationNumber,
-            "Posted Date": formatDate(o.postedAt, ""),
-            "Questions Deadline": formatDate(o.questionsDeadlineAt, ""),
-            "Proposal Deadline": formatDate(o.proposalDeadlineAt, ""),
+            "Posted Date": formatDateOnly(o.postedAt, ""),
+            "Questions Deadline": formatDateOnly(o.questionsDeadlineAt, ""),
+            "Proposal Deadline": formatDateOnly(o.proposalDeadlineAt, ""),
             "Estimated Value": o.estimatedValueCents ? fromCents(o.estimatedValueCents) : "",
             "Fit Score": o.fitScore,
             "Strategic Value": o.strategicValue,
@@ -243,7 +243,7 @@ async function build(entity: (typeof EXPORT_ENTITIES)[number], where: { workspac
             Description: t.description,
             Status: t.status,
             Priority: t.priority,
-            "Due Date": formatDate(t.dueAt, ""),
+            "Due Date": formatDateOnly(t.dueAt, ""),
             Recurring: t.recurrence,
             Project: t.project?.name,
             Deal: t.deal?.name,

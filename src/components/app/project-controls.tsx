@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/controls";
 import { EmptyState } from "@/components/ui/empty-state";
 import { addMilestone, setProjectNextAction, toggleMilestone, updateProject } from "@/lib/actions/projects";
-import { describeDeadline, dateInputValue, formatDay } from "@/lib/dates";
+import { dateOnlyInputValue, describeDateOnlyDeadline, formatDay } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import { useSyncedState } from "@/lib/hooks";
 
@@ -90,7 +90,7 @@ export function NextActionEditor({
   const router = useRouter();
   const [editing, setEditing] = React.useState(false);
   const [value, setValue] = useSyncedState(nextAction ?? "");
-  const [due, setDue] = useSyncedState(dateInputValue(nextActionDueAt));
+  const [due, setDue] = useSyncedState(dateOnlyInputValue(nextActionDueAt));
   const [pending, startTransition] = React.useTransition();
 
   function save() {
@@ -106,7 +106,7 @@ export function NextActionEditor({
     });
   }
 
-  const deadline = describeDeadline(nextActionDueAt);
+  const deadline = describeDateOnlyDeadline(nextActionDueAt);
 
   if (editing) {
     return (
@@ -274,7 +274,7 @@ function MilestoneRow({
   const [done, setDone] = useSyncedState(Boolean(milestone.completedAt));
   const [pending, startTransition] = React.useTransition();
 
-  const deadline = describeDeadline(milestone.dueDate);
+  const deadline = describeDateOnlyDeadline(milestone.dueDate);
 
   function toggle() {
     const next = !done;

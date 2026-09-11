@@ -26,7 +26,7 @@ import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatMoney } from "@/lib/money";
-import { formatDate, formatDay, timeAgo, daysSince } from "@/lib/dates";
+import { dateOnlyInputValue, daysSince, formatDate, formatDateOnly, formatDay, formatDayOnly, timeAgo } from "@/lib/dates";
 import { LEAD_SOURCE, TONE } from "@/lib/enums";
 
 export async function generateMetadata({ params }: PageProps<"/deals/[id]">) {
@@ -74,7 +74,7 @@ export default async function DealPage({ params }: PageProps<"/deals/[id]">) {
                 </Link>
               </MetaItem>
             ) : null}
-            <MetaItem label="Close">{formatDay(deal.expectedCloseAt, "not set")}</MetaItem>
+            <MetaItem label="Close">{formatDayOnly(deal.expectedCloseAt, "not set")}</MetaItem>
             <MetaItem label="In stage">{daysInStage} days</MetaItem>
             {deal.owner ? <MetaItem label="Owner">{deal.owner.name}</MetaItem> : null}
           </>
@@ -91,7 +91,7 @@ export default async function DealPage({ params }: PageProps<"/deals/[id]">) {
               initial={{
                 name: deal.name,
                 valueCents: deal.valueCents != null ? String(deal.valueCents / 100) : "",
-                expectedCloseAt: deal.expectedCloseAt ? deal.expectedCloseAt.toISOString().slice(0, 10) : "",
+                expectedCloseAt: dateOnlyInputValue(deal.expectedCloseAt),
                 stageId: deal.stageId,
                 companyId: deal.companyId,
                 primaryContactId: deal.primaryContactId,
@@ -223,7 +223,7 @@ export default async function DealPage({ params }: PageProps<"/deals/[id]">) {
                 </span>
               </Row>
               <Row label="Value">{formatMoney(deal.valueCents)}</Row>
-              <Row label="Expected close">{formatDate(deal.expectedCloseAt, "Not set")}</Row>
+              <Row label="Expected close">{formatDateOnly(deal.expectedCloseAt, "Not set")}</Row>
               <Row label="Source">{LEAD_SOURCE.label(deal.source, "—")}</Row>
               <Row label="Project">
                 {deal.project ? (

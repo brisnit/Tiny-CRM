@@ -1,7 +1,7 @@
 import "server-only";
 
 import { db } from "@/lib/db";
-import { formatDay, daysSince, timeAgo } from "@/lib/dates";
+import { daysSince, formatDay, formatDayOnly, timeAgo } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { scoreDeal, scoreProjectHealth } from "@/lib/scoring";
 import { truncate } from "@/lib/utils";
@@ -157,7 +157,7 @@ export async function buildWorkspaceSnapshot(
       const overdue = t.dueAt && t.dueAt < now;
       const link = [t.project?.name, t.deal?.name, t.contact?.fullName].filter(Boolean).join(" / ");
       citations.push({ type: "task", id: t.id, label: t.title });
-      return `- [${t.priority}] ${t.title}${link ? ` (${link})` : ""} — due ${formatDay(t.dueAt, "no date")}${overdue ? " ⚠ OVERDUE" : ""} [${ws(t.workspaceId)}]`;
+      return `- [${t.priority}] ${t.title}${link ? ` (${link})` : ""} — due ${formatDayOnly(t.dueAt, "no date")}${overdue ? " ⚠ OVERDUE" : ""} [${ws(t.workspaceId)}]`;
     });
 
     const dealLines = deals.slice(0, limit).map((d) => {
@@ -179,7 +179,7 @@ export async function buildWorkspaceSnapshot(
         contactCount: d._count.contacts,
       });
       citations.push({ type: "deal", id: d.id, label: d.name });
-      return `- ${d.name} — ${formatMoney(d.valueCents)}, stage ${d.stage.name}, win ~${intel.winProbability}%, momentum ${intel.momentum.value}, last activity ${timeAgo(d.lastActivityAt)}, closes ${formatDay(d.expectedCloseAt, "unset")}${d.company ? `, ${d.company.name}` : ""}${d.nextStep ? `. Next: ${truncate(d.nextStep, 90)}` : ". No next step."}${intel.risks.length ? ` Risks: ${intel.risks.join("; ")}` : ""} [${ws(d.workspaceId)}]`;
+      return `- ${d.name} — ${formatMoney(d.valueCents)}, stage ${d.stage.name}, win ~${intel.winProbability}%, momentum ${intel.momentum.value}, last activity ${timeAgo(d.lastActivityAt)}, closes ${formatDayOnly(d.expectedCloseAt, "unset")}${d.company ? `, ${d.company.name}` : ""}${d.nextStep ? `. Next: ${truncate(d.nextStep, 90)}` : ". No next step."}${intel.risks.length ? ` Risks: ${intel.risks.join("; ")}` : ""} [${ws(d.workspaceId)}]`;
     });
 
     const projectLines = projects.slice(0, limit).map((p) => {
@@ -199,18 +199,18 @@ export async function buildWorkspaceSnapshot(
         hasNextAction: Boolean(p.nextAction),
       });
       citations.push({ type: "project", id: p.id, label: p.name });
-      return `- ${p.name}${p.company ? ` (${p.company.name})` : ""} — ${p.status?.name ?? "no status"}, health ${health.value}, due ${formatDay(p.targetDate, "unset")}, ${p.tasks.length} open task(s)${overdueTasks ? `, ${overdueTasks} overdue` : ""}, last activity ${timeAgo(p.lastActivityAt)}${p.nextAction ? `. Next: ${truncate(p.nextAction, 90)}` : ". No next action set."} [${ws(p.workspaceId)}]`;
+      return `- ${p.name}${p.company ? ` (${p.company.name})` : ""} — ${p.status?.name ?? "no status"}, health ${health.value}, due ${formatDayOnly(p.targetDate, "unset")}, ${p.tasks.length} open task(s)${overdueTasks ? `, ${overdueTasks} overdue` : ""}, last activity ${timeAgo(p.lastActivityAt)}${p.nextAction ? `. Next: ${truncate(p.nextAction, 90)}` : ". No next action set."} [${ws(p.workspaceId)}]`;
     });
 
     const contactLines = contacts.map((c) => {
       const since = daysSince(c.lastContactedAt);
       citations.push({ type: "contact", id: c.id, label: c.fullName });
-      return `- ${c.fullName}${c.jobTitle ? `, ${c.jobTitle}` : ""}${c.company ? ` at ${c.company.name}` : ""} — ${c.relationshipType}, last contact ${since === null ? "never" : `${since}d ago`}${c.nextFollowUpAt && c.nextFollowUpAt < now ? `, follow-up OVERDUE since ${formatDay(c.nextFollowUpAt)}` : ""} [${ws(c.workspaceId)}]`;
+      return `- ${c.fullName}${c.jobTitle ? `, ${c.jobTitle}` : ""}${c.company ? ` at ${c.company.name}` : ""} — ${c.relationshipType}, last contact ${since === null ? "never" : `${since}d ago`}${c.nextFollowUpAt && c.nextFollowUpAt < now ? `, follow-up OVERDUE since ${formatDayOnly(c.nextFollowUpAt)}` : ""} [${ws(c.workspaceId)}]`;
     });
 
     const oppLines = opportunities.map((o) => {
       citations.push({ type: "opportunity", id: o.id, label: o.name });
-      return `- ${o.name}${o.company ? ` (${o.company.name})` : ""} — ${o.type.toUpperCase()}, ${formatMoney(o.estimatedValueCents)}, fit ${o.fitScore ?? "?"}/100, status ${o.submissionStatus}, deadline ${formatDay(o.deadlineAt, "unset")} [${ws(o.workspaceId)}]`;
+      return `- ${o.name}${o.company ? ` (${o.company.name})` : ""} — ${o.type.toUpperCase()}, ${formatMoney(o.estimatedValueCents)}, fit ${o.fitScore ?? "?"}/100, status ${o.submissionStatus}, deadline ${formatDayOnly(o.deadlineAt, "unset")} [${ws(o.workspaceId)}]`;
     });
 
     const activityLines = recentActivity.slice(0, limit).map((a) => {
@@ -300,7 +300,7 @@ export async function buildRecordContext(
       ),
       section(
         "Tasks",
-        tasks.map((t) => `- [${t.status}] ${t.title} — due ${formatDay(t.dueAt, "no date")} (${t.priority})`),
+        tasks.map((t) => `- [${t.status}] ${t.title} — due ${formatDayOnly(t.dueAt, "no date")} (${t.priority})`),
       ),
     ]
       .filter(Boolean)
@@ -338,7 +338,7 @@ async function describeEntity(
           c.email && `Email: ${c.email}`,
           c.location && `Location: ${c.location}`,
           `Last contacted: ${c.lastContactedAt ? `${daysSince(c.lastContactedAt)} days ago` : "never"}`,
-          c.nextFollowUpAt && `Next follow-up: ${formatDay(c.nextFollowUpAt)}${c.nextFollowUpAt < now ? " (OVERDUE)" : ""}`,
+          c.nextFollowUpAt && `Next follow-up: ${formatDayOnly(c.nextFollowUpAt)}${c.nextFollowUpAt < now ? " (OVERDUE)" : ""}`,
           `Linked to ${c._count.deals} deal(s) and ${c._count.projects} project(s)`,
           `Known for ${daysSince(c.createdAt)} days`,
         ].filter(Boolean).join("\n"),
@@ -390,7 +390,7 @@ async function describeEntity(
           d.company && `Company: ${d.company.name}`,
           d.primaryContact && `Primary contact: ${d.primaryContact.fullName}${d.primaryContact.jobTitle ? `, ${d.primaryContact.jobTitle}` : ""}`,
           d.project && `Project: ${d.project.name}`,
-          `Expected close: ${formatDay(d.expectedCloseAt, "not set")}`,
+          `Expected close: ${formatDayOnly(d.expectedCloseAt, "not set")}`,
           `Last activity: ${timeAgo(d.lastActivityAt)}`,
           d.nextStep ? `Next step: ${d.nextStep}` : "No next step defined.",
           `${d._count.contacts} contact(s) involved, ${d._count.tasks} task(s)`,
@@ -415,12 +415,12 @@ async function describeEntity(
           p.company && `Client: ${p.company.name}`,
           `Status: ${p.status?.name ?? "none"} · Priority: ${p.priority} · Health: ${p.health}`,
           p.description && `About: ${truncate(p.description, 400)}`,
-          `Target date: ${formatDay(p.targetDate, "not set")}`,
+          `Target date: ${formatDayOnly(p.targetDate, "not set")}`,
           p.budgetCents && `Budget: ${formatMoney(p.budgetCents)}`,
           p.revenueCents && `Revenue: ${formatMoney(p.revenueCents)}`,
           p.nextAction ? `Next action: ${p.nextAction}` : "No next action set.",
           `Last activity: ${timeAgo(p.lastActivityAt)}`,
-          `Milestones: ${p.milestones.map((m) => `${m.name} (${m.completedAt ? "done" : `due ${formatDay(m.dueDate, "unset")}`})`).join("; ")}`,
+          `Milestones: ${p.milestones.map((m) => `${m.name} (${m.completedAt ? "done" : `due ${formatDayOnly(m.dueDate, "unset")}`})`).join("; ")}`,
         ].filter(Boolean).join("\n"),
       };
     }
@@ -441,8 +441,8 @@ async function describeEntity(
           o.fitScore !== null && `Fit score: ${o.fitScore}/100`,
           o.strategicValue && `Strategic value: ${o.strategicValue}`,
           o.competitionLevel && `Competition: ${o.competitionLevel}`,
-          o.questionsDeadlineAt && `Questions due: ${formatDay(o.questionsDeadlineAt)}`,
-          `Proposal due: ${formatDay(o.proposalDeadlineAt ?? o.deadlineAt, "not set")}`,
+          o.questionsDeadlineAt && `Questions due: ${formatDayOnly(o.questionsDeadlineAt)}`,
+          `Proposal due: ${formatDayOnly(o.proposalDeadlineAt ?? o.deadlineAt, "not set")}`,
           o.requirements && `Requirements:\n${truncate(o.requirements, 1800)}`,
         ].filter(Boolean).join("\n"),
       };

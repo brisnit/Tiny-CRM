@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/controls";
 import { Badge } from "@/components/ui/badge";
 import { toggleTask } from "@/lib/actions/tasks";
-import { describeDeadline } from "@/lib/dates";
+import { describeDateOnlyDeadline } from "@/lib/dates";
 import { TASK_PRIORITY } from "@/lib/enums";
 import { useSyncedState } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
@@ -43,7 +43,7 @@ export function TaskRow({
   const [done, setDone] = useSyncedState(task.status === "done");
   const [pending, startTransition] = React.useTransition();
 
-  const deadline = describeDeadline(task.dueAt);
+  const deadline = describeDateOnlyDeadline(task.dueAt);
 
   const links = showLinks
     ? [

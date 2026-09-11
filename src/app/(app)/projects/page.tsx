@@ -13,7 +13,7 @@ import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { listProjects } from "@/lib/data/projects";
 import { formatCompact } from "@/lib/money";
-import { describeDeadline, timeAgo } from "@/lib/dates";
+import { describeDateOnlyDeadline, timeAgo } from "@/lib/dates";
 import { PROJECT_HEALTH, PROJECT_PRIORITY, PROJECT_TYPE } from "@/lib/enums";
 
 export const metadata = { title: "Projects" };
@@ -82,7 +82,7 @@ async function ProjectList({
         <>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {projects.map((project) => {
-              const deadline = describeDeadline(project.targetDate);
+              const deadline = describeDateOnlyDeadline(project.targetDate);
               const progress =
                 project.milestones.length > 0
                   ? Math.round((project.completedMilestones / project.milestones.length) * 100)

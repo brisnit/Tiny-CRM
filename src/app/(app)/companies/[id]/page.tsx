@@ -25,7 +25,7 @@ import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatCompact, formatMoney } from "@/lib/money";
-import { formatDay, timeAgo, daysSince } from "@/lib/dates";
+import { daysSince, formatDayOnly, timeAgo } from "@/lib/dates";
 import {
   COMPANY_SIZE, COMPANY_TYPE, LEAD_SOURCE, RELATIONSHIP_STATUS, REVENUE_RANGE, SUBMISSION_STATUS,
 } from "@/lib/enums";
@@ -156,7 +156,7 @@ export default async function CompanyPage({ params }: PageProps<"/companies/[id]
               id: deal.id,
               href: `/deals/${deal.id}`,
               title: deal.name,
-              subtitle: `${deal.stage.name} · closes ${formatDay(deal.expectedCloseAt, "unset")}`,
+              subtitle: `${deal.stage.name} · closes ${formatDayOnly(deal.expectedCloseAt, "unset")}`,
               leading: <span className="size-2 shrink-0 rounded-full" style={{ background: deal.stage.color }} />,
               trailing: (
                 <span className="text-[12.5px] font-medium tabular text-body">
@@ -175,7 +175,7 @@ export default async function CompanyPage({ params }: PageProps<"/companies/[id]
               id: project.id,
               href: `/projects/${project.id}`,
               title: project.name,
-              subtitle: `${project.status?.name ?? "No status"} · due ${formatDay(project.targetDate, "unset")}`,
+              subtitle: `${project.status?.name ?? "No status"} · due ${formatDayOnly(project.targetDate, "unset")}`,
               leading: (
                 <span
                   className="size-2 shrink-0 rounded-full"
@@ -294,7 +294,7 @@ export default async function CompanyPage({ params }: PageProps<"/companies/[id]
                 id: opp.id,
                 href: `/opportunities/${opp.id}`,
                 title: opp.name,
-                subtitle: `Due ${formatDay(opp.deadlineAt, "unset")} · ${formatMoney(opp.estimatedValueCents)}`,
+                subtitle: `Due ${formatDayOnly(opp.deadlineAt, "unset")} · ${formatMoney(opp.estimatedValueCents)}`,
                 trailing: (
                   <Badge tone={SUBMISSION_STATUS.tone(opp.submissionStatus)}>
                     {SUBMISSION_STATUS.label(opp.submissionStatus)}

@@ -15,7 +15,7 @@ import { readScope } from "@/lib/scope";
 import { listContacts } from "@/lib/data/contacts";
 import { db } from "@/lib/db";
 import { RELATIONSHIP_STRENGTH, RELATIONSHIP_TYPE } from "@/lib/enums";
-import { formatDay, daysSince } from "@/lib/dates";
+import { daysSince, formatDayOnly } from "@/lib/dates";
 import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Contacts" };
@@ -162,7 +162,7 @@ async function ContactsTable({
                           <span
                             className={`text-[12.5px] tabular ${overdue ? "font-medium text-rose-600 dark:text-rose-400" : "text-muted"}`}
                           >
-                            {formatDay(contact.nextFollowUpAt)}
+                            {formatDayOnly(contact.nextFollowUpAt)}
                           </span>
                         ) : (
                           <span className="text-[12.5px] text-faint">—</span>

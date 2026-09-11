@@ -7,7 +7,7 @@
  * can explain itself. Tiny AI reads these scores as input rather than
  * inventing its own — see src/lib/ai/context.ts.
  */
-import { daysFromNow, daysSince } from "@/lib/dates";
+import { daysFromNowDateOnly, daysSince } from "@/lib/dates";
 
 export type ScoreFactor = {
   label: string;
@@ -155,7 +155,7 @@ export function scoreRelationship(input: RelationshipInput): Score<RelationshipS
   }
 
   // An overdue follow-up on someone with open work is the sharpest signal.
-  const followUp = daysFromNow(input.nextFollowUpAt);
+  const followUp = daysFromNowDateOnly(input.nextFollowUpAt);
   if (followUp !== null && followUp < 0) {
     const impact = input.openDealCount > 0 ? -18 : -10;
     score += impact;
@@ -301,7 +301,7 @@ export function scoreDeal(input: DealScoreInput): DealIntelligence {
     factors.push({ label: "Single-threaded", detail: "Only one contact is engaged on a high-value deal.", impact: -8 });
   }
 
-  const closeIn = daysFromNow(input.expectedCloseAt);
+  const closeIn = daysFromNowDateOnly(input.expectedCloseAt);
   if (closeIn !== null && closeIn < 0 && input.stageKind === "open") {
     momentumScore -= 15;
     factors.push({ label: "Past expected close", detail: `Expected close was ${Math.abs(closeIn)} days ago.`, impact: -15 });
@@ -442,7 +442,7 @@ export function scoreProjectHealth(input: ProjectHealthInput): Score<ProjectHeal
     });
   }
 
-  const deadlineIn = daysFromNow(input.targetDate);
+  const deadlineIn = daysFromNowDateOnly(input.targetDate);
   if (deadlineIn !== null) {
     if (deadlineIn < 0) {
       score -= 30;

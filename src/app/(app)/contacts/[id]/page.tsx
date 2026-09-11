@@ -24,7 +24,7 @@ import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatCompact } from "@/lib/money";
-import { dateInputValue, formatDate, formatDay, timeAgo, daysSince } from "@/lib/dates";
+import { dateInputValue, dateOnlyInputValue, daysSince, formatDate, formatDay, formatDayOnly, timeAgo } from "@/lib/dates";
 import { LEAD_SOURCE, RELATIONSHIP_STRENGTH, RELATIONSHIP_TYPE } from "@/lib/enums";
 
 export async function generateMetadata({ params }: PageProps<"/contacts/[id]">) {
@@ -91,7 +91,7 @@ export default async function ContactPage({ params }: PageProps<"/contacts/[id]"
             {contact.nextFollowUpAt ? (
               <MetaItem label="Follow-up">
                 <span className={followUpOverdue ? "text-rose-600 dark:text-rose-400" : undefined}>
-                  {formatDay(contact.nextFollowUpAt)}
+                  {formatDayOnly(contact.nextFollowUpAt)}
                   {followUpOverdue ? " (overdue)" : ""}
                 </span>
               </MetaItem>
@@ -126,7 +126,7 @@ export default async function ContactPage({ params }: PageProps<"/contacts/[id]"
                 ownerId: contact.ownerId,
                 description: contact.description,
                 lastContactedAt: dateInputValue(contact.lastContactedAt),
-                nextFollowUpAt: dateInputValue(contact.nextFollowUpAt),
+                nextFollowUpAt: dateOnlyInputValue(contact.nextFollowUpAt),
               }}
             />
           </>

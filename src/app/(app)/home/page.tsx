@@ -22,7 +22,7 @@ import { getDailyBrief } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { db } from "@/lib/db";
 import { formatCompact, formatMoney } from "@/lib/money";
-import { daysSince, describeDeadline, formatDay, formatTime, timeAgo } from "@/lib/dates";
+import { daysSince, describeDateOnlyDeadline, formatDay, formatDayOnly, formatTime, timeAgo } from "@/lib/dates";
 import { PROJECT_HEALTH, SUBMISSION_STATUS, TONE } from "@/lib/enums";
 import { scopedRead } from "@/lib/data/scoped";
 
@@ -411,7 +411,7 @@ export default async function HomePage() {
               ) : (
                 <ul className="divide-y divide-hairline border-t border-hairline">
                   {dashboard.opportunities.map((opp) => {
-                    const deadline = describeDeadline(opp.deadlineAt);
+                    const deadline = describeDateOnlyDeadline(opp.deadlineAt);
                     return (
                       <li key={opp.id}>
                         <Link
@@ -452,7 +452,7 @@ export default async function HomePage() {
                         <span className="min-w-0">
                           <span className="block truncate text-[13px] font-medium text-body">{deal.name}</span>
                           <DotLabel color={deal.stage.color} className="mt-0.5 text-[11px] text-faint">
-                            {deal.stage.name} · {formatDay(deal.expectedCloseAt)}
+                            {deal.stage.name} · {formatDayOnly(deal.expectedCloseAt)}
                           </DotLabel>
                         </span>
                         <span className="shrink-0 text-[13px] font-medium tabular text-body">

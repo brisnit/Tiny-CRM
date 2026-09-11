@@ -1,7 +1,7 @@
 import "server-only";
 
 import { db } from "@/lib/db";
-import { daysSince } from "@/lib/dates";
+import { daysSince, daysSinceDateOnly } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import type { ContextScope } from "@/lib/ai/context";
 import { withTenantContext } from "@/lib/tenant-db";
@@ -305,7 +305,7 @@ export async function findRecommendations(scope: ContextScope, limit = 25): Prom
     }
 
     for (const contact of overdueFollowUps) {
-      const overdue = daysSince(contact.nextFollowUpAt) ?? 0;
+      const overdue = daysSinceDateOnly(contact.nextFollowUpAt) ?? 0;
       out.push({
         id: `overdue-followup-${contact.id}`,
         kind: "overdue_followup",

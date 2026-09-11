@@ -13,7 +13,7 @@ import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { listOpportunities } from "@/lib/data/opportunities";
 import { formatCompact, formatMoney } from "@/lib/money";
-import { describeDeadline, formatDay } from "@/lib/dates";
+import { describeDateOnlyDeadline, formatDayOnly } from "@/lib/dates";
 import {
   COMPETITION_LEVEL, OPPORTUNITY_TYPE, STRATEGIC_VALUE, SUBMISSION_STATUS, TONE,
 } from "@/lib/enums";
@@ -56,7 +56,7 @@ async function OpportunityList({
   const totalValue = openOnes.reduce((sum, o) => sum + (o.estimatedValueCents ?? 0), 0);
   const goCount = openOnes.filter((o) => o.assessment.recommendation === "go").length;
   const urgent = openOnes.filter((o) => {
-    const d = describeDeadline(o.deadlineAt);
+    const d = describeDateOnlyDeadline(o.deadlineAt);
     return d.urgent || d.overdue;
   }).length;
 
@@ -103,8 +103,8 @@ async function OpportunityList({
       ) : (
         <div className="space-y-3">
           {opportunities.map((opp) => {
-            const deadline = describeDeadline(opp.deadlineAt);
-            const questions = describeDeadline(opp.questionsDeadlineAt);
+            const deadline = describeDateOnlyDeadline(opp.deadlineAt);
+            const questions = describeDateOnlyDeadline(opp.questionsDeadlineAt);
             const rec = opp.assessment.recommendation;
 
             return (
@@ -157,11 +157,11 @@ async function OpportunityList({
                     }
                   >
                     {opp.proposalDeadlineAt ? "Proposal " : "Deadline "}
-                    {formatDay(opp.deadlineAt, "not set")} · {deadline.label}
+                    {formatDayOnly(opp.deadlineAt, "not set")} · {deadline.label}
                   </span>
                   {opp.questionsDeadlineAt ? (
                     <span className={questions.urgent ? "font-medium text-amber-600 dark:text-amber-400" : "text-faint"}>
-                      Questions {formatDay(opp.questionsDeadlineAt)}
+                      Questions {formatDayOnly(opp.questionsDeadlineAt)}
                     </span>
                   ) : null}
                   {opp.fitScore !== null ? (

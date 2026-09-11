@@ -25,7 +25,7 @@ import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatMoney } from "@/lib/money";
-import { describeDeadline, formatDate, formatDay } from "@/lib/dates";
+import { dateOnlyInputValue, describeDateOnlyDeadline, formatDate, formatDateOnly, formatDay } from "@/lib/dates";
 import {
   COMPETITION_LEVEL, OPPORTUNITY_TYPE, STRATEGIC_VALUE, SUBMISSION_STATUS, TONE,
 } from "@/lib/enums";
@@ -56,8 +56,8 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
 
   const editContext = await getEditContext(actor, [opportunity.workspaceId]);
 
-  const deadline = describeDeadline(opportunity.deadlineAt);
-  const questions = describeDeadline(opportunity.questionsDeadlineAt);
+  const deadline = describeDateOnlyDeadline(opportunity.deadlineAt);
+  const questions = describeDateOnlyDeadline(opportunity.questionsDeadlineAt);
   const rec = opportunity.assessment.recommendation;
   const openTasks = opportunity.tasks.filter((t) => t.status !== "done");
 
@@ -103,7 +103,7 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
                 companyId: opportunity.companyId,
                 solicitationNumber: opportunity.solicitationNumber,
                 estimatedValueCents: opportunity.estimatedValueCents != null ? String(opportunity.estimatedValueCents / 100) : "",
-                proposalDeadlineAt: opportunity.proposalDeadlineAt ? opportunity.proposalDeadlineAt.toISOString().slice(0, 10) : "",
+                proposalDeadlineAt: dateOnlyInputValue(opportunity.proposalDeadlineAt),
                 projectId: opportunity.projectId,
               }}
             />
@@ -233,11 +233,11 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
           <Panel>
             <PanelHeader title="Key dates" icon={<CalendarClock />} />
             <dl className="divide-y divide-hairline border-t border-hairline text-[13px]">
-              <Row label="Posted">{formatDate(opportunity.postedAt, "Not recorded")}</Row>
+              <Row label="Posted">{formatDateOnly(opportunity.postedAt, "Not recorded")}</Row>
               <Row label="Questions due">
                 {opportunity.questionsDeadlineAt ? (
                   <span className={questions.urgent ? "font-medium text-amber-600 dark:text-amber-400" : undefined}>
-                    {formatDate(opportunity.questionsDeadlineAt)} · {questions.label}
+                    {formatDateOnly(opportunity.questionsDeadlineAt)} · {questions.label}
                   </span>
                 ) : null}
               </Row>
@@ -252,7 +252,7 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
                           : undefined
                     }
                   >
-                    {formatDate(opportunity.proposalDeadlineAt ?? opportunity.deadlineAt)} · {deadline.label}
+                    {formatDateOnly(opportunity.proposalDeadlineAt ?? opportunity.deadlineAt)} · {deadline.label}
                   </span>
                 ) : null}
               </Row>

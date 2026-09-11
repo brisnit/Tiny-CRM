@@ -15,7 +15,7 @@ import { AlertTriangle, Building2, Clock, GripVertical, Plus, TrendingUp } from 
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatCompact } from "@/lib/money";
-import { formatDay, timeAgo } from "@/lib/dates";
+import { formatDayOnly, timeAgo } from "@/lib/dates";
 import { useSyncedState } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { moveDealToStage } from "@/lib/actions/deals";
@@ -259,7 +259,7 @@ function Card({
           {timeAgo(card.lastActivityAt)}
         </span>
         {card.expectedCloseAt ? (
-          <span className="ml-auto text-[10.5px] text-faint">{formatDay(card.expectedCloseAt)}</span>
+          <span className="ml-auto text-[10.5px] text-faint">{formatDayOnly(card.expectedCloseAt)}</span>
         ) : null}
       </div>
     </div>

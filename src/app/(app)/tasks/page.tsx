@@ -12,7 +12,7 @@ import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readProjectFocus, readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
 import { TASK_PRIORITY } from "@/lib/enums";
-import { formatDay } from "@/lib/dates";
+import { formatDayOnly } from "@/lib/dates";
 import { scopedRead } from "@/lib/data/scoped";
 
 export const metadata = { title: "Tasks" };
@@ -112,7 +112,7 @@ async function TaskList({ searchParams }: { searchParams: PageProps<"/tasks">["s
     const key = task.dueAt
       ? task.dueAt < now && view !== "completed"
         ? "Overdue"
-        : formatDay(task.dueAt)
+        : formatDayOnly(task.dueAt)
       : "No date";
     groups.set(key, [...(groups.get(key) ?? []), task]);
   }
