@@ -40,6 +40,29 @@ export function expectedMigrations(): readonly string[] {
 }
 
 /**
+ * The comparison itself, with no database in it.
+ *
+ * Separated so it can be tested exhaustively without touching
+ * `_prisma_migrations`. The first version of these tests deleted rows from
+ * that table and put them back afterwards, which is Prisma's own ledger in a
+ * database the whole suite shares: if the restore ever failed, every test that
+ * ran after it inherited a broken migration history. That is not a hazard
+ * worth carrying to check an array comparison.
+ */
+export function compareMigrations(
+  expected: readonly string[],
+  applied: Iterable<string>,
+): SchemaState {
+  if (expected.length === 0) return { status: "unknown", reason: "manifest_empty" };
+  const have = new Set(applied);
+  const pendingNames = expected.filter((name) => !have.has(name));
+  if (pendingNames.length > 0) {
+    return { status: "behind", pending: pendingNames.length, pendingNames };
+  }
+  return { status: "current" };
+}
+
+/**
  * Compares the manifest against `_prisma_migrations`.
  *
  * `rootDb`, not `db`: this runs outside any tenant context and reads Prisma's
@@ -52,7 +75,6 @@ export function expectedMigrations(): readonly string[] {
  */
 export async function schemaState(): Promise<SchemaState> {
   const expected = expectedMigrations();
-  if (expected.length === 0) return { status: "unknown", reason: "manifest_empty" };
 
   let applied: Set<string>;
   try {
@@ -73,9 +95,5 @@ export async function schemaState(): Promise<SchemaState> {
     };
   }
 
-  const pendingNames = expected.filter((name) => !applied.has(name));
-  if (pendingNames.length > 0) {
-    return { status: "behind", pending: pendingNames.length, pendingNames };
-  }
-  return { status: "current" };
+  return compareMigrations(expected, applied);
 }
