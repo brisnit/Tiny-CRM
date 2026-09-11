@@ -54,7 +54,9 @@ async function OpportunityList({
 
   const openOnes = opportunities.filter((o) => !["won", "lost", "no_bid"].includes(o.submissionStatus));
   const totalValue = openOnes.reduce((sum, o) => sum + (o.estimatedValueCents ?? 0), 0);
-  const goCount = openOnes.filter((o) => o.assessment.recommendation === "go").length;
+  // Only opportunities somebody has actually judged can be counted as worth
+  // bidding; an unassessed one is neither a go nor a no.
+  const goCount = openOnes.filter((o) => o.assessment.assessed && o.assessment.recommendation === "go").length;
   const urgent = openOnes.filter((o) => {
     const d = describeDateOnlyDeadline(o.deadlineAt);
     return d.urgent || d.overdue;
@@ -135,14 +137,19 @@ async function OpportunityList({
                       </div>
                       <div className="text-[11px] text-faint">Estimated value</div>
                     </div>
-                    <Badge tone={recTone(rec)} className="shrink-0 px-2 py-1">
-                      {rec === "go" || rec === "lean_go" ? (
-                        <ThumbsUp className="size-3" />
-                      ) : (
-                        <ThumbsDown className="size-3" />
-                      )}
-                      {recLabel(rec)}
-                    </Badge>
+                    {/* No judgement, no verdict — see the detail page for why. */}
+                    {opp.assessment.assessed ? (
+                      <Badge tone={recTone(rec)} className="shrink-0 px-2 py-1">
+                        {rec === "go" || rec === "lean_go" ? (
+                          <ThumbsUp className="size-3" />
+                        ) : (
+                          <ThumbsDown className="size-3" />
+                        )}
+                        {recLabel(rec)}
+                      </Badge>
+                    ) : (
+                      <Badge tone="stone" className="shrink-0 px-2 py-1">Not yet assessed</Badge>
+                    )}
                   </div>
                 </div>
 
@@ -183,7 +190,7 @@ async function OpportunityList({
                   </span>
                 </div>
 
-                {opp.assessment.reasons[0] && opp.assessment.reasons[0].impact < 0 ? (
+                {opp.assessment.assessed && opp.assessment.reasons[0] && opp.assessment.reasons[0].impact < 0 ? (
                   <p className="mt-2 flex items-start gap-1.5 text-[12px] text-amber-700 dark:text-amber-400">
                     <AlertTriangle className="mt-0.5 size-3 shrink-0" />
                     {opp.assessment.reasons[0].detail}

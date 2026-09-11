@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
-  CalendarClock, CheckSquare, ExternalLink, FileText, ListChecks, Paperclip, ThumbsDown, ThumbsUp, Users,
+  CalendarClock, CheckSquare, ExternalLink, FileText, HelpCircle, ListChecks, Paperclip,
+  ThumbsDown, ThumbsUp, Users,
 } from "lucide-react";
 
 import { PageHeader, PageShell, MetaItem } from "@/components/app/page-header";
@@ -127,16 +128,43 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
           <Panel>
             <PanelHeader
               title="Go / no-go"
-              description="Computed from fit, strategic value, competition, value and time remaining"
-              icon={rec === "go" || rec === "lean_go" ? <ThumbsUp /> : <ThumbsDown />}
+              description={
+                opportunity.assessment.assessed
+                  ? "Computed from fit, strategic value, competition, value and time remaining"
+                  : "Needs a fit score, strategic value or competition level before Tiny can weigh in"
+              }
+              icon={
+                !opportunity.assessment.assessed ? <HelpCircle />
+                  : rec === "go" || rec === "lean_go" ? <ThumbsUp /> : <ThumbsDown />
+              }
             />
             <div className="border-t border-hairline p-4">
+              {/*
+                An unjudged opportunity gets no verdict.
+
+                The scorer needs a human input to say anything; with none it is
+                working from the deadline and the contact count, which for an
+                imported backlog is every row — so it floors all of them. An
+                82/GO closing in four days came out "no bid" against a real
+                tracker. Showing that argues against work somebody has already
+                decided to pursue, so it says nothing instead, and says so.
+              */}
+              {!opportunity.assessment.assessed ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Badge tone="stone" className="px-2.5 py-1 text-[12px]">Not yet assessed</Badge>
+                  <span className="text-[13px] text-muted">
+                    Set a fit score, strategic value or competition level and Tiny will weigh in.
+                  </span>
+                </div>
+              ) : (
               <div className="flex flex-wrap items-center gap-3">
                 <Badge tone={recTone(rec)} className="px-2.5 py-1 text-[12px]">
                   {recLabel(rec)}
                 </Badge>
                 <span className="text-[13px] text-muted">{opportunity.assessment.summary}</span>
               </div>
+              )}
+              {opportunity.assessment.assessed ? (<>
               <div className="mt-3">
                 <div className="mb-1 flex items-baseline justify-between text-[11px]">
                   <span className="text-faint">Confidence</span>
@@ -176,6 +204,7 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
                   </li>
                 ))}
               </ul>
+              </>) : null}
 
               {opportunity.importedFrom ? <SourceComparison source={opportunity.importedFrom} /> : null}
             </div>
@@ -410,10 +439,14 @@ function SourceComparison({
 }: {
   source: { fileName: string; importedAt: Date; rowIndex: number; values: Record<string, string> };
 }) {
+  // The judgement the spreadsheet carried, in the spreadsheet's own words: the
+  // headline score and verdict, any adjusted score, and the dimensions they
+  // were built from. Everything else on the row is provenance too, but this is
+  // the part that answers "what did I already think of this one?".
   const interesting = Object.entries(source.values).filter(
     ([key, value]) =>
       value.trim() !== "" &&
-      /score|verdict|rating|days? left|runway|recommend|decision|bump/i.test(key),
+      /score|verdict|rating|days? left|runway|recommend|decision|bump|scope|platform|access|action\b|pref|weighted|option/i.test(key),
   );
   if (interesting.length === 0) return null;
 
@@ -424,8 +457,8 @@ function SourceComparison({
       </p>
       <p className="mt-0.5 text-[12px] text-muted">
         From {source.fileName}, row {source.rowIndex + 1}, on {formatDate(source.importedAt)}. These are the
-        spreadsheet&rsquo;s own figures, kept as they were. Tiny&rsquo;s assessment above is recalculated and is
-        the current one.
+        spreadsheet&rsquo;s own figures, kept exactly as they were on the day of the import. They are not
+        Tiny&rsquo;s assessment and are not recalculated.
       </p>
       <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5">
         {interesting.map(([key, value]) => (

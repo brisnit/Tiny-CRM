@@ -17,6 +17,22 @@ export type GoNoGo = {
   score: number;
   reasons: { label: string; detail: string; impact: number }[];
   summary: string;
+  /**
+   * Whether anyone has actually judged this opportunity yet.
+   *
+   * The scorer needs a human input to say anything meaningful: how well it
+   * fits, how strategic it is, how contested. With none of those it is working
+   * from the deadline and the contact count alone, and for a freshly imported
+   * backlog that is every row — nobody has been contacted and the clock is
+   * already running, so the model floors all of them. Measured against a real
+   * tracker, an 82/GO closing in four days came out `no_bid`.
+   *
+   * That is not a recommendation, it is an absence of one, and presenting it
+   * as "no bid" is worse than saying nothing: it argues against work the
+   * person has already decided to pursue. The flag lets the UI say "not yet
+   * assessed" and mean it. The arithmetic below is unchanged.
+   */
+  assessed: boolean;
 };
 
 export function assessOpportunity(input: {
@@ -144,6 +160,12 @@ export function assessOpportunity(input: {
     score,
     reasons: reasons.sort((a, b) => Math.abs(b.impact) - Math.abs(a.impact)),
     summary,
+    // A judgement exists only if somebody supplied one. Deadline pressure and
+    // contact count are circumstances, not an opinion about whether to bid.
+    assessed:
+      input.fitScore !== null ||
+      input.strategicValue !== null ||
+      input.competitionLevel !== null,
   };
 }
 
