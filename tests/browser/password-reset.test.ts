@@ -2,9 +2,10 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
-import { chromium, type Browser, type Page } from "playwright";
+import { type Browser, type Page } from "playwright";
 
 import { db } from "../helpers/fixtures";
+import { markImported, runnerMark, tracedLaunch } from "./_trace";
 
 /**
  * The password reset flow, in a real browser.
@@ -114,9 +115,13 @@ async function hydrated(page: Page) {
   await page.waitForTimeout(750);
 }
 
+markImported("password-reset");
+
 describe("password reset, driven by a browser", () => {
   before(async () => {
-    browser = await chromium.launch();
+    runnerMark("before:start", { suite: "password-reset" });
+    browser = await tracedLaunch("password-reset");
+    runnerMark("before:end", { suite: "password-reset" });
   });
 
   after(async () => {

@@ -18,7 +18,7 @@
  * refuses SQLite and an in-process rate limiter, which is correct of it, and
  * React's input reconciliation — the thing under test — is identical either way.
  */
-import { execSync, spawn, spawnSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
@@ -119,11 +119,27 @@ process.on("SIGINT", () => { shutdown(); process.exit(130); });
  * become the annotation. Connection strings are stripped rather than trusted
  * to be absent — this text leaves the machine.
  */
+/**
+ * Strips anything identifying before text leaves the machine.
+ *
+ * The runner's output is captured now, and it can contain an invite URL in a
+ * Playwright error, a generated address in an assertion message, or a
+ * connection string in a stack. Each is removed by shape rather than by
+ * trusting the call site to have been careful.
+ */
+function sanitise(text) {
+  return String(text)
+    .replace(/postgres(ql)?:\/\/[^\s"']+/g, "[connection string redacted]")
+    .replace(/file:[^\s"']+/g, "[sqlite path redacted]")
+    .replace(/\/invite\/[A-Za-z0-9_-]+/g, "/invite/[token redacted]")
+    .replace(/[?&](token|code|secret|key)=[^\s&"']+/gi, "$1=[redacted]")
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[email redacted]")
+    .replace(/(secret|token|key|password|cookie|session)\s*[=:]\s*\S+/gi, "$1=[redacted]");
+}
+
 function annotate(title, detail) {
   if (!process.env.GITHUB_ACTIONS) return;
-  const safe = String(detail)
-    .replace(/postgres(ql)?:\/\/[^\s"']+/g, "[connection string redacted]")
-    .replace(/(secret|token|key|password)[=:]\S+/gi, "$1=[redacted]")
+  const safe = sanitise(String(detail))
     .slice(-6000)
     .replace(/%/g, "%25")
     .replace(/\r/g, "")
@@ -232,11 +248,36 @@ async function warmRoutes() {
 await waitForServer();
 console.log("Ready. Running the browser suites…\n");
 
-const result = spawnSync(
+/**
+ * The runner's own output, kept rather than inherited.
+ *
+ * `stdio: "inherit"` sent everything straight to the CI log, which is the one
+ * place a failure on this repository cannot be read. The previous round proved
+ * the invite route completes in 127ms and then showed the server receiving no
+ * request from any suite at all — so the test process fails between being
+ * spawned and issuing its first request, and its output was the only witness.
+ *
+ * Still streamed live to this process's stdout, so a developer watching a local
+ * run sees exactly what they saw before; the buffer is additional, not instead.
+ */
+console.log("RUNNER SPAWN tests/browser/**/*.test.ts");
+const runnerStarted = Date.now();
+let runnerLog = "";
+
+const runner = spawn(
   "npx",
-  ["tsx", "--test", "--test-reporter=spec", "--test-concurrency=1", "tests/browser/**/*.test.ts"],
+  [
+    "tsx",
+    "--test",
+    "--test-reporter=spec",
+    "--test-concurrency=1",
+    // A hung test now fails as a test rather than starving the job in silence.
+    // Generous: the slowest of these takes about five seconds.
+    "--test-timeout=120000",
+    "tests/browser/**/*.test.ts",
+  ],
   {
-    stdio: "inherit",
+    stdio: ["inherit", "pipe", "pipe"],
     env: {
       ...process.env,
       DATABASE_URL,
@@ -248,9 +289,65 @@ const result = spawnSync(
   },
 );
 
-shutdown();
-if (result.status !== 0) {
-  console.error("\n--- last of the server log ---\n" + serverLog.slice(-4000));
-  annotate("browser suites failed", `Last of the server log:\n${serverLog.slice(-2500)}`);
+for (const [name, stream] of [["stdout", runner.stdout], ["stderr", runner.stderr]]) {
+  stream.on("data", (chunk) => {
+    const text = chunk.toString();
+    (name === "stdout" ? process.stdout : process.stderr).write(text);
+    runnerLog += text;
+    if (runnerLog.length > 200_000) runnerLog = runnerLog.slice(-200_000);
+  });
 }
-process.exit(result.status ?? 1);
+
+const status = await new Promise((resolve) => {
+  runner.on("close", (code, signal) => {
+    console.log(
+      `RUNNER EXIT code=${code} signal=${signal ?? "none"} duration=${Date.now() - runnerStarted}ms`,
+    );
+    resolve(code ?? (signal ? 1 : 0));
+  });
+  runner.on("error", (error) => {
+    console.log(`RUNNER SPAWN FAILED ${error.name}`);
+    runnerLog += `\nspawn error: ${error.name}: ${error.message}\n`;
+    resolve(1);
+  });
+});
+
+shutdown();
+
+if (status !== 0) {
+  console.error("\n--- last of the server log ---\n" + serverLog.slice(-4000));
+
+  // The checkpoints, pulled out of the noise so the last one is unmissable.
+  const runnerMarks = runnerLog
+    .split("\n")
+    .filter((line) => line.startsWith("RUNNER "))
+    .slice(-40);
+  const serverMarks = serverLog
+    .split("\n")
+    .filter((line) => line.startsWith("DIAG "))
+    .slice(-20);
+
+  annotate(
+    "browser suites failed",
+    [
+      `runner exit status: ${status}`,
+      `runner duration: ${Date.now() - runnerStarted}ms`,
+      `runner checkpoints seen: ${runnerMarks.length}`,
+      `last runner checkpoint: ${runnerMarks.at(-1) ?? "(none — the test process printed no checkpoint at all)"}`,
+      "",
+      "runner checkpoints:",
+      ...(runnerMarks.length > 0 ? runnerMarks : ["(none)"]),
+      "",
+      "runner output tail:",
+      runnerLog.slice(-3500),
+      "",
+      "server checkpoints:",
+      ...(serverMarks.length > 0 ? serverMarks : ["(none)"]),
+      "",
+      "server log tail:",
+      serverLog.slice(-1500),
+    ].join("\n"),
+  );
+}
+
+process.exit(status);
