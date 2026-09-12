@@ -3,6 +3,7 @@ import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 
 import { rootDb } from "@/lib/db";
+import { diagTimer } from "@/lib/diag";
 import { isPostgres } from "@/lib/env";
 import { log } from "@/lib/logger";
 import { withTenantContext } from "@/lib/tenant-db";
@@ -183,18 +184,43 @@ async function withInvitationToken<T>(
   tokenHash: string,
   fn: (client: Prisma.TransactionClient) => Promise<T>,
 ): Promise<T> {
-  if (!isPostgres) return fn(rootDb as unknown as Prisma.TransactionClient);
+  // Temporary checkpoints; see src/lib/diag.ts. Off unless BROWSER_DIAG=1.
+  const trace = diagTimer("invite.db");
+  trace.mark("enter", { engine: isPostgres ? "postgres" : "sqlite" });
 
-  return rootDb.$transaction(async (tx) => {
+  if (!isPostgres) {
+    trace.mark("sqlite:query:start");
+    const result = await fn(rootDb as unknown as Prisma.TransactionClient);
+    trace.mark("sqlite:query:end");
+    return result;
+  }
+
+  trace.mark("pg:transaction:start");
+  const result = await rootDb.$transaction(async (tx) => {
+    trace.mark("pg:transaction:opened");
     await tx.$executeRaw`SELECT set_config('app.invitation_token', ${tokenHash}, true)`;
-    return fn(tx);
+    trace.mark("pg:set_config:done");
+    const inner = await fn(tx);
+    trace.mark("pg:query:end");
+    return inner;
   });
+  trace.mark("pg:transaction:committed");
+  return result;
 }
 
 export async function lookupInvitation(token: string): Promise<InvitationLookup> {
-  if (!token || token.length > 200) return { ok: false, reason: "not_found" };
+  // Temporary checkpoints; see src/lib/diag.ts. Off unless BROWSER_DIAG=1.
+  const trace = diagTimer("invite.lookup");
+  trace.mark("enter");
 
+  if (!token || token.length > 200) {
+    trace.mark("rejected-by-shape");
+    return { ok: false, reason: "not_found" };
+  }
+
+  trace.mark("hash:start");
   const tokenHash = hashInvitationToken(token);
+  trace.mark("hash:end");
   const row = await withInvitationToken(tokenHash, (tx) =>
     tx.workspaceInvitation.findUnique({
       where: { tokenHash },
@@ -213,10 +239,13 @@ export async function lookupInvitation(token: string): Promise<InvitationLookup>
     }),
   );
 
+  trace.mark("row:fetched", { found: Boolean(row) });
+
   if (!row) return { ok: false, reason: "not_found" };
   if (row.revokedAt) return { ok: false, reason: "revoked" };
   if (row.acceptedAt) return { ok: false, reason: "already_accepted" };
   if (row.expiresAt <= new Date()) return { ok: false, reason: "expired" };
+  trace.mark("classified-live");
 
   return {
     ok: true,

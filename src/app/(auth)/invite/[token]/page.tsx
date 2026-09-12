@@ -4,6 +4,7 @@ import { InviteAccept } from "@/components/app/invite-accept";
 import { SignupForm } from "@/components/app/auth-forms";
 import { Badge } from "@/components/ui/badge";
 import { getIdentity } from "@/lib/auth/context";
+import { diagTimer } from "@/lib/diag";
 import { lookupInvitation, normaliseEmail } from "@/lib/auth/invitations";
 import { WORKSPACE_ROLE } from "@/lib/enums";
 
@@ -30,12 +31,39 @@ export const metadata = { title: "Join a workspace" };
  *    produce an account that cannot redeem the link it came from.
  */
 export default async function InvitePage({ params }: PageProps<"/invite/[token]">) {
-  const { token } = await params;
-  const [identity, found] = await Promise.all([getIdentity(), lookupInvitation(token)]);
+  // Temporary checkpoints; see src/lib/diag.ts. Off unless BROWSER_DIAG=1.
+  const trace = diagTimer("invite");
+  trace.mark("route-entered");
 
-  if (!found.ok) return <Invalid />;
+  const { token } = await params;
+  trace.mark("params-resolved", { tokenLength: token.length });
+
+  // Still concurrent, deliberately: sequencing these to time them separately
+  // would change what the route does under load, and the question is where it
+  // stops rather than how fast it is.
+  const [identity, found] = await Promise.all([
+    (async () => {
+      trace.mark("auth:start");
+      const result = await getIdentity();
+      trace.mark("auth:end", { authenticated: Boolean(result) });
+      return result;
+    })(),
+    (async () => {
+      trace.mark("lookup:start");
+      const result = await lookupInvitation(token);
+      trace.mark("lookup:end", { ok: result.ok, reason: result.ok ? null : result.reason });
+      return result;
+    })(),
+  ]);
+  trace.mark("awaits-settled");
+
+  if (!found.ok) {
+    trace.mark("decision", { branch: "invalid" });
+    return <Invalid />;
+  }
 
   const invitation = found.invitation;
+  trace.mark("invitation-resolved");
   const roleLabel = WORKSPACE_ROLE.label(invitation.role, invitation.role);
   const inviter = invitation.invitedByName?.trim() || "Someone";
   const next = `/invite/${encodeURIComponent(token)}`;
@@ -59,6 +87,7 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
   // Signed in as somebody else. Say so plainly rather than silently failing on
   // the next click — the fix is theirs to make, and it is a one-line one.
   if (identity && normaliseEmail(identity.email) !== normaliseEmail(invitation.email)) {
+    trace.mark("decision", { branch: "address-mismatch" });
     return (
       <Panel>
         {header}
@@ -80,6 +109,7 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
   }
 
   if (identity) {
+    trace.mark("decision", { branch: "accept" });
     return (
       <Panel>
         {header}
@@ -88,6 +118,7 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
     );
   }
 
+  trace.mark("decision", { branch: "signup" });
   return (
     <Panel>
       {header}

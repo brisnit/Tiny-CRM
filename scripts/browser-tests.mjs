@@ -77,6 +77,9 @@ const serverEnv = {
   DATABASE_URL,
   AUTH_SECRET: "browser-test-secret-that-is-at-least-32-characters-long",
   APP_URL: BASE_URL,
+  // Temporary: turns on the checkpoint marks in src/lib/diag.ts, so a route
+  // that never completes still says how far it got. Set nowhere else.
+  BROWSER_DIAG: "1",
   // No mail provider is configured, so the reset notification falls through to
   // the logging adapter. That is deliberate: a test must not send real email.
   NODE_ENV: "development",
@@ -121,7 +124,7 @@ function annotate(title, detail) {
   const safe = String(detail)
     .replace(/postgres(ql)?:\/\/[^\s"']+/g, "[connection string redacted]")
     .replace(/(secret|token|key|password)[=:]\S+/gi, "$1=[redacted]")
-    .slice(-3000)
+    .slice(-6000)
     .replace(/%/g, "%25")
     .replace(/\r/g, "")
     .replace(/\n/g, "%0A");
@@ -153,14 +156,7 @@ async function waitForServer() {
         signal: AbortSignal.timeout(60_000),
       });
       if (response.ok) {
-        // Every other public route the suites drive, for the same reason. A
-        // route compiled inside a locator's timeout is a flake waiting for a
-        // slow machine; CI is a slow machine.
-        for (const route of ["/login", "/signup", "/invite/warmup"]) {
-          await fetch(`${BASE_URL}${route}`, { signal: AbortSignal.timeout(120_000) }).catch(
-            () => {},
-          );
-        }
+        await warmRoutes();
         return;
       }
     } catch {
@@ -175,6 +171,62 @@ async function waitForServer() {
       `Last of the server log:\n${serverLog.slice(-2500)}`,
   );
   throw new Error(`the dev server did not become ready within ${READY_BUDGET_MS}ms`);
+}
+
+/**
+ * Compiles each public route the suites drive, one at a time, saying so.
+ *
+ * Every route gets its own bound. The previous version let one slow route
+ * consume the whole job, which produced a 242-second step and a log that
+ * simply stopped — the absence of a completion line being the only clue, and
+ * an ambiguous one. START and END lines make the in-flight route explicit, and
+ * a per-route deadline turns "the job died" into "this route did not answer in
+ * N seconds", which is a fact rather than an inference.
+ */
+const WARM_ROUTES = ["/login", "/signup", "/invite/warmup"];
+const WARM_TIMEOUT_MS = 90_000;
+
+async function warmRoutes() {
+  for (const route of WARM_ROUTES) {
+    const started = Date.now();
+    console.log(`WARM START ${route}`);
+    try {
+      const response = await fetch(`${BASE_URL}${route}`, {
+        signal: AbortSignal.timeout(WARM_TIMEOUT_MS),
+      });
+      console.log(`WARM END ${route} status=${response.status} duration=${Date.now() - started}ms`);
+    } catch (error) {
+      const elapsed = Date.now() - started;
+      const reason = error instanceof Error ? error.name : "unknown";
+      console.log(`WARM TIMEOUT ${route} after=${elapsed}ms reason=${reason}`);
+
+      // Everything known about where it stopped, in the one place a failure on
+      // this repository can actually be read.
+      const marks = serverLog
+        .split("\n")
+        .filter((line) => line.startsWith("DIAG "))
+        .slice(-25);
+      const entered = marks.some((line) => line.startsWith("DIAG invite "));
+      annotate(
+        `warm-up route did not answer: ${route}`,
+        [
+          `route in flight: ${route}`,
+          `elapsed: ${elapsed}ms (limit ${WARM_TIMEOUT_MS}ms)`,
+          `abort reason: ${reason}`,
+          `application route code entered: ${entered ? "yes" : "no"}`,
+          `last checkpoint: ${marks.at(-1) ?? "(none — no DIAG line was ever printed)"}`,
+          "",
+          "checkpoints:",
+          ...(marks.length > 0 ? marks : ["(none)"]),
+          "",
+          "server log tail:",
+          serverLog.slice(-2000),
+        ].join("\n"),
+      );
+      shutdown();
+      process.exit(1);
+    }
+  }
 }
 
 await waitForServer();
