@@ -102,8 +102,45 @@ function shutdown() {
 process.on("exit", shutdown);
 process.on("SIGINT", () => { shutdown(); process.exit(130); });
 
+
+/**
+ * Says what went wrong somewhere a failure can actually be read.
+ *
+ * CI logs on this repository are not readable without admin access — two
+ * browser-job failures were diagnosed by elimination because of it, which is
+ * slow and guesses more than it proves. GitHub turns `::error::` workflow
+ * commands into annotations, and annotations *are* readable from the public
+ * API, so the harness now states its own cause of death there.
+ *
+ * Newlines must be encoded; the message is capped so a runaway log cannot
+ * become the annotation. Connection strings are stripped rather than trusted
+ * to be absent — this text leaves the machine.
+ */
+function annotate(title, detail) {
+  if (!process.env.GITHUB_ACTIONS) return;
+  const safe = String(detail)
+    .replace(/postgres(ql)?:\/\/[^\s"']+/g, "[connection string redacted]")
+    .replace(/(secret|token|key|password)[=:]\S+/gi, "$1=[redacted]")
+    .slice(-3000)
+    .replace(/%/g, "%25")
+    .replace(/\r/g, "")
+    .replace(/\n/g, "%0A");
+  console.log(`::error title=${title}::${safe}`);
+}
+
+/**
+ * How long the dev server gets to answer its first request.
+ *
+ * Generous on purpose. A healthy server returns in seconds and never touches
+ * this, so the only thing a large budget costs is the time a genuinely broken
+ * run takes to give up — and the only thing a small one buys is a red build on
+ * a slow machine. CI runners are slower than any development machine here, and
+ * they compile Next from an empty cache every time.
+ */
+const READY_BUDGET_MS = 420_000;
+
 async function waitForServer() {
-  const deadline = Date.now() + 180_000;
+  const deadline = Date.now() + READY_BUDGET_MS;
   while (Date.now() < deadline) {
     if (server.exitCode !== null) {
       console.error(serverLog);
@@ -132,7 +169,12 @@ async function waitForServer() {
     await new Promise((r) => setTimeout(r, 1000));
   }
   console.error(serverLog);
-  throw new Error("the dev server did not become ready within 180s");
+  annotate(
+    "browser harness: the dev server never became ready",
+    `Waited ${Math.round(READY_BUDGET_MS / 1000)}s for ${BASE_URL}/reset-password to answer.\n` +
+      `Last of the server log:\n${serverLog.slice(-2500)}`,
+  );
+  throw new Error(`the dev server did not become ready within ${READY_BUDGET_MS}ms`);
 }
 
 await waitForServer();
@@ -155,5 +197,8 @@ const result = spawnSync(
 );
 
 shutdown();
-if (result.status !== 0) console.error("\n--- last of the server log ---\n" + serverLog.slice(-4000));
+if (result.status !== 0) {
+  console.error("\n--- last of the server log ---\n" + serverLog.slice(-4000));
+  annotate("browser suites failed", `Last of the server log:\n${serverLog.slice(-2500)}`);
+}
 process.exit(result.status ?? 1);
