@@ -2,10 +2,9 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
-import { type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 
 import { db } from "../helpers/fixtures";
-import { markImported, runnerMark, tracedLaunch } from "./_trace";
 
 /**
  * The invitation journey, in a real browser.
@@ -22,8 +21,6 @@ import { markImported, runnerMark, tracedLaunch } from "./_trace";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3123";
 const PASSWORD = "a-long-enough-password-9134";
-
-markImported("team-invite");
 
 let browser: Browser;
 const users: string[] = [];
@@ -69,8 +66,7 @@ async function inviteLink(workspaceId: string, invitedById: string, email: strin
 
 describe("joining a workspace from an invitation", () => {
   before(async () => {
-    runnerMark("before:start", { suite: "team-invite" });
-    browser = await tracedLaunch("team-invite");
+    browser = await chromium.launch();
 
     // Pay the dev server's first compile of the authenticated shell here,
     // outside any assertion's timeout.
@@ -81,26 +77,13 @@ describe("joining a workspace from an invitation", () => {
     // first, which is how a 60-second timeout becomes a flake on a loaded
     // machine. Budgeted generously and asserted on nothing: if it is slow, it
     // is slow here rather than mid-test.
-    runnerMark("page:create:start", { suite: "team-invite" });
     const warm = await browser.newPage();
-    runnerMark("page:create:end", { suite: "team-invite" });
-
-    runnerMark("fixtures:write:start");
     const host = await owner("Warmup");
-    runnerMark("fixtures:write:end");
-
-    runnerMark("navigation:first:start", { target: "/login" });
     await signIn(warm, host.email);
-    runnerMark("navigation:first:end", { target: "/login" });
-
-    runnerMark("navigation:warm:start", { target: "/settings/team" });
     await warm
       .goto(`${BASE_URL}/settings/team`, { waitUntil: "domcontentloaded", timeout: 300_000 })
       .catch(() => {});
-    runnerMark("navigation:warm:end", { target: "/settings/team" });
-
     await warm.close();
-    runnerMark("before:end", { suite: "team-invite" });
   });
 
   after(async () => {
@@ -114,7 +97,6 @@ describe("joining a workspace from an invitation", () => {
   });
 
   test("a brand-new person signs up from the link and lands in the inviting workspace", async () => {
-    runnerMark("test:first:start");
     const host = await owner("Signup");
     const recipient = `new-${randomUUID().slice(0, 8)}@invite.test`.toLowerCase();
     const link = await inviteLink(host.workspaceId, host.userId, recipient);

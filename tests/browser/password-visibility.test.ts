@@ -1,8 +1,6 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { type Browser, type Page } from "playwright";
-
-import { markImported, runnerMark, tracedLaunch } from "./_trace";
+import { chromium, type Browser, type Page } from "playwright";
 
 /**
  * The show/hide password control.
@@ -51,14 +49,8 @@ const SURFACES = [
   },
 ];
 
-markImported("password-visibility");
-
 describe("show/hide password", () => {
-  before(async () => {
-    runnerMark("before:start", { suite: "password-visibility" });
-    browser = await tracedLaunch("password-visibility");
-    runnerMark("before:end", { suite: "password-visibility" });
-  });
+  before(async () => { browser = await chromium.launch(); });
   after(async () => { await browser?.close(); });
 
   for (const surface of SURFACES) {
