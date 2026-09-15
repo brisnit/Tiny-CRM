@@ -30,7 +30,7 @@ that no amount of correct deployment will substitute for.
       money as integer cents — so nothing else changes.
 - [ ] **BLOCKER** Apply migrations: `npx prisma migrate deploy`.
       Never `migrate dev` against production; it can drop data.
-- [ ] **BLOCKER** Apply all three PostgreSQL-only SQL files, in order:
+- [ ] **BLOCKER** Apply all six PostgreSQL-only SQL files, in order:
       ```bash
       psql "$DATABASE_URL" -f prisma/postgres/001_search_indexes.sql
       psql "$DATABASE_URL" -f prisma/postgres/002_row_level_security.sql
@@ -53,6 +53,20 @@ that no amount of correct deployment will substitute for.
       other, so **without this a logical restore is impossible** — no table
       ordering satisfies a cycle. This was found by running the restore drill,
       not by reading the schema.
+
+      **004** — the workspace bootstrap policy, including the arm that lets an
+      invited person accept an invitation.
+
+      **005** — identity policies: a user can always read their own memberships.
+
+      **006** — the background job claim function.
+
+- [ ] **BLOCKER** Apply migrations and all six SQL files **before** pushing a
+      commit that needs them to `main`. Vercel deploys `main` on push, and the
+      build's deployment gate blocks a production build against a database that
+      is behind the commit or missing a policy. Production keeps serving the
+      previous deployment until you apply the change and redeploy. See
+      `docs/VERCEL-DEPLOYMENT.md`, *The deployment gate*.
 
 - [ ] **BLOCKER** Connect the application as the RLS-restricted role, not the
       owner:
@@ -276,6 +290,13 @@ npm run db:use-postgres
 npx prisma generate
 npx prisma migrate deploy
 psql "$DATABASE_URL" -f prisma/postgres/001_search_indexes.sql
+psql "$DATABASE_URL" -f prisma/postgres/002_row_level_security.sql
+psql "$DATABASE_URL" -f prisma/postgres/003_deferrable_constraints.sql
+psql "$DATABASE_URL" -f prisma/postgres/004_workspace_bootstrap.sql
+psql "$DATABASE_URL" -f prisma/postgres/005_identity_policies.sql
+psql "$DATABASE_URL" -f prisma/postgres/006_job_claim.sql
+# ...all of the above BEFORE pushing to main: the build's deployment gate
+# blocks a production build against a database that is behind
 
 # 2. Prove the configuration before routing traffic
 NODE_ENV=production npm run check:config

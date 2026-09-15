@@ -49,7 +49,7 @@ superuser, or the migration administrator.** This is not a stylistic preference:
 
 | Role | Used by | Privileges |
 |---|---|---|
-| **owner / migration role** | `prisma migrate deploy`, the three SQL files, maintenance | Owns the tables. DDL. Never in `DATABASE_URL`. |
+| **owner / migration role** | `prisma migrate deploy`, the six SQL files in `prisma/postgres`, maintenance | Owns the tables. DDL. Never in `DATABASE_URL`. |
 | **`tinycrm_app`** | The running application, every request | `SELECT/INSERT/UPDATE/DELETE` only. `NOSUPERUSER`, `NOBYPASSRLS`, `NOCREATEDB`, `NOCREATEROLE`. No `UPDATE`/`DELETE` on `AuditLog`. |
 
 `tinycrm_app` is created by `002_row_level_security.sql` as `NOLOGIN` with no
@@ -84,6 +84,9 @@ grant so it would fail anyway; not relying on that is the point.
 `prisma generate` *is* required: the client is generated into `src/generated`,
 which is gitignored, so it does not exist in a fresh checkout.
 
+**The build command's first step is the deployment gate** — see *The
+deployment gate* below. It reads the database; it never migrates it.
+
 ### Applying the schema
 
 Migrations are a **deliberate, separately-credentialed step**. They are not in
@@ -117,6 +120,114 @@ DATABASE_URL='postgresql://tinycrm_app:...' npx tsx -e \
 `Contact.companyId` form a foreign-key cycle, and without deferrable constraints
 **a logical backup cannot be restored** — discovered by running the restore, not
 by reading the schema.
+
+### The deployment gate
+
+Every Vercel build runs `node scripts/deploy-gate.mjs` before anything else
+(`buildCommand` in `vercel.json`). The build does not proceed unless the
+database in that build's `DATABASE_URL` — in production, the restricted
+`tinycrm_app` role — satisfies all of these:
+
+1. **Every migration this commit ships is applied** (finished, not rolled back).
+   A database *ahead* of the commit passes, as `/api/ready` does, so a rollback
+   is never blocked.
+2. **No foreign key is non-deferrable.** Otherwise a logical restore fails.
+3. **No table has row-level security enabled without `FORCE`.**
+4. **Every table with a `workspaceId` column has row-level security**, except the
+   exceptions in `docs/RLS.md` (today, `IdempotencyKey`). A unit test fails if
+   the gate's allowlist and that document ever disagree.
+
+It exists because of two incidents that no check stopped. On 2026-09-11 a
+migration-bearing commit reached production on push while its migration was
+unapplied, for four days. On 2026-09-10 an applied migration was not followed by
+`003`, leaving three foreign keys non-deferrable for five days while hosted
+verification reported "108 deferrable foreign keys" as a pass. Both are now a
+failed build instead of a silent incompatibility.
+
+**It fails closed, and it has no override.** No PostgreSQL `DATABASE_URL`, an
+unreachable database, an unreadable ledger or a query error all block. Its reads
+run in a `READ ONLY` transaction. There is no environment variable, flag or
+setting that skips it — a unit test pins the variables it may read. The only ways
+past a block are to fix the database, or to change the gate in source control.
+
+**The order this enforces:**
+
+1. Apply the migration and re-apply `001`–`006` from your machine, with the owner
+   URL (*Applying the schema*, above).
+2. Push to `main`.
+
+If you push first, the build fails with the missing migration named, and
+**production keeps serving the previous deployment** — a failed build never
+replaces the live one. Apply the change, then redeploy the failed deployment from
+the Vercel dashboard. A blocked build looks like this (abridged):
+
+```
+Deployment gate — production build
+  database fingerprint: <12 hex characters>  (a hash of host and database name)
+  migrations:          3 shipped by this commit, 2 applied in the database
+  ...
+
+DEPLOYMENT GATE: BLOCKED — this build will not proceed.
+
+  ✕ 1 migration shipped by this commit is not applied to the database:
+      20260911180102_workspace_invitations
+```
+
+The fingerprint identifies which database was checked without printing its host,
+role or password.
+
+**Where it is proven.** `tests/unit/deploy-gate.test.ts` pins the verdict and the
+properties that keep it honest (no writes, no override, the allowlist matches
+`docs/RLS.md`, `vercel.json` runs it first). `scripts/deploy-gate-proof.mjs` runs
+in the PostgreSQL CI job on 17 and 18: it builds throwaway databases — one
+current, one per failure — and runs the real gate against each as the
+restricted role, including once as a role that can read nothing but the ledger,
+to prove the `workspaceId` check cannot be hidden by missing privileges.
+
+### Deployments that do not run Vercel's build
+
+`vercel deploy --prebuilt` uploads an output built elsewhere, so no build runs on
+Vercel. One control is proven in code; the rest is policy.
+
+**A production output built for `--prebuilt` is gated too.** `vercel build`
+runs the same `buildCommand`, gate first. Verified locally on 2026-09-15:
+`vercel build --prod` pulled the production settings, ran the gate as a
+*production build*, and blocked, because Vercel redacts the sensitive
+`DATABASE_URL` when environment variables are pulled. An operator who has not
+deliberately supplied a database cannot produce a passing production build.
+
+That is not the whole answer, and this document does not pretend otherwise: the
+blocked `vercel build` still left a `.vercel/output` directory behind. Whether
+`vercel deploy --prebuilt` refuses to deploy an output left by a failed build is
+not assumed — it is tested against Vercel, and until the result is recorded
+here, the policy below is the control.
+
+**Beyond that it is a policy, stated here because code cannot enforce it.** Any
+control inside a build is skipped by a deployment that does not run that build,
+and a prebuilt output is whatever its uploader built. So:
+
+- **Production is deployed only by pushing to `main`**, through Vercel's GitHub
+  integration, which always runs the gate.
+- **Nobody runs `vercel deploy --prod` or `vercel deploy --prebuilt --prod`
+  against this project.** In a genuine emergency, the fix is a reviewed commit
+  pushed to `main` — a revert, or a change to the gate itself — which passes
+  through the gate like any other. It is not a CLI deployment.
+- **CI holds no Vercel token and never deploys.** Keep it that way; a token in CI
+  is a production deployment path that skips review.
+- Only people who need to create deployments hold Vercel access.
+
+What remains is deliberate circumvention by someone with deployment access —
+supplying a different database to `vercel build`, or hand-building an output.
+That is an access-control question, not a gating one. It is also still visible:
+`/api/ready` returns `503 schema_behind` for any deployment whose code is ahead of
+its database, however it was deployed, and Vercel's deployment list records how
+each deployment was created.
+
+A stronger, platform-level control exists and is not adopted yet: Vercel
+Deployment Checks, available on this team's Pro plan for GitHub-linked projects,
+can hold a production deployment until a GitHub Action verifies it. Whether they
+apply to deployments created from the CLI is not documented, so adopting them
+would first need that proved.
 
 ---
 
@@ -339,9 +450,9 @@ A backup that has never been restored is a hypothesis, not a backup.
       node scripts/apply-sql.mjs prisma/postgres/001_search_indexes.sql
       node scripts/apply-sql.mjs prisma/postgres/002_row_level_security.sql
       node scripts/apply-sql.mjs prisma/postgres/003_deferrable_constraints.sql
-node scripts/apply-sql.mjs prisma/postgres/004_workspace_bootstrap.sql
-node scripts/apply-sql.mjs prisma/postgres/005_identity_policies.sql
-node scripts/apply-sql.mjs prisma/postgres/006_job_claim.sql
+      node scripts/apply-sql.mjs prisma/postgres/004_workspace_bootstrap.sql
+      node scripts/apply-sql.mjs prisma/postgres/005_identity_policies.sql
+      node scripts/apply-sql.mjs prisma/postgres/006_job_claim.sql
 3.  ALTER ROLE tinycrm_app WITH LOGIN PASSWORD '<generated>';
     GRANT CONNECT ON DATABASE <db> TO tinycrm_app;
 4.  Verify RLS binds:  reportRlsStatus() as tinycrm_app.
@@ -349,7 +460,8 @@ node scripts/apply-sql.mjs prisma/postgres/006_job_claim.sql
     Build command comes from vercel.json — do not override it.
 6.  Set Production environment variables (§2). Use the POOLED, tinycrm_app URL.
 7.  NODE_ENV=production npm run check:config     # locally, same values
-8.  Deploy.
+8.  Deploy by pushing to main. The build runs the deployment gate first; if it
+    blocks, apply what it names and redeploy — production is not replaced.
 9.  Watch the boot logs for the rlsStatus() error line. If present, stop.
 10. Run the smoke tests below.
 11. Enable provider backups and perform one real restore.
@@ -362,7 +474,7 @@ Do these as the owner, on real infrastructure, before anyone else has an account
 | # | Check | Expected |
 |---|---|---|
 | 1 | `GET /api/health` | 200 |
-| 2 | `GET /api/ready` | 200 — proves migrations ran |
+| 2 | `GET /api/ready` | 200 — proves the deployed code and its database agree |
 | 3 | Sign up a new account | Succeeds; verification email arrives |
 | 4 | Verify the email | State changes to verified |
 | 5 | Sign out, sign in | Succeeds |

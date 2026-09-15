@@ -188,6 +188,18 @@ jobs:
           NODE_ENV: test
           NODE_OPTIONS: --require ./scripts/allow-server-modules.cjs
 
+      - name: The deployment gate blocks a database it cannot run on
+        # scripts/deploy-gate-proof.mjs builds throwaway databases on this
+        # server — one fully migrated, and one per failure: a migration behind,
+        # a non-deferrable foreign key, RLS without FORCE, a workspace table
+        # without RLS — and runs the real gate against each as the restricted
+        # role, plus once as a role that can read nothing but the ledger. It
+        # drops everything it creates. No production credential is involved.
+        run: node scripts/deploy-gate-proof.mjs
+        env:
+          ADMIN_DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
+          APP_ROLE_PASSWORD: tinycrm_app
+
       - name: Record the engine differences
         # Not a gate: the output is read when a portability question comes up.
         # Runs as the owner: it probes engine behaviour, not tenancy.

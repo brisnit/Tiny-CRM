@@ -4,7 +4,7 @@
   "regions": [
     "pdx1"
   ],
-  "buildCommand": "node scripts/use-provider.mjs auto && prisma generate && next build",
+  "buildCommand": "node scripts/deploy-gate.mjs && node scripts/use-provider.mjs auto && prisma generate && next build",
   "crons": [
     {
       "path": "/api/cron/jobs",

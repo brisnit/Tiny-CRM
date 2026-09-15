@@ -283,16 +283,25 @@ async function main() {
   if (trgm === 1) pass("pg_trgm extension installed (search indexes)");
   else fail("pg_trgm extension installed", "001_search_indexes.sql has not been applied");
 
-  const deferrable = (
+  // Every foreign key, not merely some. The previous check passed when *any*
+  // key was deferrable, so from 2026-09-10 to 2026-09-15 it reported "108
+  // deferrable foreign keys (restore is possible)" while three import-table keys
+  // were not — and a logical restore would have failed on them. The same rule
+  // now also blocks deployment (scripts/deploy-gate.mjs).
+  const keys = (
     await app.query(`
-      SELECT count(*)::int AS n FROM pg_constraint
-      WHERE contype = 'f' AND condeferrable
+      SELECT rel.relname || '.' || con.conname AS name, con.condeferrable AS deferrable
+      FROM pg_constraint con JOIN pg_class rel ON rel.oid = con.conrelid
+      WHERE con.contype = 'f' AND rel.relnamespace = 'public'::regnamespace
+      ORDER BY 1
     `)
-  ).rows[0].n;
-  if (deferrable > 0) pass(`${deferrable} deferrable foreign keys (restore is possible)`);
+  ).rows;
+  const nonDeferrable = keys.filter((key) => !key.deferrable).map((key) => key.name);
+  if (keys.length === 0) fail("every foreign key is deferrable", "no foreign keys found — the schema is not present");
+  else if (nonDeferrable.length === 0) pass(`every foreign key is deferrable — 0 non-deferrable of ${keys.length} (restore is possible)`);
   // The SQL filename in this message trips gitleaks' generic-api-key
   // heuristic. It is prose in an error string, not a credential.
-  else fail("deferrable foreign keys", "003_deferrable_constraints.sql has not been applied — a logical restore will fail"); // gitleaks:allow
+  else fail("every foreign key is deferrable", `${nonDeferrable.length} of ${keys.length} are not, so a logical restore will fail — re-apply 003_deferrable_constraints.sql: ${nonDeferrable.join(", ")}`); // gitleaks:allow
 
   await app.end().catch(() => {});
 
