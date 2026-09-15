@@ -196,6 +196,46 @@ async function warmRoutes() {
 }
 
 await waitForServer();
+
+/**
+ * Compiles the authenticated routes, with a real session, before any suite runs.
+ *
+ * Here and not in a suite's before(): the runner's --test-timeout bounds a whole
+ * test file, hooks included, so a suite can never give the first signed-in
+ * compile more than 120 seconds. On a CI runner that was not enough twice
+ * (1e356cc, a9dfdb8). Spawned, never spawnSync, for the reason given at the
+ * runner below. Best-effort and bounded; its step timings are kept so a failure
+ * annotation can say where the time went.
+ */
+const WARM_AUTH_BUDGET_MS = 900_000;
+let warmLog = "";
+console.log("Warming the authenticated routes…");
+await new Promise((resolveWarm) => {
+  const warm = spawn("npx", ["tsx", "tests/browser/support/warm-authenticated-routes.ts"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      DATABASE_URL,
+      BASE_URL,
+      NODE_ENV: "test",
+      AUTH_SECRET: serverEnv.AUTH_SECRET,
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ./scripts/allow-server-modules.cjs`.trim(),
+    },
+  });
+  const timer = setTimeout(() => {
+    warmLog += `  warm-up: gave up after ${WARM_AUTH_BUDGET_MS / 1000}s\n`;
+    warm.kill("SIGTERM");
+  }, WARM_AUTH_BUDGET_MS);
+  for (const stream of [warm.stdout, warm.stderr]) {
+    stream.on("data", (chunk) => {
+      process.stdout.write(chunk);
+      warmLog = (warmLog + chunk.toString()).slice(-4000);
+    });
+  }
+  warm.on("close", () => { clearTimeout(timer); resolveWarm(); });
+  warm.on("error", () => { clearTimeout(timer); resolveWarm(); });
+});
+
 console.log("Ready. Running the browser suites…\n");
 
 /**
@@ -280,6 +320,9 @@ if (status !== 0) {
     "browser suites failed",
     [
       `runner exit status: ${status}`,
+      "",
+      "authenticated warm-up:",
+      warmLog.trim() || "  (no output)",
       "",
       "runner output tail:",
       runnerLog.slice(-3500),
