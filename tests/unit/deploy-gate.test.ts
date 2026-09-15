@@ -1,10 +1,13 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import {
-  QUERIES, RLS_EXCEPTIONS, databaseFingerprint, evaluate, shippedMigrations,
+  QUERIES, RLS_EXCEPTIONS, databaseFingerprint, decide, evaluate, shippedMigrations,
 } from "../../scripts/deploy-gate.mjs";
 import { POSTGRES_MIGRATIONS } from "../../src/lib/db/migration-manifest";
 
@@ -92,6 +95,158 @@ describe("the deployment gate's verdict", () => {
       verdict.problems.map((p) => p.kind),
       ["missing_migrations", "non_deferrable_foreign_keys", "rls_not_forced", "workspace_tables_without_rls"],
     );
+  });
+});
+
+describe("which builds are gated: production always, a preview without a database never", () => {
+  const POSTGRES = "postgresql://tinycrm_app:pw@ep-example.neon.tech/neondb?sslmode=require";
+
+  test("production with a current database is checked and passes; one migration behind is blocked", () => {
+    // The real-database versions of both run in scripts/deploy-gate-proof.mjs.
+    assert.deepEqual(decide({ VERCEL_ENV: "production", DATABASE_URL: POSTGRES }), { action: "check", url: POSTGRES });
+    assert.equal(evaluate(healthy).ok, true);
+    assert.equal(evaluate({ ...healthy, applied: shipped.slice(0, -1) }).ok, false);
+  });
+
+  test("production with no database, or a non-PostgreSQL one, is blocked — never skipped", () => {
+    for (const DATABASE_URL of [undefined, "", "file:./dev.db", "mysql://x@y/z"]) {
+      assert.deepEqual(decide({ VERCEL_ENV: "production", DATABASE_URL }), { action: "block" },
+        `production with DATABASE_URL=${String(DATABASE_URL)} was not blocked`);
+    }
+  });
+
+  test("a preview with no DATABASE_URL at all is skipped", () => {
+    assert.deepEqual(decide({ VERCEL_ENV: "preview", DATABASE_URL: undefined }), { action: "skip" });
+    assert.deepEqual(decide({ VERCEL_ENV: "preview", DATABASE_URL: "" }), { action: "skip" });
+  });
+
+  test("the skip is narrow: only exactly \"preview\", and only with no database at all", () => {
+    // A preview given a database is checked, not skipped.
+    assert.deepEqual(decide({ VERCEL_ENV: "preview", DATABASE_URL: POSTGRES }), { action: "check", url: POSTGRES });
+    // A preview given something that is not PostgreSQL is not "no database"; it is blocked.
+    assert.deepEqual(decide({ VERCEL_ENV: "preview", DATABASE_URL: "file:./dev.db" }), { action: "block" });
+    // Nothing that is not literally a preview reaches the skip.
+    for (const VERCEL_ENV of [undefined, "", "development", "Preview", " preview", "preview ", "production"]) {
+      assert.deepEqual(decide({ VERCEL_ENV, DATABASE_URL: undefined }), { action: "block" },
+        `VERCEL_ENV=${JSON.stringify(VERCEL_ENV)} with no database was not blocked`);
+    }
+  });
+});
+
+/**
+ * The same rules, through the real script, with production credentials planted
+ * everywhere a careless fallback might find them.
+ *
+ * The "production database" is a local TCP listener that counts connections,
+ * so "never used" is measured rather than inferred from the output. The control
+ * proves the listener would notice: a build that is actually given it connects.
+ */
+describe("a preview never reaches production credentials", () => {
+  const GATE = resolve(ROOT, "scripts/deploy-gate.mjs");
+
+  async function decoyDatabase() {
+    let connections = 0;
+    const server = createServer((socket) => {
+      connections += 1;
+      socket.destroy();
+    });
+    await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+    const { port } = server.address() as AddressInfo;
+    return {
+      port,
+      url: `postgresql://tinycrm_app:production-password@127.0.0.1:${port}/neondb`,
+      connections: () => connections,
+      close: () => new Promise<void>((done) => server.close(() => done())),
+    };
+  }
+
+  /** Every other place a production connection might be picked up from. */
+  function plantedCredentials(decoy: { url: string; port: number }): Record<string, string> {
+    return {
+      DIRECT_URL: decoy.url,
+      POSTGRES_URL: decoy.url,
+      POSTGRES_PRISMA_URL: decoy.url,
+      POSTGRES_URL_NON_POOLING: decoy.url,
+      DATABASE_URL_UNPOOLED: decoy.url,
+      PRODUCTION_DATABASE_URL: decoy.url,
+      NEON_DATABASE_URL: decoy.url,
+      // node-postgres defaults to these when it is given no connection string.
+      PGHOST: "127.0.0.1",
+      PGPORT: String(decoy.port),
+      PGUSER: "tinycrm_app",
+      PGPASSWORD: "production-password",
+      PGDATABASE: "neondb",
+    };
+  }
+
+  /** Async, never spawnSync: the listener must be free to accept while the gate runs. */
+  function runGate(env: Record<string, string>, cwd: string) {
+    return new Promise<{ status: number | null; output: string }>((done) => {
+      // Nothing inherited but PATH, so no stray variable can influence the result.
+      const childEnv = { PATH: process.env.PATH ?? "", ...env } as unknown as NodeJS.ProcessEnv;
+      const child = spawn(process.execPath, [GATE], { env: childEnv, cwd });
+      let output = "";
+      child.stdout.on("data", (chunk) => (output += chunk));
+      child.stderr.on("data", (chunk) => (output += chunk));
+      child.on("close", (status) => done({ status, output }));
+    });
+  }
+
+  /** A working directory holding .env files that point at the decoy, in case anything ever loads them. */
+  function directoryWithEnvFiles(url: string) {
+    const dir = mkdtempSync(join(tmpdir(), "deploy-gate-"));
+    for (const name of [".env", ".env.local", ".env.production", ".env.preview"]) {
+      writeFileSync(join(dir, name), `DATABASE_URL=${url}\n`);
+    }
+    return dir;
+  }
+
+  test("a preview with no DATABASE_URL skips successfully and never connects to the production database", async () => {
+    const decoy = await decoyDatabase();
+    const cwd = directoryWithEnvFiles(decoy.url);
+    try {
+      const run = await runGate({ VERCEL: "1", VERCEL_ENV: "preview", ...plantedCredentials(decoy) }, cwd);
+      assert.equal(run.status, 0, run.output);
+      assert.match(run.output, /DEPLOYMENT GATE: SKIPPED — preview build has no isolated Preview database/);
+      assert.doesNotMatch(run.output, /DEPLOYMENT GATE: (PASSED|BLOCKED)/);
+      assert.doesNotMatch(run.output, /database fingerprint/, "a skipped preview identified a database");
+      assert.doesNotMatch(run.output, /production-password/);
+      assert.equal(decoy.connections(), 0, "the preview build connected to the production database");
+    } finally {
+      await decoy.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("a production build with no DATABASE_URL is blocked, and does not fall back to production credentials either", async () => {
+    const decoy = await decoyDatabase();
+    const cwd = directoryWithEnvFiles(decoy.url);
+    try {
+      const run = await runGate({ VERCEL: "1", VERCEL_ENV: "production", ...plantedCredentials(decoy) }, cwd);
+      assert.equal(run.status, 1, run.output);
+      assert.match(run.output, /DEPLOYMENT GATE: BLOCKED/);
+      assert.match(run.output, /no PostgreSQL DATABASE_URL/);
+      assert.doesNotMatch(run.output, /SKIPPED/);
+      assert.equal(decoy.connections(), 0, "the gate found a database somewhere other than DATABASE_URL");
+    } finally {
+      await decoy.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("control: the decoy does detect a connection — a build actually given it connects, and is blocked", async () => {
+    const decoy = await decoyDatabase();
+    const cwd = mkdtempSync(join(tmpdir(), "deploy-gate-"));
+    try {
+      const run = await runGate({ VERCEL: "1", VERCEL_ENV: "production", DATABASE_URL: decoy.url }, cwd);
+      assert.equal(run.status, 1, run.output);
+      assert.match(run.output, /could not read the database/);
+      assert.ok(decoy.connections() >= 1, "the decoy saw no connection, so the tests above would prove nothing");
+      assert.doesNotMatch(run.output, /production-password/, "the connection string reached the log");
+    } finally {
+      await decoy.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });
 

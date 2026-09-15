@@ -124,9 +124,10 @@ by reading the schema.
 ### The deployment gate
 
 Every Vercel build runs `node scripts/deploy-gate.mjs` before anything else
-(`buildCommand` in `vercel.json`). The build does not proceed unless the
-database in that build's `DATABASE_URL` — in production, the restricted
-`tinycrm_app` role — satisfies all of these:
+(`buildCommand` in `vercel.json`). Where that build has a database — always, in
+production — it does not proceed unless the database in its `DATABASE_URL`, in
+production the restricted `tinycrm_app` role, satisfies all of these (the one
+build that has no database of its own, a preview, is covered below):
 
 1. **Every migration this commit ships is applied** (finished, not rolled back).
    A database *ahead* of the commit passes, as `/api/ready` does, so a rollback
@@ -144,11 +145,54 @@ unapplied, for four days. On 2026-09-10 an applied migration was not followed by
 verification reported "108 deferrable foreign keys" as a pass. Both are now a
 failed build instead of a silent incompatibility.
 
-**It fails closed, and it has no override.** No PostgreSQL `DATABASE_URL`, an
+**Production fails closed, and there is no override.** In a production build —
+and in every build that is not a preview — no PostgreSQL `DATABASE_URL`, an
 unreachable database, an unreadable ledger or a query error all block. Its reads
 run in a `READ ONLY` transaction. There is no environment variable, flag or
 setting that skips it — a unit test pins the variables it may read. The only ways
 past a block are to fix the database, or to change the gate in source control.
+
+**A preview with no database of its own is skipped, not blocked.** There is no
+Preview database yet, and a preview must never point at production's (section
+3), so blocking only turned every branch red for a reason no branch could fix. A
+build whose `VERCEL_ENV` is exactly `preview` **and** that has no `DATABASE_URL`
+at all prints
+
+```
+DEPLOYMENT GATE: SKIPPED — preview build has no isolated Preview database
+```
+
+and continues. The skip never looks for a database anywhere else: it creates no
+client, and does not read `DIRECT_URL`, the `POSTGRES_*` variables, the `PG*`
+variables node-postgres would otherwise default to, or any `.env` file. The unit
+suite plants production-shaped credentials in all of those, behind a listener
+that counts connections, and requires zero; `deploy-gate-proof.mjs` does the same
+with a real database's working credentials. A preview that *is* given a
+PostgreSQL `DATABASE_URL` is checked like any other build — whether that is the
+right rule for an isolated Preview database is a decision for when one exists.
+
+This is not a way around the gate for production. The only way to reach the skip
+on a production deployment is to remove production's `DATABASE_URL`, which stops
+the application itself from running.
+
+**What a skipped preview then builds.** The next step of the build command,
+`use-provider.mjs auto`, has nothing to resolve a provider from, so it makes the
+same narrow exception — preview, and no `DATABASE_URL` at all — and leaves the
+committed provider untouched rather than failing. `prisma generate` and
+`next build` need no database, so the build completes. Measured in a clean
+checkout with no `.env`, running exactly the chain in `vercel.json`:
+
+| `VERCEL_ENV` | build command | what it printed |
+|---|---|---|
+| `preview` | **exit 0** | gate `SKIPPED`, provider left as committed, client generated, compiled, pages emitted |
+| `production` | **exit 1** | gate `BLOCKED` — the build stops there |
+
+A preview built this way is **a build of the branch, not a working
+environment**: it has no database, so any page that reads data fails at
+runtime. It is enough to see that a branch compiles. Giving Preview its own
+isolated database — a Neon branch, say — is what would make one usable, and at
+that point the rule for whether Preview runs its own gate should be decided
+deliberately.
 
 **The order this enforces:**
 

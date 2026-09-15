@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * The deployment gate: a build does not proceed unless the database it will run
- * against can actually run it.
+ * against can actually run it. The one exception is a preview build given no
+ * database at all, which is skipped rather than blocked — see decide().
  *
  * ---------------------------------------------------------------------------
  * Why this exists
@@ -46,6 +47,11 @@
  * transaction. There is no override — no environment variable, no flag. The
  * only ways past a block are to fix the database, or to change this file in
  * source control, where the change is reviewed and CI runs.
+ *
+ * One build is skipped rather than blocked: a preview given no DATABASE_URL at
+ * all, which has no database of its own to check. It is skipped without looking
+ * for a database anywhere else — see decide(). A production build is never
+ * skipped.
  */
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
@@ -212,8 +218,48 @@ function blocked(reasons) {
   return 1;
 }
 
+/**
+ * What this build does, as a pure function of the variables the gate reads.
+ *
+ *   check — run the checks against DATABASE_URL.
+ *   block — fail closed: there is nothing that can be proven compatible.
+ *   skip  — a preview build that was given no database of its own.
+ *
+ * The skip is deliberately narrow: VERCEL_ENV must be exactly "preview" AND
+ * DATABASE_URL must be absent. A production build is never skipped — with no
+ * DATABASE_URL it blocks — and neither is anything that is not a preview: a
+ * manual run, `vercel build --prod` (whose pulled secrets are redacted), a
+ * development build.
+ *
+ * Why a preview without a database is skipped rather than blocked: this gate
+ * protects the database a deployment will run against, and a preview must
+ * never run against production's (docs/VERCEL-DEPLOYMENT.md, section 3). With
+ * no Preview database there is nothing of the preview's own to check, and
+ * blocking only turned every branch red for a reason no branch could fix.
+ *
+ * What the skip must never do is go looking for a database. When DATABASE_URL
+ * is missing the gate does not consult DIRECT_URL, POSTGRES_URL, the PG*
+ * variables node-postgres would default to, or any .env file — it creates no
+ * client at all — so a preview cannot reach production credentials through
+ * it. A preview that *is* given a PostgreSQL DATABASE_URL is checked like any
+ * other build; whether that is the right rule for a future isolated Preview
+ * database is a separate decision.
+ *
+ * This is not an override. The only way to reach the skip on a production
+ * deployment is to remove production's DATABASE_URL, which stops the
+ * application itself from running.
+ *
+ * @param {{ DATABASE_URL?: string, VERCEL_ENV?: string }} env
+ * @returns {{ action: "skip" } | { action: "block" } | { action: "check", url: string }}
+ */
+export function decide({ DATABASE_URL, VERCEL_ENV }) {
+  const url = DATABASE_URL ?? "";
+  if (VERCEL_ENV === "preview" && url === "") return { action: "skip" };
+  if (!/^postgres(ql)?:\/\//.test(url)) return { action: "block" };
+  return { action: "check", url };
+}
+
 async function main() {
-  const url = process.env.DATABASE_URL ?? "";
   const target = process.env.VERCEL_ENV
     ? `${process.env.VERCEL_ENV} build`
     : process.env.VERCEL
@@ -221,14 +267,27 @@ async function main() {
       : "manual run";
   console.log(`\nDeployment gate — ${target}`);
 
-  if (!/^postgres(ql)?:\/\//.test(url)) {
+  const decision = decide({ DATABASE_URL: process.env.DATABASE_URL, VERCEL_ENV: process.env.VERCEL_ENV });
+
+  if (decision.action === "skip") {
+    console.log(
+      "\nDEPLOYMENT GATE: SKIPPED — preview build has no isolated Preview database\n\n" +
+        "  This preview was given no DATABASE_URL, so it has no database of its own to check.\n" +
+        "  The production database gate does not run, and no other database is looked for.\n" +
+        "  Production builds are never skipped: without a PostgreSQL DATABASE_URL they are blocked.\n",
+    );
+    return 0;
+  }
+
+  if (decision.action === "block") {
     return blocked([
       "  ✕ this build has no PostgreSQL DATABASE_URL to check against.",
-      "    Every build that runs this command is gated, preview included, and a build with",
-      "    nothing to check cannot be proven compatible with anything.",
+      "    A build with nothing to check cannot be proven compatible with anything. Only a",
+      "    preview build with no DATABASE_URL at all is skipped, and this is not one.",
     ]);
   }
 
+  const url = decision.url;
   const shipped = shippedMigrations();
   console.log(`  database fingerprint: ${databaseFingerprint(url)}  (a hash of host and database name)`);
 
