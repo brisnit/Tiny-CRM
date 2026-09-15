@@ -26,14 +26,19 @@ let browser: Browser;
 const users: string[] = [];
 const workspaces: string[] = [];
 
-async function signIn(page: Page, email: string, password = PASSWORD): Promise<void> {
+async function signIn(
+  page: Page,
+  email: string,
+  password = PASSWORD,
+  landingTimeout = 60_000,
+): Promise<void> {
   await page.goto(`${BASE_URL}/login`, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.waitForSelector("#password", { timeout: 60_000 });
   await page.waitForTimeout(750); // hydration
   await page.fill("#email", email);
   await page.fill("#password", password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 60_000 });
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: landingTimeout });
 }
 
 /** An owner with a workspace, built the way production builds one. */
@@ -76,10 +81,11 @@ describe("joining a workspace from an invitation", () => {
     // never compiles it. The cost then lands inside whichever locator waits
     // first, which is how a 60-second timeout becomes a flake on a loaded
     // machine. Budgeted generously and asserted on nothing: if it is slow, it
-    // is slow here rather than mid-test.
+    // is slow here rather than mid-test. The sign-in lands on /home, another
+    // authenticated compile, so it gets the same budget.
     const warm = await browser.newPage();
     const host = await owner("Warmup");
-    await signIn(warm, host.email);
+    await signIn(warm, host.email, PASSWORD, 300_000);
     await warm
       .goto(`${BASE_URL}/settings/team`, { waitUntil: "domcontentloaded", timeout: 300_000 })
       .catch(() => {});

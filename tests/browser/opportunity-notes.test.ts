@@ -23,14 +23,14 @@ const PASSWORD = "a-long-enough-password-5821";
 let browser: Browser;
 const users: string[] = [];
 
-async function signIn(page: Page, email: string): Promise<void> {
+async function signIn(page: Page, email: string, landingTimeout = 60_000): Promise<void> {
   await page.goto(`${BASE_URL}/login`, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.waitForSelector("#password", { timeout: 60_000 });
   await page.waitForTimeout(750); // hydration
   await page.fill("#email", email);
   await page.fill("#password", PASSWORD);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 60_000 });
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: landingTimeout });
 }
 
 /** An owner, their workspace built the way production builds one, and an opportunity in it. */
@@ -70,12 +70,18 @@ describe("notes on an opportunity, in a browser", () => {
   before(async () => {
     browser = await chromium.launch();
 
-    // Pay the dev server's first compile of the opportunity page here, outside
-    // any assertion's timeout. It sits behind the signed-out redirect, so the
-    // harness cannot warm it anonymously.
+    // Pay the dev server's first compiles of the authenticated app here, outside
+    // any assertion's timeout. They sit behind the signed-out redirect, so the
+    // harness cannot warm them anonymously.
+    //
+    // Two of them, and the first is easy to miss: signing in is a full
+    // navigation to /home, and this suite sorts first, so this sign-in is the
+    // run's first request for the whole authenticated shell. Under the usual
+    // 60 seconds that compile failed the job once (CI on 1e356cc: the landing
+    // wait timed out at 60s; nothing in the browser code had changed).
     const warm = await browser.newPage();
     const host = await ownerWithOpportunity("Warmup");
-    await signIn(warm, host.email);
+    await signIn(warm, host.email, 300_000);
     await warm
       .goto(`${BASE_URL}/opportunities/${host.opportunityId}`, {
         waitUntil: "domcontentloaded",
