@@ -184,8 +184,9 @@ async function waitForServer() {
  * Next's dev server compiles a route on its first request, and that cost does
  * not belong inside a test's timeout. Best-effort: a route that is slow to
  * compile here is simply compiled again by the test that needs it.
- * /settings/team cannot be warmed from here — it sits behind the signed-out
- * redirect — so its suite pays that compile in its own `before()`.
+ * The authenticated routes cannot be warmed with a plain fetch — they sit
+ * behind the signed-out redirect — so they are warmed with a real session
+ * below, once the server is ready.
  */
 const WARM_ROUTES = ["/login", "/signup", "/invite/warmup"];
 
