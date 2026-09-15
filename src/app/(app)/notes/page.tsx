@@ -38,7 +38,8 @@ async function NotesList({ searchParams }: { searchParams: PageProps<"/notes">["
   const { workspaceIds, workspaceId } = await resolveReadScope(await readScope());
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 
-  const where: Record<string, unknown> = { workspaceId: { in: workspaceIds } };
+  // The Trash has its own page; a deleted note does not belong in this list.
+  const where: Record<string, unknown> = { workspaceId: { in: workspaceIds }, archivedAt: null };
   if (str("q")) {
     where.OR = [{ title: { contains: str("q") } }, { plainText: { contains: str("q") } }];
   }

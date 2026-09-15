@@ -165,6 +165,8 @@ export async function getProject(workspaceIds: string[], id: string) {
           orderBy: [{ status: "asc" }, { dueAt: "asc" }],
         },
         notes: {
+          // Archived notes are in the Trash, not on the record.
+          where: { archivedAt: null },
           select: { id: true, title: true, plainText: true, createdAt: true, pinned: true },
           orderBy: [{ pinned: "desc" }, { createdAt: "desc" }],
           take: 8,
@@ -172,6 +174,7 @@ export async function getProject(workspaceIds: string[], id: string) {
         activities: {
           select: {
             id: true, type: true, title: true, body: true, direction: true, durationMin: true,
+            noteId: true, note: { select: { archivedAt: true } },
             occurredAt: true,
             contact: { select: { id: true, fullName: true } },
             company: { select: { id: true, name: true } },

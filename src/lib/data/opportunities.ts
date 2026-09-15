@@ -4,6 +4,7 @@ import { contains, db, isSearchable } from "@/lib/db";
 import { tagsForEntities } from "@/lib/actions/tags";
 import { withTenantContext } from "@/lib/tenant-db";
 import { parseJson } from "@/lib/json";
+import { sanitizeHtml } from "@/lib/sanitize";
 
 /**
  * Opportunity fit and go / no-go.
@@ -260,14 +261,25 @@ export async function getOpportunity(workspaceIds: string[], id: string) {
           select: { id: true, title: true, dueAt: true, priority: true, status: true },
           orderBy: [{ status: "asc" }, { dueAt: "asc" }],
         },
+        // The panel edits notes in place, so it needs the body and the version
+        // for optimistic concurrency, not just a preview. Archived notes are in
+        // the Trash and must not appear here — the previous query returned them.
         notes: {
-          select: { id: true, title: true, plainText: true, createdAt: true },
-          orderBy: { createdAt: "desc" },
-          take: 6,
+          where: { archivedAt: null },
+          select: {
+            id: true, title: true, body: true, pinned: true, version: true, createdAt: true,
+            author: { select: { name: true } },
+          },
+          orderBy: [{ pinned: "desc" }, { createdAt: "desc" }],
+          take: 50,
         },
         activities: {
           select: {
             id: true, type: true, title: true, body: true, direction: true, occurredAt: true,
+            // A note's timeline entry links back to the note, and hides its text
+            // once the note is in the Trash.
+            noteId: true,
+            note: { select: { archivedAt: true } },
             contact: { select: { id: true, fullName: true } },
             company: { select: { id: true, name: true } },
           },
@@ -305,6 +317,9 @@ export async function getOpportunity(workspaceIds: string[], id: string) {
 
     return {
       ...opportunity,
+      // Sanitised on write already; sanitised again here because the panel
+      // renders this HTML, and a row written by any other path must be safe too.
+      notes: opportunity.notes.map((note) => ({ ...note, body: sanitizeHtml(note.body) })),
       tags: tags.get(id) ?? [],
       importedFrom: source
         ? {

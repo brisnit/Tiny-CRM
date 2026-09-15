@@ -11,6 +11,7 @@ import { db } from "@/lib/db";
 import { formatDateTime } from "@/lib/dates";
 import { tagsForEntities } from "@/lib/actions/tags";
 import { scopedRead } from "@/lib/data/scoped";
+import { sanitizeHtml } from "@/lib/sanitize";
 
 export async function generateMetadata({ params }: PageProps<"/notes/[id]">) {
   const { id } = await params;
@@ -93,7 +94,10 @@ export default async function NotePage({ params }: PageProps<"/notes/[id]">) {
         <NoteEditor
           noteId={note.id}
           title={note.title}
-          body={note.body}
+          // Sanitised on write; sanitised again here, as src/lib/sanitize.ts
+          // says it is. This path handed the stored string straight to the
+          // editor's innerHTML, so the second layer was claimed but absent.
+          body={sanitizeHtml(note.body)}
           pinned={note.pinned}
         />
       </Panel>

@@ -108,6 +108,7 @@ export async function getDashboard(workspaceIds: string[], projectFocus: string 
         where: { ...where, ...(projectFocus ? { projectId: projectFocus } : {}) },
         select: {
           id: true, type: true, title: true, body: true, occurredAt: true, direction: true,
+          noteId: true, note: { select: { archivedAt: true } },
           contact: { select: { id: true, fullName: true } },
           company: { select: { id: true, name: true } },
           deal: { select: { id: true, name: true } },

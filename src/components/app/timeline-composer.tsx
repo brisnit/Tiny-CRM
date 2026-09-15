@@ -9,7 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { OptionSelect } from "@/components/ui/select";
 import { logTimelineEntry } from "@/lib/actions/activities";
+import { createNote } from "@/lib/actions/notes";
 import { createTask } from "@/lib/actions/tasks";
+import { escapeHtml } from "@/lib/sanitize";
 import { cn } from "@/lib/utils";
 
 type Kind = "note" | "call" | "meeting" | "email" | "task";
@@ -31,15 +33,42 @@ export type RecordLinks = {
   opportunityId?: string | null;
 };
 
+/** Composer text, as the paragraphs a note body is stored as. */
+function textToHtml(text: string): string {
+  return text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
 /**
  * Logging what just happened, from wherever you are. Everything logged here
  * lands on the shared activity stream and updates the record's recency, which
  * is what keeps relationship and momentum scores honest.
+ *
+ * *Note* creates a real `Note`, not an activity. It used to log an activity of
+ * type "note", which never appeared in the record's Notes list — two things
+ * with one name that did not agree. A `Note` logs its own timeline entry, so
+ * the history is still there.
+ *
+ * `showNote={false}` hides the option on pages with a Notes panel, where the
+ * panel is the one obvious place to write one.
  */
-export function TimelineComposer({ links, className }: { links: RecordLinks; className?: string }) {
+export function TimelineComposer({
+  links,
+  className,
+  showNote = true,
+}: {
+  links: RecordLinks;
+  className?: string;
+  showNote?: boolean;
+}) {
   const router = useRouter();
+  const kinds = showNote ? KINDS : KINDS.filter((k) => k.kind !== "note");
   const [open, setOpen] = React.useState(false);
-  const [kind, setKind] = React.useState<Kind>("note");
+  const [kind, setKind] = React.useState<Kind>(showNote ? "note" : "call");
   const [title, setTitle] = React.useState("");
   const [body, setBody] = React.useState("");
   const [duration, setDuration] = React.useState("");
@@ -74,12 +103,23 @@ export function TimelineComposer({ links, className }: { links: RecordLinks; cla
               projectId: links.projectId ?? undefined,
               opportunityId: links.opportunityId ?? undefined,
             })
+          : kind === "note"
+            ? await createNote({
+                workspaceId: links.workspaceId,
+                title: title.trim(),
+                body: textToHtml(body),
+                contactId: links.contactId ?? undefined,
+                companyId: links.companyId ?? undefined,
+                dealId: links.dealId ?? undefined,
+                projectId: links.projectId ?? undefined,
+                opportunityId: links.opportunityId ?? undefined,
+              })
           : await logTimelineEntry({
               workspaceId: links.workspaceId,
               type: kind,
               title: title.trim(),
               body: body || undefined,
-              direction: kind === "note" ? undefined : (direction as "inbound" | "outbound"),
+              direction: direction as "inbound" | "outbound",
               durationMin: duration || undefined,
               contactId: links.contactId ?? undefined,
               companyId: links.companyId ?? undefined,
@@ -89,7 +129,9 @@ export function TimelineComposer({ links, className }: { links: RecordLinks; cla
             });
 
       if (result.ok) {
-        toast.success(kind === "task" ? "Task created" : "Logged to the timeline");
+        toast.success(
+          kind === "task" ? "Task created" : kind === "note" ? "Note added" : "Logged to the timeline",
+        );
         reset();
         router.refresh();
       } else {
@@ -101,7 +143,7 @@ export function TimelineComposer({ links, className }: { links: RecordLinks; cla
   if (!open) {
     return (
       <div className={cn("flex flex-wrap items-center gap-1.5", className)}>
-        {KINDS.map((k) => (
+        {kinds.map((k) => (
           <button
             key={k.kind}
             onClick={() => {
@@ -121,7 +163,7 @@ export function TimelineComposer({ links, className }: { links: RecordLinks; cla
   return (
     <div className={cn("rounded-xl border border-hairline-strong bg-panel p-3", className)}>
       <div className="mb-3 flex flex-wrap gap-1.5">
-        {KINDS.map((k) => (
+        {kinds.map((k) => (
           <button
             key={k.kind}
             onClick={() => setKind(k.kind)}

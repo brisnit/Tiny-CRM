@@ -153,6 +153,8 @@ export async function getDeal(workspaceIds: string[], id: string) {
           take: 15,
         },
         notes: {
+          // Archived notes are in the Trash, not on the record.
+          where: { archivedAt: null },
           select: { id: true, title: true, plainText: true, createdAt: true },
           orderBy: { createdAt: "desc" },
           take: 6,
@@ -160,6 +162,7 @@ export async function getDeal(workspaceIds: string[], id: string) {
         activities: {
           select: {
             id: true, type: true, title: true, body: true, direction: true, durationMin: true,
+            noteId: true, note: { select: { archivedAt: true } },
             occurredAt: true, meta: true,
             contact: { select: { id: true, fullName: true } },
             company: { select: { id: true, name: true } },

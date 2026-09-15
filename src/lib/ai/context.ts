@@ -124,7 +124,13 @@ export async function buildWorkspaceSnapshot(
           take: limit,
         }),
         db.activity.findMany({
-          where: { ...where, occurredAt: { gte: new Date(now.getTime() - 14 * 86_400_000) } },
+          where: {
+            ...where,
+            occurredAt: { gte: new Date(now.getTime() - 14 * 86_400_000) },
+            // A note's entry snapshots its title and opening text. Once the note
+            // is in the Trash, that snapshot is not something to send a provider.
+            OR: [{ noteId: null }, { note: { is: { archivedAt: null } } }],
+          },
           select: {
             id: true, type: true, title: true, body: true, occurredAt: true, workspaceId: true,
             contact: { select: { fullName: true } }, company: { select: { name: true } },
@@ -262,7 +268,12 @@ export async function buildRecordContext(
 
     const [activities, tasks, notes] = await Promise.all([
       db.activity.findMany({
-        where: { ...inScope, [`${entityType}Id`]: entityId },
+        where: {
+          ...inScope,
+          [`${entityType}Id`]: entityId,
+          // Same rule as the workspace snapshot: no snapshot of a deleted note.
+          OR: [{ noteId: null }, { note: { is: { archivedAt: null } } }],
+        },
         select: { type: true, title: true, body: true, occurredAt: true, direction: true, durationMin: true },
         orderBy: { occurredAt: "desc" },
         take: 25,
@@ -274,7 +285,9 @@ export async function buildRecordContext(
         take: 20,
       }),
       db.note.findMany({
-        where: { ...inScope, [`${entityType}Id`]: entityId },
+        // A note in the Trash was deleted by someone who meant it. It is not
+        // context, and it must not leave Tiny in a request to a model provider.
+        where: { ...inScope, [`${entityType}Id`]: entityId, archivedAt: null },
         select: { title: true, plainText: true, createdAt: true },
         orderBy: { createdAt: "desc" },
         take: 8,

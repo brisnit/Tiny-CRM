@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
-  CalendarClock, CheckSquare, ExternalLink, FileText, HelpCircle, ListChecks, Paperclip,
+  CalendarClock, CheckSquare, ExternalLink, HelpCircle, ListChecks, Paperclip,
   ThumbsDown, ThumbsUp, Users,
 } from "lucide-react";
 
@@ -16,17 +16,21 @@ import { TimelineComposer } from "@/components/app/timeline-composer";
 import { AiSummaryCard } from "@/components/app/ai-summary-card";
 import { AskAiButton } from "@/components/app/ask-ai-button";
 import { RelatedList } from "@/components/app/related-list";
+import { RecordNotes } from "@/components/app/record-notes";
 import { TaskRow } from "@/components/app/task-row";
 import { RecordHeaderActions } from "@/components/app/record-edit";
 import { StageSelector } from "@/components/app/stage-selector";
 import { requireActor, resolveReadScope } from "@/lib/auth/access";
+import { can } from "@/lib/auth/permissions";
 import { readScope } from "@/lib/scope";
 import { getOpportunity } from "@/lib/data/opportunities";
 import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatMoneyOrDash } from "@/lib/money";
-import { dateOnlyInputValue, describeDateOnlyDeadline, formatDate, formatDateOnly, formatDay } from "@/lib/dates";
+import {
+  dateOnlyInputValue, describeDateOnlyDeadline, formatDate, formatDateOnly, formatDay, timeAgo,
+} from "@/lib/dates";
 import {
   COMPETITION_LEVEL, OPPORTUNITY_TYPE, STRATEGIC_VALUE, SUBMISSION_STATUS, TONE,
 } from "@/lib/enums";
@@ -61,6 +65,20 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
   const questions = describeDateOnlyDeadline(opportunity.questionsDeadlineAt);
   const rec = opportunity.assessment.recommendation;
   const openTasks = opportunity.tasks.filter((t) => t.status !== "done");
+
+  // Which note controls to show. The server enforces each of these on its own;
+  // this only avoids offering a button that would be refused.
+  const role = actor.memberships.find((m) => m.id === opportunity.workspaceId)?.role ?? "viewer";
+  const notePermissions = {
+    canCreate: can(role, "record:create"),
+    canEdit: can(role, "record:edit"),
+    canArchive: can(role, "record:archive"),
+  };
+  const recordLinks = {
+    workspaceId: opportunity.workspaceId,
+    opportunityId: opportunity.id,
+    companyId: opportunity.company?.id ?? null,
+  };
 
   return (
     <PageShell wide>
@@ -238,17 +256,24 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
             </Panel>
           ) : null}
 
+          <RecordNotes
+            links={recordLinks}
+            permissions={notePermissions}
+            notes={opportunity.notes.map((note) => ({
+              id: note.id,
+              title: note.title,
+              body: note.body,
+              pinned: note.pinned,
+              version: note.version,
+              meta: [note.author?.name, `added ${timeAgo(note.createdAt)}`].filter(Boolean).join(" · "),
+            }))}
+          />
+
           <Panel>
             <PanelHeader title="Timeline" />
             <div className="border-t border-hairline p-4">
-              <TimelineComposer
-                className="mb-5"
-                links={{
-                  workspaceId: opportunity.workspaceId,
-                  opportunityId: opportunity.id,
-                  companyId: opportunity.company?.id ?? null,
-                }}
-              />
+              {/* The Notes panel above is where notes are written on this page. */}
+              <TimelineComposer className="mb-5" links={recordLinks} showNote={false} />
               {opportunity.activities.length === 0 ? (
                 <EmptyState compact title="Nothing logged yet" />
               ) : (
@@ -380,20 +405,6 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
                 id: file.id,
                 title: file.name,
                 subtitle: `${Math.round(file.sizeBytes / 1024)} KB · ${formatDay(file.createdAt)}`,
-              }))}
-            />
-          ) : null}
-
-          {opportunity.notes.length > 0 ? (
-            <RelatedList
-              title="Notes"
-              icon={<FileText />}
-              emptyTitle="No notes"
-              items={opportunity.notes.map((note) => ({
-                id: note.id,
-                href: `/notes/${note.id}`,
-                title: note.title ?? "Untitled note",
-                subtitle: note.plainText.slice(0, 100),
               }))}
             />
           ) : null}

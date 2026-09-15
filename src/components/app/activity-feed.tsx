@@ -37,6 +37,10 @@ export type ActivityItem = {
   deal?: { id: string; name: string } | null;
   project?: { id: string; name: string } | null;
   actor?: { name: string; avatarUrl?: string | null } | null;
+  /** Set when the entry records a note being added. */
+  noteId?: string | null;
+  /** The note it records, when selected — so its text can be hidden once deleted. */
+  note?: { archivedAt: Date | string | null } | null;
 };
 
 /**
@@ -58,6 +62,13 @@ export function ActivityFeed({
     <ol className={cn("relative", className)}>
       {items.map((item, index) => {
         const Icon = ICONS[item.type] ?? FileText;
+        // A note's entry snapshots its title and opening text. Once the note is
+        // in the Trash, the timeline should still show that a note was added,
+        // but not keep showing what it said.
+        const noteDeleted = item.type === "note" && Boolean(item.noteId) && Boolean(item.note?.archivedAt);
+        const title = noteDeleted ? "Deleted a note" : item.title;
+        const body = noteDeleted ? null : item.body;
+        const noteHref = item.type === "note" && item.noteId && !noteDeleted ? `/notes/${item.noteId}` : null;
         const links = showLinks
           ? [
               item.contact && { href: `/contacts/${item.contact.id}`, label: item.contact.fullName },
@@ -79,7 +90,16 @@ export function ActivityFeed({
 
             <div className={cn("min-w-0 flex-1", dense ? "pb-3" : "pb-5")}>
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <span className="text-[13px] font-medium leading-snug text-body">{item.title}</span>
+                {noteHref ? (
+                  <Link
+                    href={noteHref as never}
+                    className="text-[13px] font-medium leading-snug text-body underline-offset-2 hover:underline"
+                  >
+                    {title}
+                  </Link>
+                ) : (
+                  <span className="text-[13px] font-medium leading-snug text-body">{title}</span>
+                )}
                 <span className="text-[11px] text-faint" title={formatDay(item.occurredAt)}>
                   {timeAgo(item.occurredAt)}
                 </span>
@@ -91,8 +111,8 @@ export function ActivityFeed({
                 ) : null}
               </div>
 
-              {item.body ? (
-                <p className="mt-1 line-clamp-3 text-pretty text-[12.5px] leading-relaxed text-muted">{item.body}</p>
+              {body ? (
+                <p className="mt-1 line-clamp-3 text-pretty text-[12.5px] leading-relaxed text-muted">{body}</p>
               ) : null}
 
               {links.length > 0 ? (

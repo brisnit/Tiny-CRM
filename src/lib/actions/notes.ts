@@ -45,6 +45,38 @@ type NoteUpdate = z.input<typeof noteUpdateSchema>;
 
 const RELATIONS = ["contactId", "companyId", "dealId", "projectId", "opportunityId"] as const;
 
+/** The relation columns a note is shown under. */
+const NOTE_LINKS = {
+  contactId: true, companyId: true, dealId: true, projectId: true, opportunityId: true,
+} as const;
+
+type NoteLinks = {
+  contactId?: string | null;
+  companyId?: string | null;
+  dealId?: string | null;
+  projectId?: string | null;
+  opportunityId?: string | null;
+};
+
+/**
+ * Every page a note appears on, so a change to it refreshes all of them.
+ *
+ * The opportunity page was never in this list, which is one reason a note
+ * added there looked as though it had gone nowhere.
+ */
+function notePaths(id: string, links: NoteLinks | null): string[] {
+  const paths = [
+    "/notes", `/notes/${id}`,
+    "/contacts", "/companies", "/projects", "/deals", "/opportunities",
+  ];
+  if (links?.contactId) paths.push(`/contacts/${links.contactId}`);
+  if (links?.companyId) paths.push(`/companies/${links.companyId}`);
+  if (links?.dealId) paths.push(`/deals/${links.dealId}`);
+  if (links?.projectId) paths.push(`/projects/${links.projectId}`);
+  if (links?.opportunityId) paths.push(`/opportunities/${links.opportunityId}`);
+  return paths;
+}
+
 export async function createNote(
   input: NoteInput,
 ): Promise<ActionResult<{ id: string; title: string | null }>> {
@@ -110,7 +142,7 @@ export async function createNote(
           return created;
         });
 
-        revalidateRecord(["/notes", "/contacts", "/companies", "/projects", "/deals"]);
+        revalidateRecord(notePaths(note.id, note));
         return { id: note.id, title: note.title };
       },
     ),
@@ -144,7 +176,11 @@ export async function updateNote(
         });
         assertVersion(result.count, data.version, "note");
 
-        revalidateRecord(["/notes", `/notes/${recordId}`]);
+        const links = await db.note.findFirst({
+          where: { id: recordId, workspaceId },
+          select: NOTE_LINKS,
+        });
+        revalidateRecord(notePaths(recordId, links));
         return { id: recordId };
       },
     ),
@@ -159,7 +195,11 @@ export async function archiveNote(id: string): Promise<ActionResult<{ id: string
           where: { id: recordId, workspaceId },
           data: { archivedAt: new Date(), version: { increment: 1 } },
         });
-        revalidateRecord(["/notes", `/notes/${recordId}`]);
+        const links = await db.note.findFirst({
+          where: { id: recordId, workspaceId },
+          select: NOTE_LINKS,
+        });
+        revalidateRecord(notePaths(recordId, links));
         return { id: recordId };
       },
     ),
@@ -182,18 +222,30 @@ export async function deleteNote(
       async ({ actor, workspaceId, recordId }) => {
         const note = await db.note.findFirstOrThrow({
           where: { id: recordId, workspaceId },
-          select: { title: true },
+          select: { title: true, ...NOTE_LINKS },
         });
         if (note.title) assertConfirmation(confirmation, note.title);
 
-        await db.note.delete({ where: { id: recordId } });
+        await transaction(async (tx) => {
+          // Creating a note logs a timeline entry carrying its title and the
+          // first 200 characters of its text. Deleting the note used to leave
+          // both behind, so "permanently deleted" was not true of the words.
+          // The entry stays — the timeline should still show that a note once
+          // existed — but it no longer holds anything the note said. Cleared
+          // before the delete, while the entries still point at the note.
+          await tx.activity.updateMany({
+            where: { workspaceId, noteId: recordId },
+            data: { title: "Deleted a note", body: null },
+          });
+          await tx.note.delete({ where: { id: recordId } });
+        });
 
         await audit(actor, {
           workspaceId, action: "record.deleted", entityType: "note", entityId: recordId,
           summary: `Permanently deleted note ${note.title ?? "(untitled)"}`,
         });
 
-        revalidateRecord(["/notes"]);
+        revalidateRecord(notePaths(recordId, note));
         return { id: recordId };
       },
     ),
@@ -206,13 +258,13 @@ export async function togglePinNote(id: string): Promise<ActionResult<{ pinned: 
       async ({ workspaceId, recordId }) => {
         const note = await db.note.findFirstOrThrow({
           where: { id: recordId, workspaceId },
-          select: { pinned: true },
+          select: { pinned: true, ...NOTE_LINKS },
         });
         await db.note.updateMany({
           where: { id: recordId, workspaceId },
           data: { pinned: !note.pinned, version: { increment: 1 } },
         });
-        revalidateRecord(["/notes", `/notes/${recordId}`]);
+        revalidateRecord(notePaths(recordId, note));
         return { pinned: !note.pinned };
       },
     ),
@@ -340,7 +392,11 @@ export async function restoreNote(id: string): Promise<ActionResult<{ id: string
           where: { id: recordId, workspaceId },
           data: { archivedAt: null, version: { increment: 1 } },
         });
-        revalidateRecord(["/notes", `/notes/${recordId}`]);
+        const links = await db.note.findFirst({
+          where: { id: recordId, workspaceId },
+          select: NOTE_LINKS,
+        });
+        revalidateRecord(notePaths(recordId, links));
         return { id: recordId };
       },
     ),

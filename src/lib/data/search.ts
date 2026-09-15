@@ -88,7 +88,9 @@ export async function searchEverything(
         take: limitPerType * 2,
       }),
       db.note.findMany({
-        where: { ...scope, OR: [{ title: like }, { plainText: like }] },
+        // A note in the Trash is not a note you can find — the same rule every
+        // other record type in this search already follows.
+        where: { ...scope, archivedAt: null, OR: [{ title: like }, { plainText: like }] },
         select: { id: true, title: true, plainText: true, workspaceId: true },
         take: limitPerType * 2,
       }),
