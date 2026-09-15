@@ -29,6 +29,27 @@ let target = process.argv[2];
 if (target === "auto") {
   const url = process.env.DATABASE_URL ?? "";
   if (!url) {
+    // The same narrow case the deployment gate skips: a preview build that was
+    // given no database of its own (see decide() in scripts/deploy-gate.mjs).
+    // There is nothing to resolve a provider from, and nothing to resolve it
+    // for — the committed provider is left exactly as it is, and the build goes
+    // on to `prisma generate` and `next build`, which do not need a database.
+    //
+    // What that produces is a build of the branch, not a working environment:
+    // the preview has no database, so any page that reads data fails at
+    // runtime. That is the trade for being able to see a branch build at all
+    // until an isolated Preview database exists.
+    //
+    // Every other build still fails here. In particular a production build
+    // without DATABASE_URL, which is exactly the situation this must not
+    // paper over.
+    if (process.env.VERCEL_ENV === "preview") {
+      console.log(
+        "Preview build with no DATABASE_URL: leaving the committed datasource provider unchanged.\n" +
+          "  This preview has no database, so pages that read data will fail at runtime.",
+      );
+      process.exit(0);
+    }
     console.error("DATABASE_URL is not set, so the provider cannot be resolved automatically.");
     process.exit(1);
   }

@@ -246,7 +246,30 @@ try {
   expect("no connection string appears in any output",
     ![current, behind, fk, force, norls, leastPrivilege, unreachable].some((r) => /postgres(ql)?:\/\/[^\s[]/.test(r.output)));
 
-  console.log("\n[8] it wrote nothing");
+  console.log("\n[8] a preview with no DATABASE_URL is skipped, and never uses real credentials planted elsewhere");
+  // The current database's own working credentials, in every place a careless
+  // fallback might look — including the PG* variables node-postgres defaults to.
+  const realUrl = app(DB.current);
+  const real = new URL(realUrl);
+  const planted = {
+    DIRECT_URL: realUrl, POSTGRES_URL: realUrl, POSTGRES_PRISMA_URL: realUrl, DATABASE_URL_UNPOOLED: realUrl,
+    PGHOST: real.hostname, PGPORT: real.port || "5432", PGUSER: decodeURIComponent(real.username),
+    PGPASSWORD: decodeURIComponent(real.password), PGDATABASE: real.pathname.slice(1),
+  };
+  const preview = run("node", ["scripts/deploy-gate.mjs"], { PATH: process.env.PATH, VERCEL: "1", VERCEL_ENV: "preview", ...planted });
+  expect("preview, no DATABASE_URL → exit 0", preview.status === 0, `exit ${preview.status}`);
+  expect("reports SKIPPED, and why",
+    /DEPLOYMENT GATE: SKIPPED — preview build has no isolated Preview database/.test(preview.output));
+  expect("identifies no database — the planted credentials were not used", !/database fingerprint/.test(preview.output));
+  const productionPlanted = run("node", ["scripts/deploy-gate.mjs"], { PATH: process.env.PATH, VERCEL: "1", VERCEL_ENV: "production", ...planted });
+  expect("production, no DATABASE_URL, same credentials planted → exit 1, never skipped",
+    productionPlanted.status === 1 && /no PostgreSQL DATABASE_URL/.test(productionPlanted.output) && !/SKIPPED/.test(productionPlanted.output),
+    `exit ${productionPlanted.status}`);
+  expect("… and identifies no database either", !/database fingerprint/.test(productionPlanted.output));
+  expect("no credential appears in either output",
+    ![preview, productionPlanted].some((r) => r.output.includes(planted.PGPASSWORD) || /postgres(ql)?:\/\/[^\s[]/.test(r.output)));
+
+  console.log("\n[9] it wrote nothing");
   expect("the current database's ledger is unchanged", (await ledger(DB.current)) === ledgerBefore.current);
   expect("the behind database's ledger is unchanged", (await ledger(DB.behind)) === ledgerBefore.behind);
 } catch (error) {
