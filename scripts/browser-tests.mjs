@@ -18,7 +18,7 @@
  * refuses SQLite and an in-process rate limiter, which is correct of it, and
  * React's input reconciliation — the thing under test — is identical either way.
  */
-import { execSync, spawn } from "node:child_process";
+import { execSync, spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
@@ -92,8 +92,10 @@ const server = spawn("npx", ["next", "dev", "-p", String(PORT)], {
 });
 
 let serverLog = "";
+let serverBytes = 0;
 for (const stream of [server.stdout, server.stderr]) {
   stream.on("data", (chunk) => {
+    serverBytes += chunk.length;
     serverLog += chunk.toString();
     if (serverLog.length > 40_000) serverLog = serverLog.slice(-40_000);
   });
@@ -262,22 +264,34 @@ console.log("Ready. Running the browser suites…\n");
  */
 console.log("RUNNER SPAWN tests/browser/**/*.test.ts");
 const runnerStarted = Date.now();
-let runnerLog = "";
 
-const runner = spawn(
+/**
+ * CONTROL EXPERIMENT — deliberately reintroduces spawnSync, and nothing else.
+ *
+ * 2720940 passed after four consecutive failures, but it changed three things
+ * at once. The leading explanation is that spawnSync blocks this process's
+ * event loop for the whole test run, so nothing drains the dev server's stdout
+ * and stderr pipes; once the OS pipe buffer fills, the server blocks on its next
+ * write and stops answering. This run restores only the blocking call. Output is
+ * piped rather than inherited so the evidence is still readable afterwards.
+ *
+ * Expected if the explanation is right: failure in the 240s+ band, the server
+ * log ending mid-run, and server output near the pipe capacity. Reverted in the
+ * next commit either way.
+ */
+const result = spawnSync(
   "npx",
   [
     "tsx",
     "--test",
     "--test-reporter=spec",
     "--test-concurrency=1",
-    // A hung test now fails as a test rather than starving the job in silence.
-    // Generous: the slowest of these takes about five seconds.
     "--test-timeout=120000",
     "tests/browser/**/*.test.ts",
   ],
   {
     stdio: ["inherit", "pipe", "pipe"],
+    maxBuffer: 32 * 1024 * 1024,
     env: {
       ...process.env,
       DATABASE_URL,
@@ -289,28 +303,14 @@ const runner = spawn(
   },
 );
 
-for (const [name, stream] of [["stdout", runner.stdout], ["stderr", runner.stderr]]) {
-  stream.on("data", (chunk) => {
-    const text = chunk.toString();
-    (name === "stdout" ? process.stdout : process.stderr).write(text);
-    runnerLog += text;
-    if (runnerLog.length > 200_000) runnerLog = runnerLog.slice(-200_000);
-  });
-}
-
-const status = await new Promise((resolve) => {
-  runner.on("close", (code, signal) => {
-    console.log(
-      `RUNNER EXIT code=${code} signal=${signal ?? "none"} duration=${Date.now() - runnerStarted}ms`,
-    );
-    resolve(code ?? (signal ? 1 : 0));
-  });
-  runner.on("error", (error) => {
-    console.log(`RUNNER SPAWN FAILED ${error.name}`);
-    runnerLog += `\nspawn error: ${error.name}: ${error.message}\n`;
-    resolve(1);
-  });
-});
+const runnerLog = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+process.stdout.write(result.stdout ?? "");
+process.stderr.write(result.stderr ?? "");
+const status = result.status ?? 1;
+console.log(
+  `RUNNER EXIT code=${result.status} signal=${result.signal ?? "none"} ` +
+    `duration=${Date.now() - runnerStarted}ms serverBytes=${serverBytes}`,
+);
 
 shutdown();
 
@@ -331,6 +331,7 @@ if (status !== 0) {
     "browser suites failed",
     [
       `runner exit status: ${status}`,
+      `server bytes drained before exit: ${serverBytes}`,
       `runner duration: ${Date.now() - runnerStarted}ms`,
       `runner checkpoints seen: ${runnerMarks.length}`,
       `last runner checkpoint: ${runnerMarks.at(-1) ?? "(none — the test process printed no checkpoint at all)"}`,
