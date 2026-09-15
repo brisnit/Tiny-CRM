@@ -159,18 +159,22 @@ past a block are to fix the database, or to change the gate in source control.
 If you push first, the build fails with the missing migration named, and
 **production keeps serving the previous deployment** — a failed build never
 replaces the live one. Apply the change, then redeploy the failed deployment from
-the Vercel dashboard. A blocked build looks like this (abridged):
+the Vercel dashboard. This is a real blocked build, from the proof below
+(Vercel deployment `dpl_2Xbi3GCAVbdNd72KVwC3o3ZvSTGZ`):
 
 ```
+Running "node scripts/deploy-gate.mjs && node scripts/use-provider.mjs auto && prisma generate && next build"
 Deployment gate — production build
-  database fingerprint: <12 hex characters>  (a hash of host and database name)
+  database fingerprint: 1391b7c11c1d  (a hash of host and database name)
   migrations:          3 shipped by this commit, 2 applied in the database
-  ...
+  foreign keys:        0 non-deferrable
+  row-level security:  0 enabled without FORCE; 0 workspace tables unprotected (documented exceptions: IdempotencyKey)
 
 DEPLOYMENT GATE: BLOCKED — this build will not proceed.
 
   ✕ 1 migration shipped by this commit is not applied to the database:
       20260911180102_workspace_invitations
+Error: Command "node scripts/deploy-gate.mjs && …" exited with 1
 ```
 
 The fingerprint identifies which database was checked without printing its host,
@@ -196,11 +200,13 @@ runs the same `buildCommand`, gate first. Verified locally on 2026-09-15:
 `DATABASE_URL` when environment variables are pulled. An operator who has not
 deliberately supplied a database cannot produce a passing production build.
 
-That is not the whole answer, and this document does not pretend otherwise: the
-blocked `vercel build` still left a `.vercel/output` directory behind. Whether
-`vercel deploy --prebuilt` refuses to deploy an output left by a failed build is
-not assumed — it is tested against Vercel, and until the result is recorded
-here, the policy below is the control.
+**And the CLI refuses to deploy what a blocked build leaves behind.** A failed
+`vercel build` still writes `.vercel/output`, but only as a record of the failure:
+its `builds.json` carries the error. Verified on 2026-09-15 —
+`vercel deploy --prebuilt --prod` exited 1 with *"Prebuilt deployment cannot be
+created because `vercel build` failed with error"*, created no deployment, and
+production did not change. So the accidental path is closed end to end: a gate
+block produces no output that `--prebuilt` will deploy.
 
 **Beyond that it is a policy, stated here because code cannot enforce it.** Any
 control inside a build is skipped by a deployment that does not run that build,
@@ -223,11 +229,41 @@ That is an access-control question, not a gating one. It is also still visible:
 its database, however it was deployed, and Vercel's deployment list records how
 each deployment was created.
 
-A stronger, platform-level control exists and is not adopted yet: Vercel
-Deployment Checks, available on this team's Pro plan for GitHub-linked projects,
-can hold a production deployment until a GitHub Action verifies it. Whether they
-apply to deployments created from the CLI is not documented, so adopting them
-would first need that proved.
+A platform-level control was considered and does not close this gap: Vercel
+Deployment Checks (available on this team's Pro plan) hold a production
+deployment until *GitHub* checks pass. A CLI deployment is recorded by Vercel as
+`source: cli` and creates no GitHub deployment record — observed on the proof
+deployments below — so GitHub-backed checks have nothing to attach to. Against a
+deliberate CLI deployment, access control is the control.
+
+### Proven on Vercel, 2026-09-15
+
+Not a simulation: real Vercel builds, of the gate commit `1e356cc`, against a
+real database in each state. The database for the failures was a Neon branch of
+production as it stood at 20:02 UTC that day, before that day's migration was
+applied; its ledger was read before use and held 2 of the 3 migrations, so it was
+genuinely one migration behind. The build reached it through
+`vercel deploy --build-env DATABASE_URL=…`, which overrides the project's own value
+for one deployment only; production's settings were never changed. The role in
+that URL was created by SQL on the branch alone, so it never existed in
+production, and it was destroyed with the branch. Its credential does not appear
+in any build log or in Vercel's API.
+
+The fingerprint in each log shows which database was checked: `1391b7c11c1d` is
+the branch, `18155d6dda02` is production.
+
+| # | Deployment | Database the build checked | Gate | Outcome |
+|---|---|---|---|---|
+| 0 | *(local run)* | the untouched branch — production as it stood before the 2026-09-15 fix | **BLOCKED**: the missing migration **and** the three non-deferrable import-table keys | Both real incidents would have been stopped |
+| 1 | `dpl_2Xbi3GCAVbdNd72KVwC3o3ZvSTGZ` — production, `--skip-domain` | branch, one migration behind (`1391b7c11c1d`) | **BLOCKED**, named `20260911180102_workspace_invitations`, exit 1 | **Error**. Proves `--build-env` reaches the build rather than production |
+| 2 | `dpl_HFJyLtH1GSLA8pkWDRUq4G9kkCEH` — production, auto-assign **on** | the same branch | **BLOCKED**, exit 1 | **Error**. `tinycrm.biz` stayed on `dpl_3R1Y5YSLfkrhicaAYeBcoPfLV8iW` (release `8efb0a3`) before and after: a blocked build does not replace production |
+| 3 | `vercel build --prod`, then `vercel deploy --prebuilt --prod --skip-domain` | none — pulled production settings redact `DATABASE_URL` | **BLOCKED** | The CLI refused the leftover output; **no deployment created** |
+| 4 | `dpl_J2j1S5eUCMNMf31D1teKSB9PypLY` — production, `--skip-domain` | the same branch, after `migrate deploy` and `001`–`006` | **PASSED**, 3 of 3 | Build completed, **Ready**, not assigned; removed afterwards |
+| 5 | `dpl_5iyubHXcneikZFCr2DPWVxM1LRtG` — the normal push of `1e356cc` | **production** (`18155d6dda02`) | **PASSED**, 3 of 3, 0 non-deferrable, 0 RLS gaps | Became production; `/api/ready` 200 |
+
+Before the branch was used for (1) and (2), `003` was run on it so the missing
+migration was the only defect; the unmodified state in (0) shows both. The branch
+and every credential it carried were deleted at the end.
 
 ---
 
