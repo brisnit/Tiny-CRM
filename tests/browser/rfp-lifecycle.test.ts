@@ -138,6 +138,23 @@ async function waitForRow(
 }
 
 /**
+ * Clicks a control until it does something.
+ *
+ * Before hydration a button is inert markup: the click lands, nothing happens,
+ * and the only evidence is the menu or dialog that never opened. A fixed pause
+ * would be a guess about a machine we do not control, so this asks again until
+ * the thing appears.
+ */
+async function clickUntil(trigger: Locator, appears: Locator, attempts = 8): Promise<void> {
+  await trigger.waitFor({ timeout: 60_000 });
+  for (let i = 0; i < attempts && !(await appears.isVisible()); i++) {
+    await trigger.click({ timeout: 15_000 }).catch(() => {});
+    await appears.waitFor({ timeout: 15_000 }).catch(() => {});
+  }
+  await appears.waitFor({ timeout: 30_000 });
+}
+
+/**
  * Polls a view until its text matches.
  *
  * The stored row changes before the screen does — the save resolves, then the
@@ -164,10 +181,10 @@ async function setExpectedDecision(
   page: Page,
   edit: (dialog: Locator) => Promise<void>,
 ): Promise<void> {
-  await page.getByRole("button", { name: /Update status/i }).first().click();
-  await page.getByRole("menuitem", { name: /Decision expected/i }).click();
+  const item = page.getByRole("menuitem", { name: /Decision expected/i });
+  await clickUntil(page.getByRole("button", { name: /Update status/i }).first(), item);
   const dialog = page.getByRole("dialog");
-  await dialog.waitFor({ timeout: 30_000 });
+  await clickUntil(item, dialog);
   await edit(dialog);
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
 }
@@ -212,18 +229,11 @@ describe("an RFP submitted on time stops reading as overdue", () => {
       waitUntil: "domcontentloaded",
       timeout: 120_000,
     });
-    // Before hydration the button is inert markup and the click does nothing —
-    // silently, so the only symptom is a dialog that never opens. A cold CI
-    // runner can be many seconds behind the HTML, and a fixed pause is a guess
-    // about a machine we do not control, so ask for the dialog until it comes.
-    const markSubmitted = page.getByRole("button", { name: "Mark submitted", exact: true }).first();
-    await markSubmitted.waitFor({ timeout: 60_000 });
     const dialog = page.getByRole("dialog");
-    for (let attempt = 0; attempt < 8 && !(await dialog.isVisible()); attempt++) {
-      await markSubmitted.click({ timeout: 15_000 }).catch(() => {});
-      await dialog.waitFor({ timeout: 15_000 }).catch(() => {});
-    }
-    await dialog.waitFor({ timeout: 30_000 });
+    await clickUntil(
+      page.getByRole("button", { name: "Mark submitted", exact: true }).first(),
+      dialog,
+    );
     await dialog.locator('input[type="date"]').first().fill(inputValue(host.deadline));
     await dialog.getByRole("button", { name: "Mark submitted", exact: true }).click();
 
@@ -286,14 +296,11 @@ describe("an RFP submitted on time stops reading as overdue", () => {
       timeout: 120_000,
     });
 
-    const markSubmitted = page.getByRole("button", { name: "Mark submitted", exact: true }).first();
-    await markSubmitted.waitFor({ timeout: 60_000 });
     const dialog = page.getByRole("dialog");
-    for (let attempt = 0; attempt < 8 && !(await dialog.isVisible()); attempt++) {
-      await markSubmitted.click({ timeout: 15_000 }).catch(() => {});
-      await dialog.waitFor({ timeout: 15_000 }).catch(() => {});
-    }
-    await dialog.waitFor({ timeout: 30_000 });
+    await clickUntil(
+      page.getByRole("button", { name: "Mark submitted", exact: true }).first(),
+      dialog,
+    );
 
     // The hint says the submission date defaults to today, so it had better.
     // It read "" for a while, which left the field blank and the button dead.
