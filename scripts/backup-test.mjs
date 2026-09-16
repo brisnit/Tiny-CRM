@@ -112,6 +112,7 @@ function applySchema() {
     "004_workspace_bootstrap.sql",
     "005_identity_policies.sql",
     "006_job_claim.sql",
+    "007_account_scoped_ai_threads.sql",
   ]) {
     execFileSync("node", ["scripts/apply-sql.mjs", `prisma/postgres/${file}`], {
       cwd: ROOT, stdio: "ignore", env,

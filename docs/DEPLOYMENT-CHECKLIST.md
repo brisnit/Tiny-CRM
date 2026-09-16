@@ -38,6 +38,7 @@ that no amount of correct deployment will substitute for.
       psql "$DATABASE_URL" -f prisma/postgres/004_workspace_bootstrap.sql
       psql "$DATABASE_URL" -f prisma/postgres/005_identity_policies.sql
       psql "$DATABASE_URL" -f prisma/postgres/006_job_claim.sql
+      psql "$DATABASE_URL" -f prisma/postgres/007_account_scoped_ai_threads.sql
       ```
       None is optional:
 
@@ -295,6 +296,7 @@ psql "$DATABASE_URL" -f prisma/postgres/003_deferrable_constraints.sql
 psql "$DATABASE_URL" -f prisma/postgres/004_workspace_bootstrap.sql
 psql "$DATABASE_URL" -f prisma/postgres/005_identity_policies.sql
 psql "$DATABASE_URL" -f prisma/postgres/006_job_claim.sql
+psql "$DATABASE_URL" -f prisma/postgres/007_account_scoped_ai_threads.sql
 # ...all of the above BEFORE pushing to main: the build's deployment gate
 # blocks a production build against a database that is behind
 

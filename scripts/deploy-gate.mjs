@@ -211,7 +211,7 @@ function blocked(reasons) {
       "               DIRECT_URL=<owner connection> DATABASE_URL=<owner connection> \\\n" +
       "                 npx prisma migrate deploy --config prisma7.config.ts\n" +
       "               node scripts/use-provider.mjs sqlite\n" +
-      "  policies:    re-apply prisma/postgres/001–006 in order (docs/RLS.md, \"Applying it\");\n" +
+      "  policies:    re-apply prisma/postgres/001–007 in order (docs/RLS.md, \"Applying it\");\n" +
       "               003 makes foreign keys deferrable, 002/004/005 carry row-level security\n" +
       "\nThere is no override. See docs/VERCEL-DEPLOYMENT.md.\n",
   );
