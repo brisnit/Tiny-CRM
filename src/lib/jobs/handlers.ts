@@ -37,7 +37,11 @@ export function registerJobHandlers(): void {
       const { runAutomations } = await import("@/lib/automations");
       await runAutomations({
         workspaceId: job.workspaceId,
-        userId: job.actorId ?? "system",
+        // Not "system": no such user exists, and this value is spent on a
+        // task's ownerId and a notification's userId, both foreign keys to a
+        // real User. A job with no actor has no person behind it, and the
+        // automation is told so rather than handed a name that cannot resolve.
+        userId: job.actorId,
         trigger,
         entityType: job.entityType as "deal" | "project" | "contact" | "opportunity" | "task",
         entityId: job.entityId,

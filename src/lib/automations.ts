@@ -27,7 +27,12 @@ export type RunContext = Record<string, string | number | boolean | null>;
 
 export async function runAutomations(input: {
   workspaceId: string;
-  userId: string;
+  /**
+   * The person this run acts for, or null when nothing set it off — a scheduled
+   * sweep, a webhook, an event emitted with no actor. An action that needs a
+   * person says so rather than being handed a name that resolves to nobody.
+   */
+  userId: string | null;
   trigger: string;
   entityType: "deal" | "project" | "contact" | "opportunity" | "task";
   entityId: string;
@@ -59,7 +64,13 @@ export async function runAutomations(input: {
 
       const actions = parseJson<AutomationAction[]>(automation.actions, []);
       try {
-        for (const act of actions) await applyAction(act, input);
+        // An action that could not run for want of a person is reported rather
+        // than dropped silently or failed: the rest is still worth doing.
+        const notes: string[] = [];
+        for (const act of actions) {
+          const note = await applyAction(act, input);
+          if (note) notes.push(note);
+        }
         await db.automation.update({
           where: { id: automation.id },
           data: { lastRunAt: new Date(), runCount: { increment: 1 } },
@@ -70,7 +81,7 @@ export async function runAutomations(input: {
             entityType: input.entityType,
             entityId: input.entityId,
             status: "success",
-            message: actions.map((a) => a.type).join(", "),
+            message: [actions.map((a) => a.type).join(", "), ...notes].join(" — "),
           },
         });
       } catch (error) {
@@ -109,10 +120,11 @@ function normaliseField(field: string) {
   return field.replace(/\.(\w)/g, (_, c: string) => c.toUpperCase());
 }
 
+/** Runs one action. Returns a note when it could not do its work, or null. */
 async function applyAction(
   act: AutomationAction,
-  input: { workspaceId: string; userId: string; entityType: string; entityId: string; context: RunContext },
-) {
+  input: { workspaceId: string; userId: string | null; entityType: string; entityId: string; context: RunContext },
+): Promise<string | null> {
   const link = relationField(input.entityType, input.entityId);
 
   switch (act.type) {
@@ -147,6 +159,13 @@ async function applyAction(
       break;
     }
     case "notify_owner": {
+      // Nobody to notify: this run had no actor. Recorded on the run so the
+      // automation's history says what happened, rather than failing on a
+      // foreign key into an error row nobody reads.
+      if (!input.userId) return "notify_owner skipped: this run had no person to notify";
+      // Captured after the guard: the narrowing above does not survive into the
+      // closure below, where `input.userId` widens back to string | null.
+      const recipientId = input.userId;
       // A notification belongs to the person it is for, and its policy says so:
       // WITH CHECK ("userId" = app_user_id()). This runs inside the workspace's
       // context, which carries no identity, so the insert was refused outright
@@ -157,11 +176,11 @@ async function applyAction(
       // recipient's, and reusing the ambient transaction would keep the
       // identity that was refused.
       await withTenantContext(
-        { workspaceIds: [input.workspaceId], userId: input.userId },
+        { workspaceIds: [input.workspaceId], userId: recipientId },
         (tx) =>
           tx.notification.create({
             data: {
-              userId: input.userId,
+              userId: recipientId,
               workspaceId: input.workspaceId,
               type: "ai_recommendation",
               title: act.message,
@@ -200,6 +219,7 @@ async function applyAction(
       break;
     }
   }
+  return null;
 }
 
 function relationField(entityType: string, entityId: string) {
