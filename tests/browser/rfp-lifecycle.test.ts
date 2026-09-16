@@ -137,6 +137,28 @@ async function waitForRow(
   );
 }
 
+/**
+ * Polls a view until its text matches.
+ *
+ * The stored row changes before the screen does — the save resolves, then the
+ * router refreshes — so reading the page once, straight after the write lands,
+ * asks the question too early and gets the old answer.
+ */
+async function waitForText(
+  read: () => Promise<string>,
+  pattern: RegExp,
+  message: string,
+  timeoutMs = 60_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const text = await read();
+    if (pattern.test(text)) return text;
+    if (Date.now() > deadline) assert.fail(`${message}\nwhat the page said:\n${text}`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
 /** Update status → Decision expected…, edit, save. */
 async function setExpectedDecision(
   page: Page,
@@ -227,9 +249,12 @@ describe("an RFP submitted on time stops reading as overdue", () => {
     assert.ok(saved?.submittedAt, "no submission date was stored");
 
     // The stored deadline is still on the record: history, not an obligation.
-    const detail = await page.locator("body").innerText();
+    const detail = await waitForText(
+      () => page.locator("body").innerText(),
+      /Submitted/i,
+      "the detail page does not say it was submitted",
+    );
     assert.match(detail, /Proposal due/i, "the proposal deadline disappeared from the record");
-    assert.match(detail, /Submitted/i, "the detail page does not say it was submitted");
 
     // --- After: the opportunity ----------------------------------------------
     await page.goto(`${BASE_URL}/opportunities`, { waitUntil: "domcontentloaded", timeout: 120_000 });
@@ -292,8 +317,11 @@ describe("an RFP submitted on time stops reading as overdue", () => {
     assert.equal(stored?.decisionExpectedAt, null, "choosing Unknown invented a date");
 
     // The record says it plainly rather than leaving the question unanswered.
-    const detail = await page.locator("body").innerText();
-    assert.match(detail, /Not known yet/i, "the detail page hid the unknown decision date");
+    await waitForText(
+      () => page.locator("body").innerText(),
+      /Not known yet/i,
+      "the detail page hid the unknown decision date",
+    );
 
     // And the card, where the waiting is the whole story.
     const card = async () => {
@@ -301,9 +329,12 @@ describe("an RFP submitted on time stops reading as overdue", () => {
       await page.getByText("Unknown Authority RFP", { exact: false }).first().waitFor({ timeout: 60_000 });
       return page.locator("body").innerText();
     };
-    const awaiting = await card();
+    const awaiting = await waitForText(
+      card,
+      /Awaiting decision/i,
+      "an unknown decision date did not read as awaiting",
+    );
     assert.match(awaiting, /Submitted/i, "the card does not say the proposal is in");
-    assert.match(awaiting, /Awaiting decision/i, "an unknown decision date did not read as awaiting");
     assert.doesNotMatch(awaiting, /overdue/i, "an unknown decision date produced an overdue state");
 
     // Unknown -> a date.
@@ -314,7 +345,7 @@ describe("an RFP submitted on time stops reading as overdue", () => {
       await body.getByLabel("Expected decision date").fill(inputValue(day(30)));
     });
     await waitForRow(page, host.opportunityId, (row) => row.decisionExpectedAt !== null);
-    assert.match(await card(), /Decision expected/i, "a known decision date never reached the card");
+    await waitForText(card, /Decision expected/i, "a known decision date never reached the card");
 
     // ...and back to Unknown again, which is the direction that tends to be
     // impossible: a date you can add but never take away is not an answer.
@@ -324,8 +355,11 @@ describe("an RFP submitted on time stops reading as overdue", () => {
     });
     await waitForRow(page, host.opportunityId, (row) => row.decisionExpectedAt === null);
 
-    const ended = await card();
-    assert.match(ended, /Awaiting decision/i, "returning to unknown lost the awaiting state");
+    const ended = await waitForText(
+      card,
+      /Awaiting decision/i,
+      "returning to unknown lost the awaiting state",
+    );
     assert.doesNotMatch(ended, /overdue/i, "returning to unknown produced an overdue state");
 
     await page.close();
