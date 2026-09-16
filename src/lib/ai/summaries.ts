@@ -81,7 +81,7 @@ export async function getRecordSummary(
   // actions, so it establishes its own context rather than relying on an ambient
   // one. Under RLS an unscoped read returns nothing, which for AI means a
   // confident answer built from an empty CRM.
-  return withTenantContext({ workspaceIds: scope.workspaceIds }, async () => {
+  return withTenantContext(scope, async () => {
     const context = await buildRecordContext(scope, entityType, entityId);
     if (!context) return null;
 
@@ -163,7 +163,7 @@ export async function getDailyBrief(
   // actions, so it establishes its own context rather than relying on an ambient
   // one. Under RLS an unscoped read returns nothing, which for AI means a
   // confident answer built from an empty CRM.
-  return withTenantContext({ workspaceIds: scope.workspaceIds }, async () => {
+  return withTenantContext(scope, async () => {
     const snapshot = await buildWorkspaceSnapshot(scope, { limit: 14 });
     const print = fingerprint(snapshot.text);
     const scopeKey = scope.workspaceIds.slice().sort().join(",");

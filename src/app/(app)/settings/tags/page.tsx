@@ -10,7 +10,7 @@ export default async function TagSettings() {
   const actor = await requireActor();
   const workspaces = actor.memberships;
 
-  const tags = await scopedRead(workspaces.map((w) => w.id), async () => {
+  const tags = await scopedRead({ workspaceIds: workspaces.map((w) => w.id), userId: actor.identity.id }, async () => {
     return db.tag.findMany({
       where: { workspaceId: { in: workspaces.map((w) => w.id) } },
       select: {

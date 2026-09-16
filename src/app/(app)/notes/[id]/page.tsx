@@ -16,10 +16,10 @@ import { sanitizeHtml } from "@/lib/sanitize";
 export async function generateMetadata({ params }: PageProps<"/notes/[id]">) {
   const { id } = await params;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
-  const note = await scopedRead(workspaceIds, () =>
+  const read = await resolveReadScope(await readScope());
+  const note = await scopedRead(read, () =>
     db.note.findFirst({
-      where: { id, workspaceId: { in: workspaceIds } },
+      where: { id, workspaceId: { in: read.workspaceIds } },
       select: { title: true },
     }),
   );
@@ -29,10 +29,10 @@ export async function generateMetadata({ params }: PageProps<"/notes/[id]">) {
 export default async function NotePage({ params }: PageProps<"/notes/[id]">) {
   const { id } = await params;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
+  const read = await resolveReadScope(await readScope());
 
-  const note = await scopedRead(workspaceIds, () => db.note.findFirst({
-    where: { id, workspaceId: { in: workspaceIds } },
+  const note = await scopedRead(read, () => db.note.findFirst({
+    where: { id, workspaceId: { in: read.workspaceIds } },
     include: {
       author: { select: { name: true } },
       workspace: { select: { name: true } },

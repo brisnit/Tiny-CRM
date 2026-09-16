@@ -43,11 +43,11 @@ export async function GET(request: Request) {
       });
 
       const scope = zScope.parse(params.workspaceId ?? "all");
-      const { workspaceIds } = await resolveReadScope(scope);
-      if (workspaceIds.length === 0) return NextResponse.json({ options: [], requestId });
+      const read = await resolveReadScope(scope);
+      if (read.workspaceIds.length === 0) return NextResponse.json({ options: [], requestId });
 
       const q = params.q.trim();
-      const where = { workspaceId: { in: workspaceIds } };
+      const where = { workspaceId: { in: read.workspaceIds } };
       const take = 20;
 
       const respond = (options: unknown[]) =>
@@ -59,7 +59,7 @@ export async function GET(request: Request) {
       // Every branch below reads a workspace-scoped model, so the whole switch
       // runs in the scope resolveReadScope returned. That set is derived from
       // the actor's memberships; the ?workspaceId parameter can only narrow it.
-      return scopedRead(workspaceIds, async () => {
+      return scopedRead(read, async () => {
       switch (params.type) {
         case "contact": {
           const rows = await db.contact.findMany({

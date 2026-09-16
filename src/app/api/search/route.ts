@@ -51,9 +51,9 @@ export async function GET(request: Request) {
       }
       const query = parsed.data;
       const scope = zScope.parse(searchParams.get("scope"));
-      const { workspaceIds } = await resolveReadScope(scope);
+      const read = await resolveReadScope(scope);
 
-      const hits = await searchEverything(workspaceIds, query);
+      const hits = await searchEverything(read, query);
 
       return NextResponse.json(
         { hits: hits.slice(0, 30), requestId },

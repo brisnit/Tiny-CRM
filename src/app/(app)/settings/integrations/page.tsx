@@ -20,21 +20,21 @@ const PROVIDERS = [
 
 export default async function IntegrationSettings() {
   const actor = await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
+  const read = await resolveReadScope(await readScope());
 
-  const connected = await scopedRead(workspaceIds, () =>
+  const connected = await scopedRead(read, () =>
     db.integration.findMany({
-      where: { workspaceId: { in: workspaceIds }, userId: actor.identity.id },
+      where: { workspaceId: { in: read.workspaceIds }, userId: actor.identity.id },
       select: { provider: true, status: true, accountEmail: true, lastSyncAt: true },
       distinct: ["provider"],
     }),
   );
   const byProvider = new Map(connected.map((c) => [c.provider, c]));
 
-  const [emailCount, eventCount] = await scopedRead(workspaceIds, () =>
+  const [emailCount, eventCount] = await scopedRead(read, () =>
     Promise.all([
-      db.emailMessage.count({ where: { workspaceId: { in: workspaceIds } } }),
-      db.calendarEvent.count({ where: { workspaceId: { in: workspaceIds } } }),
+      db.emailMessage.count({ where: { workspaceId: { in: read.workspaceIds } } }),
+      db.calendarEvent.count({ where: { workspaceId: { in: read.workspaceIds } } }),
     ]),
   );
 

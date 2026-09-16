@@ -163,7 +163,8 @@ async function main() {
   console.log(`Built in ${((Date.now() - t0) / 1000).toFixed(1)}s\n`);
 
   const ids = [ws.id];
-  const scope = { workspaceIds: ids, workspaceNames: new Map([[ws.id, "Scale Test"]]) };
+  const read = { workspaceIds: ids, userId: user.id };
+  const scope = { ...read, workspaceNames: new Map([[ws.id, "Scale Test"]]) };
 
   const time = async (name: string, fn: () => Promise<unknown>) => {
     await fn(); // warm
@@ -177,16 +178,16 @@ async function main() {
   };
 
   console.log("Query timings (average of 3 runs, warm):\n");
-  await time("Dashboard (home page)", () => getDashboard(ids, null));
-  await time("Contacts list, page 1 + scores", () => listContacts(ids, { page: 1 }));
-  await time("Contacts list, page 50", () => listContacts(ids, { page: 50 }));
-  await time("Contacts search 'Person123'", () => listContacts(ids, { q: "Person123" }));
-  await time("Contacts: needs follow-up view", () => listContacts(ids, { view: "follow_up" }));
-  await time("Projects list", () => listProjects(ids, {}));
-  await time("Pipeline board", () => getPipelineBoard(ids, {}));
-  await time("Analytics (90 days)", () => getAnalytics(ids, 90));
-  await time("Analytics (1 year)", () => getAnalytics(ids, 365));
-  await time("Global search 'Scale'", () => searchEverything(ids, "Scale"));
+  await time("Dashboard (home page)", () => getDashboard(read, null));
+  await time("Contacts list, page 1 + scores", () => listContacts(read, { page: 1 }));
+  await time("Contacts list, page 50", () => listContacts(read, { page: 50 }));
+  await time("Contacts search 'Person123'", () => listContacts(read, { q: "Person123" }));
+  await time("Contacts: needs follow-up view", () => listContacts(read, { view: "follow_up" }));
+  await time("Projects list", () => listProjects(read, {}));
+  await time("Pipeline board", () => getPipelineBoard(read, {}));
+  await time("Analytics (90 days)", () => getAnalytics(read, 90));
+  await time("Analytics (1 year)", () => getAnalytics(read, 365));
+  await time("Global search 'Scale'", () => searchEverything(read, "Scale"));
   await time("AI context snapshot", () => buildWorkspaceSnapshot(scope));
   await time("AI cleanup scan", () => findRecommendations(scope));
 

@@ -71,6 +71,44 @@ rather than silently returning everything.
 The deny-by-default behaviour lives in one function rather than being re-derived
 in forty policies.
 
+### Identity is not optional
+
+Both settings are established together, by every path that reads or writes.
+`app.workspace_ids` answers "which workspaces"; `app.user_id` answers "which
+person", and the person-scoped policies below are useless without it:
+
+```sql
+CREATE POLICY tenant_isolation ON "Notification"
+  USING ("userId" = app_user_id() AND (...))
+```
+
+With no identity in context `app_user_id()` is `NULL`, `"userId" = NULL` is
+`NULL`, and `NULL` is not `TRUE` — so a person reads **none of their own rows**,
+and an insert of one is refused. Both fail silently, and neither shows up in
+development, because SQLite has no policies at all.
+
+That is history, not theory. Every read path originally set `workspaceIds`
+alone, so:
+
+- the shell asked for the signed-in person's notifications on every page render
+  and always got none;
+- `automations.ts` wrote notifications from a context with no identity, and
+  `jobs/handlers.ts` wrote one for a *task's owner* from the job actor's
+  identity — both refused by `WITH CHECK`.
+
+So a read takes a `ReadScope` (`{ workspaceIds, userId }`, from
+`resolveReadScope`) rather than a bare id list, and a write of a person-scoped
+row opens that person's own context. Two exemptions are documented in
+`tests/security/rls-context.test.ts`, both workspace-scoped machinery with no
+person in the picture: reading a workspace's AI mode, and running its
+automations.
+
+**Proven in `tests/security/read-identity.test.ts`**, against PostgreSQL as the
+restricted role: identity returns byte-identical rows for every workspace-scoped
+table (so full-workspace members are unaffected), a person-scoped row is
+invisible without it and visible with it, a colleague's rows never appear, and
+identity never reaches across a workspace boundary.
+
 ### Where the ids come from
 
 From the caller's own memberships, resolved by `requireActor()` — never from a

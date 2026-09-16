@@ -47,7 +47,7 @@ export async function findRecommendations(scope: ContextScope, limit = 25): Prom
   // actions, so it establishes its own context rather than relying on an ambient
   // one. Under RLS an unscoped read returns nothing, which for AI means a
   // confident answer built from an empty CRM.
-  return withTenantContext({ workspaceIds: scope.workspaceIds }, async () => {
+  return withTenantContext(scope, async () => {
     const where = { workspaceId: { in: scope.workspaceIds } };
     const now = new Date();
     const out: Recommendation[] = [];

@@ -18,11 +18,12 @@ export const metadata = { title: "Tiny AI" };
 
 export default async function AiPage() {
   const actor = await requireActor();
-  const { workspaceIds, workspaceId } = await resolveReadScope(await readScope());
+  const read = await resolveReadScope(await readScope());
+  const { workspaceId } = read;
   const workspaces = actor.memberships;
 
   const recommendations = await findRecommendations({
-    workspaceIds,
+    ...read,
     workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])),
   });
 
@@ -108,7 +109,7 @@ export default async function AiPage() {
                 entityIds: r.entityIds,
                 action: r.action,
               }))}
-              workspaceId={workspaceId ?? workspaceIds[0]!}
+              workspaceId={workspaceId ?? read.workspaceIds[0]!}
             />
           )}
         </Panel>

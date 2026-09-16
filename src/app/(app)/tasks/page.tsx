@@ -35,7 +35,7 @@ export default async function TasksPage({ searchParams }: PageProps<"/tasks">) {
 async function TaskList({ searchParams }: { searchParams: PageProps<"/tasks">["searchParams"] }) {
   const params = await searchParams;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
+  const read = await resolveReadScope(await readScope());
   const projectFocus = await readProjectFocus();
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 
@@ -45,7 +45,7 @@ async function TaskList({ searchParams }: { searchParams: PageProps<"/tasks">["s
   endOfToday.setHours(23, 59, 59, 999);
 
   const base: Record<string, unknown> = {
-    workspaceId: { in: workspaceIds },
+    workspaceId: { in: read.workspaceIds },
     ...(projectFocus ? { projectId: projectFocus } : {}),
   };
   if (str("q")) base.OR = [{ title: { contains: str("q") } }, { description: { contains: str("q") } }];
@@ -80,7 +80,7 @@ async function TaskList({ searchParams }: { searchParams: PageProps<"/tasks">["s
     company: { select: { id: true, name: true } },
   };
 
-  const [tasks, counts] = await scopedRead(workspaceIds, async () => {
+  const [tasks, counts] = await scopedRead(read, async () => {
     return Promise.all([
       db.task.findMany({
         where,

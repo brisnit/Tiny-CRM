@@ -42,12 +42,12 @@ async function ContactsTable({
 }) {
   const params = await searchParams;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
+  const read = await resolveReadScope(await readScope());
 
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 
   const [{ contacts, total, page, pageCount }, tags] = await Promise.all([
-    listContacts(workspaceIds, {
+    listContacts(read, {
       q: str("q"),
       relationshipType: str("relationshipType"),
       tag: str("tag"),
@@ -55,9 +55,9 @@ async function ContactsTable({
       sort: (str("sort") as never) ?? "recent",
       page: Number(str("page") ?? 1),
     }),
-    scopedRead(workspaceIds, () =>
+    scopedRead(read, () =>
       db.tag.findMany({
-        where: { workspaceId: { in: workspaceIds } },
+        where: { workspaceId: { in: read.workspaceIds } },
         select: { name: true },
         orderBy: { name: "asc" },
         take: 40,

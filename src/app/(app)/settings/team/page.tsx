@@ -39,7 +39,7 @@ export default async function TeamSettings() {
   const workspaceId = membership.id;
   const manages = can(membership.role, "members:manage");
 
-  const [workspace, invitations] = await scopedRead([workspaceId], async () => {
+  const [workspace, invitations] = await scopedRead({ workspaceIds: [workspaceId], userId: actor.identity.id }, async () => {
     return Promise.all([
       db.workspace.findFirst({
         where: { id: workspaceId },

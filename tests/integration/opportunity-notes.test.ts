@@ -39,7 +39,7 @@ async function clearLimits() {
 
 async function opportunityNotes(tenant: Tenant) {
   const { getOpportunity } = await import("../../src/lib/data/opportunities");
-  const opportunity = await getOpportunity([tenant.workspaceId], tenant.opportunityId);
+  const opportunity = await getOpportunity({ workspaceIds: [tenant.workspaceId], userId: tenant.ownerId }, tenant.opportunityId);
   assert.ok(opportunity, "the opportunity could not be read");
   return opportunity;
 }
@@ -234,7 +234,7 @@ describe("notes on an opportunity", () => {
     assert.equal(archived.ok, true);
 
     const context = await buildRecordContext(
-      { workspaceIds: [A.workspaceId], workspaceNames: new Map([[A.workspaceId, "Alpha"]]) },
+      { workspaceIds: [A.workspaceId], userId: A.ownerId, workspaceNames: new Map([[A.workspaceId, "Alpha"]]) },
       "opportunity",
       A.opportunityId,
     );
@@ -255,7 +255,7 @@ describe("notes on an opportunity", () => {
     assert.equal((await asMember(() => archiveNote(trashed))).ok, true);
 
     const snapshot = await buildWorkspaceSnapshot(
-      { workspaceIds: [A.workspaceId], workspaceNames: new Map([[A.workspaceId, "Alpha"]]) },
+      { workspaceIds: [A.workspaceId], userId: A.ownerId, workspaceNames: new Map([[A.workspaceId, "Alpha"]]) },
       { limit: 50 },
     );
     assert.match(snapshot.text, /Snapshot live 5530/, "a live note's timeline entry is missing from the snapshot");
@@ -271,7 +271,7 @@ describe("notes on an opportunity", () => {
     const trashed = await addNote("Searchable quokka trashed", "<p>hidden</p>");
     assert.equal((await asMember(() => archiveNote(trashed))).ok, true);
 
-    const hits = await searchEverything([A.workspaceId], "quokka");
+    const hits = await searchEverything({ workspaceIds: [A.workspaceId], userId: A.ownerId }, "quokka");
     const ids = hits.filter((h) => h.type === "note").map((h) => h.id);
     assert.ok(ids.includes(live), "search no longer finds a live note");
     assert.ok(!ids.includes(trashed), "search surfaces a note that is in the Trash");

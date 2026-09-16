@@ -38,9 +38,9 @@ describe(`engine behaviour (${isPostgres ? "PostgreSQL" : "SQLite"})`, () => {
       // start missing results in production.
       const { searchEverything } = await import("../../src/lib/data/search");
 
-      const lower = await searchEverything([A.workspaceId], "engine");
-      const upper = await searchEverything([A.workspaceId], "ENGINE");
-      const mixed = await searchEverything([A.workspaceId], "EnGiNe");
+      const lower = await searchEverything({ workspaceIds: [A.workspaceId], userId: A.ownerId }, "engine");
+      const upper = await searchEverything({ workspaceIds: [A.workspaceId], userId: A.ownerId }, "ENGINE");
+      const mixed = await searchEverything({ workspaceIds: [A.workspaceId], userId: A.ownerId }, "EnGiNe");
 
       assert.ok(lower.length > 0, "search found nothing to compare");
       assert.equal(upper.length, lower.length, "uppercase search returned a different count");
@@ -49,8 +49,8 @@ describe(`engine behaviour (${isPostgres ? "PostgreSQL" : "SQLite"})`, () => {
 
     test("list filters are case-insensitive on both engines", async () => {
       const { listContacts } = await import("../../src/lib/data/contacts");
-      const lower = await listContacts([A.workspaceId], { q: "confidential" });
-      const upper = await listContacts([A.workspaceId], { q: "CONFIDENTIAL" });
+      const lower = await listContacts({ workspaceIds: [A.workspaceId], userId: A.ownerId }, { q: "confidential" });
+      const upper = await listContacts({ workspaceIds: [A.workspaceId], userId: A.ownerId }, { q: "CONFIDENTIAL" });
       assert.ok(lower.contacts.length > 0);
       assert.equal(upper.contacts.length, lower.contacts.length);
     });
@@ -76,15 +76,15 @@ describe(`engine behaviour (${isPostgres ? "PostgreSQL" : "SQLite"})`, () => {
       // the most expensive query in the product.
       const { searchEverything } = await import("../../src/lib/data/search");
       for (const term of ["%", "_", "%%", "__", "% _ %"]) {
-        const hits = await searchEverything([A.workspaceId], term);
+        const hits = await searchEverything({ workspaceIds: [A.workspaceId], userId: A.ownerId }, term);
         assert.equal(hits.length, 0, `a wildcard-only search ran: ${JSON.stringify(term)}`);
       }
     });
 
     test("wildcard-only list filters are ignored, not applied", async () => {
       const { listContacts } = await import("../../src/lib/data/contacts");
-      const all = await listContacts([A.workspaceId], {});
-      const wildcarded = await listContacts([A.workspaceId], { q: "%" });
+      const all = await listContacts({ workspaceIds: [A.workspaceId], userId: A.ownerId }, {});
+      const wildcarded = await listContacts({ workspaceIds: [A.workspaceId], userId: A.ownerId }, { q: "%" });
       assert.equal(
         wildcarded.contacts.length,
         all.contacts.length,
@@ -117,7 +117,7 @@ describe(`engine behaviour (${isPostgres ? "PostgreSQL" : "SQLite"})`, () => {
       });
 
       const { listContacts } = await import("../../src/lib/data/contacts");
-      const hits = await listContacts([A.workspaceId], { q: "RFP_2026" });
+      const hits = await listContacts({ workspaceIds: [A.workspaceId], userId: A.ownerId }, { q: "RFP_2026" });
       const names = hits.contacts.map((c) => c.fullName);
 
       assert.ok(

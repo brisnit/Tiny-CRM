@@ -171,6 +171,93 @@ function exportedFunctionSpans(source: string): [number, number][] {
   return spans;
 }
 
+/**
+ * Every tenant context carries an identity.
+ *
+ * `app.workspace_ids` decides which workspaces a query may see; `app.user_id`
+ * decides which *person* it is. The person-scoped policies — `SavedView` and
+ * `Notification` — are gated on `"userId" = app_user_id()`, so a context
+ * without an identity matches none of the caller's own rows, and a write of
+ * such a row is refused. Both failures are silent, and invisible on SQLite.
+ *
+ * That is not a hypothetical: every read path shipped without an identity, so
+ * the notification list in the shell was empty on PostgreSQL for as long as it
+ * existed. tests/security/read-identity.test.ts proves the mechanism; this
+ * stops it coming back.
+ */
+const IDENTITY_EXEMPT: Record<string, string> = {
+  "src/lib/ai/privacy.ts":
+    "reads one workspace's aiMode — a workspace-scoped row, and the caller is a " +
+    "workspace id rather than a person",
+  "src/lib/automations.ts":
+    "workspace machinery rather than a person's read; the person-scoped write " +
+    "inside it opens the recipient's own context explicitly",
+};
+
+describe("every tenant context names who is reading", () => {
+  /** A context opener carries identity if it passes a whole scope, or names a userId. */
+  function carriesIdentity(window: string): boolean {
+    if (/withTenantContext\(\s*(read|scope)\b/.test(window)) return true;
+    return /userId/.test(window);
+  }
+
+  test("no read establishes tenant context without an identity", () => {
+    const violations: string[] = [];
+
+    for (const file of walk(join(ROOT, "src"))) {
+      const rel = relative(ROOT, file);
+      if (IDENTITY_EXEMPT[rel]) continue;
+
+      const lines = readFileSync(file, "utf8").split("\n");
+      lines.forEach((line, index) => {
+        if (!line.includes("withTenantContext(")) return;
+        const window = lines.slice(index, index + 4).join("\n");
+        if (carriesIdentity(window)) return;
+        violations.push(`${rel}:${index + 1}  ${line.trim().slice(0, 80)}`);
+      });
+    }
+
+    assert.deepEqual(
+      violations,
+      [],
+      `These open a tenant context with no identity. Person-scoped rows then read as\n` +
+        `empty and write as refused, on PostgreSQL only. Pass the ReadScope, or add a\n` +
+        `reviewed entry to IDENTITY_EXEMPT saying why this context has no person.\n\n` +
+        violations.map((v) => `  ${v}`).join("\n"),
+    );
+  });
+
+  test("every data-layer entry point takes a ReadScope", () => {
+    const violations: string[] = [];
+    for (const file of walk(join(ROOT, "src/lib/data"))) {
+      const rel = relative(ROOT, file);
+      const lines = readFileSync(file, "utf8").split("\n");
+      lines.forEach((line, index) => {
+        if (!/^export async function \w+\(/.test(line)) return;
+        const signature = lines.slice(index, index + 8).join("\n");
+        if (!signature.includes("withTenantContext(")) return; // a pure helper
+        if (signature.includes("read: ReadScope")) return;
+        violations.push(`${rel}:${index + 1}  ${line.trim().slice(0, 80)}`);
+      });
+    }
+    assert.deepEqual(violations, [], `These read the database but cannot say for whom:\n${violations.join("\n")}`);
+  });
+
+  test("every identity exemption still exists", () => {
+    const missing = Object.keys(IDENTITY_EXEMPT).filter((rel) => {
+      try { statSync(join(ROOT, rel)); return false; } catch { return true; }
+    });
+    assert.deepEqual(missing, [], `IDENTITY_EXEMPT names files that no longer exist: ${missing.join(", ")}`);
+  });
+
+  test("the detector actually detects", () => {
+    assert.equal(carriesIdentity("withTenantContext({ workspaceIds: [id] }, fn)"), false);
+    assert.equal(carriesIdentity("withTenantContext({ workspaceIds: [id], userId }, fn)"), true);
+    assert.equal(carriesIdentity("withTenantContext(read, fn)"), true);
+    assert.equal(carriesIdentity("withTenantContext(scope, fn)"), true);
+  });
+});
+
 describe("workspace-scoped database access is inside a tenant context", () => {
   const modelPattern = new RegExp(`\\bdb\\.(${TENANT_MODELS.join("|")})\\.`);
 

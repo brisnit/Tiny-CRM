@@ -147,16 +147,30 @@ async function applyAction(
       break;
     }
     case "notify_owner": {
-      await db.notification.create({
-        data: {
-          userId: input.userId,
-          workspaceId: input.workspaceId,
-          type: "ai_recommendation",
-          title: act.message,
-          entityType: input.entityType,
-          entityId: input.entityId,
-        },
-      });
+      // A notification belongs to the person it is for, and its policy says so:
+      // WITH CHECK ("userId" = app_user_id()). This runs inside the workspace's
+      // context, which carries no identity, so the insert was refused outright
+      // on PostgreSQL — silently, and only there, because SQLite has no
+      // policies. Proven in tests/security/read-identity.test.ts.
+      //
+      // Isolated: the surrounding context is the workspace's, this one is the
+      // recipient's, and reusing the ambient transaction would keep the
+      // identity that was refused.
+      await withTenantContext(
+        { workspaceIds: [input.workspaceId], userId: input.userId },
+        (tx) =>
+          tx.notification.create({
+            data: {
+              userId: input.userId,
+              workspaceId: input.workspaceId,
+              type: "ai_recommendation",
+              title: act.message,
+              entityType: input.entityType,
+              entityId: input.entityId,
+            },
+          }),
+        { isolated: true },
+      );
       break;
     }
     case "set_health": {

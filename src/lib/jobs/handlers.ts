@@ -1,6 +1,7 @@
 import "server-only";
 
 import { db } from "@/lib/db";
+import { withTenantContext } from "@/lib/tenant-db";
 import { log } from "@/lib/logger";
 import { PermanentJobError, registerHandler } from "@/lib/jobs";
 import { DOMAIN_EVENTS, TRIGGER_FOR_EVENT, type DomainEventName } from "@/lib/events";
@@ -86,17 +87,30 @@ export function registerJobHandlers(): void {
     });
     if (!task) throw new PermanentJobError("The task no longer exists");
     if (task.status === "done" || !task.ownerId) return;
+    // Captured after the guard: the narrowing above does not survive into the
+    // closure below, where `task.ownerId` widens back to string | null.
+    const ownerId = task.ownerId;
 
-    await db.notification.create({
-      data: {
-        userId: task.ownerId,
-        workspaceId: job.workspaceId,
-        type: "task_overdue",
-        title: `Overdue: ${task.title}`,
-        entityType: "task",
-        entityId: task.id,
-      },
-    });
+    // The job runs as whoever queued it; the notification belongs to the task's
+    // owner, usually someone else. The Notification policy requires the row's
+    // "userId" to match the identity in context, so this insert was refused on
+    // PostgreSQL until it ran in the owner's own context. Isolated, so the job's
+    // identity is not reused for it.
+    await withTenantContext(
+      { workspaceIds: [job.workspaceId], userId: ownerId },
+      (tx) =>
+        tx.notification.create({
+          data: {
+            userId: ownerId,
+            workspaceId: job.workspaceId,
+            type: "task_overdue",
+            title: `Overdue: ${task.title}`,
+            entityType: "task",
+            entityId: task.id,
+          },
+        }),
+      { isolated: true },
+    );
   });
 }
 

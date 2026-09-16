@@ -127,12 +127,13 @@ describe("AI privacy", () => {
       const { findRecommendations } = await import("../../src/lib/ai/recommendations");
       const scope = {
         workspaceIds: [A.workspaceId],
+        userId: A.ownerId,
         workspaceNames: new Map([[A.workspaceId, "Privacy"]]),
       };
       await assert.doesNotReject(findRecommendations(scope), "the cleanup scan needed a model");
 
       const { getDashboard } = await import("../../src/lib/data/dashboard");
-      await assert.doesNotReject(getDashboard([A.workspaceId], null));
+      await assert.doesNotReject(getDashboard({ workspaceIds: [A.workspaceId], userId: A.ownerId }, null));
 
       await setMode(A.workspaceId, "enabled");
     });
@@ -284,7 +285,7 @@ describe("destructive actions are recoverable", () => {
 
     await asOwner(() => archiveContact(C.contactId));
 
-    const trash = await listTrash([C.workspaceId]);
+    const trash = await listTrash({ workspaceIds: [C.workspaceId], userId: C.ownerId });
     const item = trash.items.find((i) => i.id === C.contactId);
     assert.ok(item, "an archived contact did not appear in trash");
     assert.equal(item!.type, "contact");
@@ -330,7 +331,7 @@ describe("destructive actions are recoverable", () => {
       await db.contact.update({ where: { id: D.contactId }, data: { archivedAt: new Date() } });
 
       const { listTrash } = await import("../../src/lib/data/trash");
-      const trash = await listTrash([C.workspaceId]);
+      const trash = await listTrash({ workspaceIds: [C.workspaceId], userId: C.ownerId });
 
       assert.ok(
         !trash.items.some((i) => i.id === D.contactId),

@@ -10,7 +10,7 @@ export default async function StatusSettings() {
   const actor = await requireActor();
   const workspaces = actor.memberships;
 
-  const statuses = await scopedRead(workspaces.map((w) => w.id), async () => {
+  const statuses = await scopedRead({ workspaceIds: workspaces.map((w) => w.id), userId: actor.identity.id }, async () => {
     return db.projectStatus.findMany({
       where: { workspaceId: { in: workspaces.map((w) => w.id) } },
       select: {

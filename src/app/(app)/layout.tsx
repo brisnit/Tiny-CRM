@@ -39,10 +39,11 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
 
   const scopeCookie = await readScope();
   const projectFocus = await readProjectFocus();
-  const { workspaceIds, isAll } = await resolveReadScope(scopeCookie);
-  const scope = isAll ? "all" : (workspaceIds[0] ?? "all");
+  const read = await resolveReadScope(scopeCookie);
+  const { isAll } = read;
+  const scope = isAll ? "all" : (read.workspaceIds[0] ?? "all");
 
-  const data = await getShellData(actor, scope, workspaceIds, projectFocus);
+  const data = await getShellData(actor, scope, read, projectFocus);
 
   return <AppShell data={data}>{children}</AppShell>;
 }

@@ -61,11 +61,12 @@ export async function POST(request: Request) {
 
       const body = bodySchema.parse(await request.json());
 
-      const { workspaceIds, memberships } = await resolveReadScope(body.scope ?? "all");
+      const read = await resolveReadScope(body.scope ?? "all");
+  const { memberships } = read;
 
       // Only workspaces where this role may use AI contribute context.
       const permitted = memberships.filter((m) => can(m.role, "ai:use")).map((m) => m.id);
-      const readable = workspaceIds.filter((id) => permitted.includes(id));
+      const readable = read.workspaceIds.filter((id) => permitted.includes(id));
       if (readable.length === 0) {
         throw new AppError("forbidden", "Your role cannot use Tiny AI.");
       }
@@ -83,6 +84,7 @@ export async function POST(request: Request) {
 
       const scope = {
         workspaceIds: readable,
+        userId: actor.identity.id,
         workspaceNames: new Map(memberships.map((m) => [m.id, m.name])),
       };
 

@@ -43,13 +43,13 @@ describe("tenant isolation", () => {
   describe("reads cannot cross the boundary", () => {
     test("search never returns another workspace's records", async () => {
       const { searchEverything } = await import("../../src/lib/data/search");
-      const hits = await searchEverything([A.workspaceId], "Bravo");
+      const hits = await searchEverything({ workspaceIds: [A.workspaceId], userId: A.ownerId }, "Bravo");
       assert.equal(hits.length, 0, "search leaked records from workspace B");
     });
 
     test("contact list is scoped", async () => {
       const { listContacts } = await import("../../src/lib/data/contacts");
-      const { contacts } = await listContacts([A.workspaceId], {});
+      const { contacts } = await listContacts({ workspaceIds: [A.workspaceId], userId: A.ownerId }, {});
       assert.ok(
         contacts.every((c) => c.workspaceId === A.workspaceId),
         "contact list leaked another workspace",
@@ -59,15 +59,15 @@ describe("tenant isolation", () => {
 
     test("dashboard aggregates only in-scope data", async () => {
       const { getDashboard } = await import("../../src/lib/data/dashboard");
-      const dashboard = await getDashboard([A.workspaceId], null);
+      const dashboard = await getDashboard({ workspaceIds: [A.workspaceId], userId: A.ownerId }, null);
       const ids = dashboard.recentActivity.map((a) => a.id);
       assert.ok(!ids.includes(B.activityId), "dashboard leaked workspace B activity");
     });
 
     test("analytics aggregates only in-scope data", async () => {
       const { getAnalytics } = await import("../../src/lib/data/analytics");
-      const a = await getAnalytics([A.workspaceId], 365);
-      const both = await getAnalytics([A.workspaceId, B.workspaceId], 365);
+      const a = await getAnalytics({ workspaceIds: [A.workspaceId], userId: A.ownerId }, 365);
+      const both = await getAnalytics({ workspaceIds: [A.workspaceId, B.workspaceId], userId: A.ownerId }, 365);
       // B's deal is worth 5,000.00, so a scoped total must be strictly smaller.
       assert.ok(
         a.pipeline.valueCents < both.pipeline.valueCents,
@@ -79,6 +79,7 @@ describe("tenant isolation", () => {
       const { buildWorkspaceSnapshot } = await import("../../src/lib/ai/context");
       const snapshot = await buildWorkspaceSnapshot({
         workspaceIds: [A.workspaceId],
+        userId: A.ownerId,
         workspaceNames: new Map([[A.workspaceId, "Alpha"]]),
       });
       assert.ok(!snapshot.text.includes("Bravo"), "AI context leaked workspace B");
@@ -90,7 +91,7 @@ describe("tenant isolation", () => {
 
     test("record fetch for another workspace's record returns nothing", async () => {
       const { getContact } = await import("../../src/lib/data/contacts");
-      const contact = await getContact([A.workspaceId], B.contactId);
+      const contact = await getContact({ workspaceIds: [A.workspaceId], userId: A.ownerId }, B.contactId);
       assert.equal(contact, null, "fetched a contact from another workspace");
     });
 

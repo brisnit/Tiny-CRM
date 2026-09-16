@@ -35,28 +35,28 @@ import { PROJECT_HEALTH, PROJECT_PRIORITY, PROJECT_TYPE, SUBMISSION_STATUS } fro
 export async function generateMetadata({ params }: PageProps<"/projects/[id]">) {
   const { id } = await params;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
-  const project = await getProject(workspaceIds, id);
+  const read = await resolveReadScope(await readScope());
+  const project = await getProject(read, id);
   return { title: project?.name ?? "Project" };
 }
 
 export default async function ProjectPage({ params }: PageProps<"/projects/[id]">) {
   const { id } = await params;
   const actor = await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
-  const project = await getProject(workspaceIds, id);
+  const read = await resolveReadScope(await readScope());
+  const project = await getProject(read, id);
   if (!project) notFound();
 
   const workspaces = actor.memberships;
   const summary = await getRecordSummary(
     actor,
-    { workspaceIds, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
+    { ...read, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
     "project",
     id,
     { workspaceId: project.workspaceId },
   );
 
-  const editContext = await getEditContext(actor, [project.workspaceId]);
+  const editContext = await getEditContext(actor, { workspaceIds: [project.workspaceId], userId: actor.identity.id });
 
   const deadline = describeDateOnlyDeadline(project.targetDate);
   const completedMilestones = project.milestones.filter((m) => m.completedAt).length;

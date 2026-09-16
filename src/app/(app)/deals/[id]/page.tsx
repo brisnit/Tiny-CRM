@@ -32,28 +32,28 @@ import { LEAD_SOURCE, TONE } from "@/lib/enums";
 export async function generateMetadata({ params }: PageProps<"/deals/[id]">) {
   const { id } = await params;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
-  const deal = await getDeal(workspaceIds, id);
+  const read = await resolveReadScope(await readScope());
+  const deal = await getDeal(read, id);
   return { title: deal?.name ?? "Deal" };
 }
 
 export default async function DealPage({ params }: PageProps<"/deals/[id]">) {
   const { id } = await params;
   const actor = await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
-  const deal = await getDeal(workspaceIds, id);
+  const read = await resolveReadScope(await readScope());
+  const deal = await getDeal(read, id);
   if (!deal) notFound();
 
   const workspaces = actor.memberships;
   const summary = await getRecordSummary(
     actor,
-    { workspaceIds, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
+    { ...read, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
     "deal",
     id,
     { workspaceId: deal.workspaceId },
   );
 
-  const editContext = await getEditContext(actor, [deal.workspaceId]);
+  const editContext = await getEditContext(actor, { workspaceIds: [deal.workspaceId], userId: actor.identity.id });
 
   const daysInStage = daysSince(deal.stageEnteredAt) ?? 0;
 

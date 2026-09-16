@@ -32,16 +32,17 @@ export default async function HomePage() {
   const actor = await requireActor();
   const scopeCookie = await readScope();
   const projectFocus = await readProjectFocus();
-  const { workspaceIds, isAll } = await resolveReadScope(scopeCookie);
-  const scope = isAll ? "all" : (workspaceIds[0] ?? "all");
+  const read = await resolveReadScope(scopeCookie);
+  const { isAll } = read;
+  const scope = isAll ? "all" : (read.workspaceIds[0] ?? "all");
 
   const workspaces = actor.memberships;
-  const [dashboard, todayTasks] = await scopedRead(workspaceIds, async () => {
+  const [dashboard, todayTasks] = await scopedRead(read, async () => {
     return Promise.all([
-      getDashboard(workspaceIds, projectFocus),
+      getDashboard(read, projectFocus),
       db.task.findMany({
         where: {
-          workspaceId: { in: workspaceIds },
+          workspaceId: { in: read.workspaceIds },
           status: { in: ["open", "in_progress"] },
           ...(projectFocus ? { projectId: projectFocus } : {}),
           dueAt: { lte: endOfToday() },
@@ -479,10 +480,10 @@ export default async function HomePage() {
  */
 async function BriefBlock({ scope, scopeCookie }: { scope: string; scopeCookie: string }) {
   const actor = await requireActor();
-  const { workspaceIds } = await resolveReadScope(scopeCookie);
+  const read = await resolveReadScope(scopeCookie);
   const workspaces = actor.memberships;
   const brief = await getDailyBrief(actor, {
-    workspaceIds,
+    ...read,
     workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])),
   });
 

@@ -35,17 +35,18 @@ export default async function NotesPage({ searchParams }: PageProps<"/notes">) {
 async function NotesList({ searchParams }: { searchParams: PageProps<"/notes">["searchParams"] }) {
   const params = await searchParams;
   await requireActor();
-  const { workspaceIds, workspaceId } = await resolveReadScope(await readScope());
+  const read = await resolveReadScope(await readScope());
+  const { workspaceId } = read;
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 
   // The Trash has its own page; a deleted note does not belong in this list.
-  const where: Record<string, unknown> = { workspaceId: { in: workspaceIds }, archivedAt: null };
+  const where: Record<string, unknown> = { workspaceId: { in: read.workspaceIds }, archivedAt: null };
   if (str("q")) {
     where.OR = [{ title: { contains: str("q") } }, { plainText: { contains: str("q") } }];
   }
   if (str("view") === "pinned") where.pinned = true;
 
-  const notes = await scopedRead(workspaceIds, () => db.note.findMany({
+  const notes = await scopedRead(read, () => db.note.findMany({
     where,
     select: {
       id: true, title: true, plainText: true, pinned: true, createdAt: true, updatedAt: true,
@@ -63,9 +64,9 @@ async function NotesList({ searchParams }: { searchParams: PageProps<"/notes">["
     <div className="space-y-4">
       <CaptureWithAi
         workspaceId={workspaceId}
-        workspaces={await scopedRead(workspaceIds, () =>
+        workspaces={await scopedRead(read, () =>
           db.workspace.findMany({
-            where: { id: { in: workspaceIds } },
+            where: { id: { in: read.workspaceIds } },
             select: { id: true, name: true },
             orderBy: { createdAt: "asc" },
           }),

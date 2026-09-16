@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { ReadScope } from "@/lib/auth/access";
 import { contains, db, isSearchable } from "@/lib/db";
 import { scoreDeal } from "@/lib/scoring";
 import { tagsForEntities } from "@/lib/actions/tags";
@@ -13,14 +14,15 @@ import { withTenantContext } from "@/lib/tenant-db";
  * page unbounded; the column header still shows the true total.
  */
 export async function getPipelineBoard(
-  workspaceIds: string[],
+  read: ReadScope,
   options: { pipelineId?: string; q?: string; ownerOnly?: string; projectId?: string; kind?: "deal" | "opportunity" } = {},
 ) {
   // Read paths do not go through the action wrapper, so this is where they join
   // the RLS model. The ids are the caller's already-authorised scope
   // (resolveReadScope), so this narrows the database to exactly what the
   // application had already decided the request may see.
-  return withTenantContext({ workspaceIds }, async () => {
+  const { workspaceIds } = read;
+  return withTenantContext(read, async () => {
     const kind = options.kind ?? "deal";
 
     const pipelines = await db.pipeline.findMany({
@@ -117,12 +119,13 @@ export async function getPipelineBoard(
   });
 }
 
-export async function getDeal(workspaceIds: string[], id: string) {
+export async function getDeal(read: ReadScope, id: string) {
+  const { workspaceIds } = read;
   // Read paths do not go through the action wrapper, so this is where they join
   // the RLS model. The ids are the caller's already-authorised scope
   // (resolveReadScope), so this narrows the database to exactly what the
   // application had already decided the request may see.
-  return withTenantContext({ workspaceIds }, async () => {
+  return withTenantContext(read, async () => {
     const deal = await db.deal.findFirst({
       where: { id, workspaceId: { in: workspaceIds } },
       include: {

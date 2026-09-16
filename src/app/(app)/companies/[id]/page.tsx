@@ -33,28 +33,28 @@ import {
 export async function generateMetadata({ params }: PageProps<"/companies/[id]">) {
   const { id } = await params;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
-  const company = await getCompany(workspaceIds, id);
+  const read = await resolveReadScope(await readScope());
+  const company = await getCompany(read, id);
   return { title: company?.name ?? "Company" };
 }
 
 export default async function CompanyPage({ params }: PageProps<"/companies/[id]">) {
   const { id } = await params;
   const actor = await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
-  const company = await getCompany(workspaceIds, id);
+  const read = await resolveReadScope(await readScope());
+  const company = await getCompany(read, id);
   if (!company) notFound();
 
   const workspaces = actor.memberships;
   const summary = await getRecordSummary(
     actor,
-    { workspaceIds, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
+    { ...read, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
     "company",
     id,
     { workspaceId: company.workspaceId },
   );
 
-  const editContext = await getEditContext(actor, [company.workspaceId]);
+  const editContext = await getEditContext(actor, { workspaceIds: [company.workspaceId], userId: actor.identity.id });
 
   return (
     <PageShell wide>
