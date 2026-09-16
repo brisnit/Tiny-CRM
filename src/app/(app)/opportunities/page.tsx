@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { AlertTriangle, Landmark, ThumbsDown, ThumbsUp } from "lucide-react";
+import { AlertTriangle, Check, Landmark, ThumbsDown, ThumbsUp } from "lucide-react";
 
 import { PageHeader, PageShell } from "@/components/app/page-header";
 import { FilterBar } from "@/components/app/filter-bar";
@@ -14,9 +14,18 @@ import { readScope } from "@/lib/scope";
 import { listOpportunities } from "@/lib/data/opportunities";
 import { formatCompact, formatMoneyOrDash } from "@/lib/money";
 import { describeDateOnlyDeadline, formatDayOnly } from "@/lib/dates";
+import { describeOpportunityLifecycle, isSubmitted } from "@/lib/rfp-lifecycle";
 import { COMPETITION_LEVEL, OPPORTUNITY_TYPE, STRATEGIC_VALUE, SUBMISSION_STATUS, TONE, isTerminalSubmission } from "@/lib/enums";
 
 export const metadata = { title: "Opportunities" };
+
+/** Lifecycle tone → the class the surface uses for it. */
+const LIFECYCLE_TONE: Record<string, string> = {
+  danger: "font-medium text-rose-600 dark:text-rose-400",
+  warn: "font-medium text-amber-600 dark:text-amber-400",
+  positive: "font-medium text-emerald-700 dark:text-emerald-400",
+  muted: "text-muted",
+};
 
 export default async function OpportunitiesPage({ searchParams }: PageProps<"/opportunities">) {
   return (
@@ -56,6 +65,9 @@ async function OpportunityList({
   // bidding; an unassessed one is neither a go nor a no.
   const goCount = openOnes.filter((o) => o.assessment.assessed && o.assessment.recommendation === "go").length;
   const urgent = openOnes.filter((o) => {
+    // A proposal that is already in exerts no deadline pressure, however close
+    // its deadline was — counting it here is the same mistake as the card.
+    if (isSubmitted(o)) return false;
     const d = describeDateOnlyDeadline(o.deadlineAt);
     return d.urgent || d.overdue;
   }).length;
@@ -83,7 +95,8 @@ async function OpportunityList({
         views={[
           { value: "open", label: "In flight" },
           { value: "due_soon", label: "Due in 30 days" },
-          { value: "submitted", label: "Submitted" },
+          { value: "awaiting", label: "Awaiting decision" },
+          { value: "decided", label: "Decided" },
           { value: "all", label: "All" },
         ]}
         filters={[
@@ -103,7 +116,7 @@ async function OpportunityList({
       ) : (
         <div className="space-y-3">
           {opportunities.map((opp) => {
-            const deadline = describeDateOnlyDeadline(opp.deadlineAt);
+            const life = describeOpportunityLifecycle(opp);
             const questions = describeDateOnlyDeadline(opp.questionsDeadlineAt);
             const rec = opp.assessment.recommendation;
 
@@ -152,18 +165,16 @@ async function OpportunityList({
                 </div>
 
                 <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-hairline pt-3 text-[12px]">
-                  <span
-                    className={
-                      deadline.overdue
-                        ? "font-medium text-rose-600 dark:text-rose-400"
-                        : deadline.urgent
-                          ? "font-medium text-amber-600 dark:text-amber-400"
-                          : "text-muted"
-                    }
-                  >
-                    {opp.proposalDeadlineAt ? "Proposal " : "Deadline "}
-                    {formatDayOnly(opp.deadlineAt, "not set")} · {deadline.label}
+                  {/* What this owes, if anything: a deadline still to meet, or
+                      the submission that met it. The date itself is unchanged. */}
+                  <span className={LIFECYCLE_TONE[life.tone]}>
+                    {life.submitted ? <Check className="mr-1 inline size-3" /> : null}
+                    {life.primary}
+                    {life.secondary ? ` · ${life.secondary}` : ""}
                   </span>
+                  {life.note ? (
+                    <span className="font-medium text-amber-600 dark:text-amber-400">{life.note}</span>
+                  ) : null}
                   {opp.questionsDeadlineAt ? (
                     <span className={questions.urgent ? "font-medium text-amber-600 dark:text-amber-400" : "text-faint"}>
                       Questions {formatDayOnly(opp.questionsDeadlineAt)}

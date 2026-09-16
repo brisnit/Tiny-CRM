@@ -7,6 +7,7 @@ import { formatMoney } from "@/lib/money";
 import { scoreDeal, scoreProjectHealth } from "@/lib/scoring";
 import { truncate } from "@/lib/utils";
 import type { ReadScope } from "@/lib/auth/access";
+import { describeOpportunityLifecycle, isSubmitted } from "@/lib/rfp-lifecycle";
 import { withTenantContext } from "@/lib/tenant-db";
 
 /**
@@ -127,7 +128,9 @@ export async function buildWorkspaceSnapshot(
         db.opportunity.findMany({
           where: { ...where, archivedAt: null, submissionStatus: { notIn: [...TERMINAL_SUBMISSION_STATUSES] } },
           select: {
-            id: true, name: true, deadlineAt: true, estimatedValueCents: true, fitScore: true,
+            id: true, name: true, deadlineAt: true, proposalDeadlineAt: true,
+            submittedAt: true, decisionExpectedAt: true, decidedAt: true,
+            estimatedValueCents: true, fitScore: true,
             submissionStatus: true, type: true, workspaceId: true, company: { select: { name: true } },
           },
           orderBy: { deadlineAt: "asc" },
@@ -226,7 +229,15 @@ export async function buildWorkspaceSnapshot(
 
     const oppLines = opportunities.map((o) => {
       citations.push({ type: "opportunity", id: o.id, label: o.name });
-      return `- ${o.name}${o.company ? ` (${o.company.name})` : ""} — ${o.type.toUpperCase()}, ${formatMoney(o.estimatedValueCents)}, fit ${o.fitScore ?? "?"}/100, status ${o.submissionStatus}, deadline ${formatDayOnly(o.deadlineAt, "unset")} [${ws(o.workspaceId)}]`;
+      // Submitted work is described as submitted, never as a deadline still to
+      // meet. A model told a bid is overdue will urge racing toward a date the
+      // proposal already honoured, which is the failure this lifecycle exists
+      // to end — and it would do it in the user's own words back to them.
+      const life = describeOpportunityLifecycle(o);
+      const timing = life.submitted
+        ? `${life.primary.toLowerCase()}${life.secondary ? `, ${life.secondary.toLowerCase()}` : ""}`
+        : `deadline ${formatDayOnly(o.deadlineAt, "unset")}`;
+      return `- ${o.name}${o.company ? ` (${o.company.name})` : ""} — ${o.type.toUpperCase()}, ${formatMoney(o.estimatedValueCents)}, fit ${o.fitScore ?? "?"}/100, status ${o.submissionStatus}, ${timing} [${ws(o.workspaceId)}]`;
     });
 
     const activityLines = recentActivity.slice(0, limit).map((a) => {
@@ -465,7 +476,13 @@ async function describeEntity(
           o.strategicValue && `Strategic value: ${o.strategicValue}`,
           o.competitionLevel && `Competition: ${o.competitionLevel}`,
           o.questionsDeadlineAt && `Questions due: ${formatDayOnly(o.questionsDeadlineAt)}`,
-          `Proposal due: ${formatDayOnly(o.proposalDeadlineAt ?? o.deadlineAt, "not set")}`,
+          `Proposal due: ${formatDayOnly(o.proposalDeadlineAt ?? o.deadlineAt, "not set")}${
+            isSubmitted(o) ? " (met — the proposal is in)" : ""
+          }`,
+          isSubmitted(o) &&
+            `Submitted: ${o.submittedAt ? formatDayOnly(o.submittedAt) : "date not recorded"}`,
+          o.decisionExpectedAt && `Decision expected: ${formatDayOnly(o.decisionExpectedAt)}`,
+          o.decidedAt && `Decided: ${formatDayOnly(o.decidedAt)}`,
           o.requirements && `Requirements:\n${truncate(o.requirements, 1800)}`,
         ].filter(Boolean).join("\n"),
       };

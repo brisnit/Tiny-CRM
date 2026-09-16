@@ -13,7 +13,8 @@ import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { listProjects } from "@/lib/data/projects";
 import { formatCompact } from "@/lib/money";
-import { describeDateOnlyDeadline, timeAgo } from "@/lib/dates";
+import { timeAgo } from "@/lib/dates";
+import { describeProjectTarget } from "@/lib/rfp-lifecycle";
 import { PROJECT_HEALTH, PROJECT_PRIORITY, PROJECT_TYPE } from "@/lib/enums";
 
 export const metadata = { title: "Projects" };
@@ -82,7 +83,9 @@ async function ProjectList({
         <>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {projects.map((project) => {
-              const deadline = describeDateOnlyDeadline(project.targetDate);
+              // A target date met by a submitted proposal is history, not an
+              // obligation — see src/lib/rfp-lifecycle.ts.
+              const deadline = describeProjectTarget(project.targetDate, project.targetMet);
               const progress =
                 project.milestones.length > 0
                   ? Math.round((project.completedMilestones / project.milestones.length) * 100)
@@ -150,14 +153,17 @@ async function ProjectList({
                   <div className="mt-auto flex items-center justify-between gap-2 border-t border-hairline pt-3 text-[11.5px]">
                     <span
                       className={
-                        deadline.overdue
+                        deadline.tone === "danger"
                           ? "font-medium text-rose-600 dark:text-rose-400"
-                          : deadline.urgent
+                          : deadline.tone === "warn"
                             ? "font-medium text-amber-600 dark:text-amber-400"
-                            : "text-faint"
+                            : deadline.tone === "positive"
+                              ? "font-medium text-emerald-700 dark:text-emerald-400"
+                              : "text-faint"
                       }
                     >
-                      {deadline.label}
+                      {deadline.primary}
+                      {deadline.secondary ? ` · ${deadline.secondary}` : ""}
                     </span>
                     <span className="flex items-center gap-2 text-faint">
                       {project.tasks.length > 0 ? <span>{project.tasks.length} open</span> : null}

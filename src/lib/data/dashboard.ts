@@ -1,5 +1,5 @@
 import "server-only";
-import { TERMINAL_SUBMISSION_STATUSES } from "@/lib/enums";
+import { POST_SUBMISSION_STATUSES, TERMINAL_SUBMISSION_STATUSES } from "@/lib/enums";
 
 import type { ReadScope } from "@/lib/auth/access";
 import { meetsProjectTarget } from "@/lib/rfp-lifecycle";
@@ -32,7 +32,7 @@ export async function getDashboard(read: ReadScope, projectFocus: string | null)
 
     const [
       openDeals, wonThisMonth, tasksToday, overdueTasks, activeProjects,
-      projectsRaw, contactsToFollowUp, opportunities, recentActivity,
+      projectsRaw, contactsToFollowUp, opportunities, awaitingDecision, recentActivity,
       upcomingEvents, closingDeals, dealsForScoring, completedThisMonth,
     ] = await Promise.all([
       db.deal.aggregate({
@@ -95,18 +95,41 @@ export async function getDashboard(read: ReadScope, projectFocus: string | null)
         orderBy: [{ nextFollowUpAt: "asc" }, { lastContactedAt: "asc" }],
         take: 8,
       }),
+      // Work still to do before a deadline. A proposal that is already in is not
+      // work — including one submitted early, whose deadline is still ahead and
+      // which used to sit here looking urgent.
       db.opportunity.findMany({
         where: {
           ...where, archivedAt: null,
-          submissionStatus: { notIn: [...TERMINAL_SUBMISSION_STATUSES] },
+          submissionStatus: {
+            notIn: [...TERMINAL_SUBMISSION_STATUSES, ...POST_SUBMISSION_STATUSES],
+          },
           deadlineAt: { gte: now, lte: in30 },
         },
         select: {
-          id: true, name: true, deadlineAt: true, questionsDeadlineAt: true,
+          id: true, name: true, deadlineAt: true, questionsDeadlineAt: true, proposalDeadlineAt: true,
+          submittedAt: true, decisionExpectedAt: true, decidedAt: true,
           estimatedValueCents: true, fitScore: true, submissionStatus: true, type: true,
           company: { select: { name: true } },
         },
         orderBy: { deadlineAt: "asc" },
+        take: 6,
+      }),
+      // Proposals that are in, waiting on somebody else. A different queue,
+      // because there is nothing to do here but wait — ordered by when a
+      // decision is expected, and by the oldest submission when it is not known.
+      db.opportunity.findMany({
+        where: {
+          ...where, archivedAt: null,
+          submissionStatus: { in: [...POST_SUBMISSION_STATUSES] },
+        },
+        select: {
+          id: true, name: true, deadlineAt: true, proposalDeadlineAt: true,
+          submittedAt: true, decisionExpectedAt: true, decidedAt: true,
+          estimatedValueCents: true, submissionStatus: true, type: true,
+          company: { select: { name: true } },
+        },
+        orderBy: [{ decisionExpectedAt: "asc" }, { submittedAt: "asc" }],
         take: 6,
       }),
       db.activity.findMany({
@@ -233,6 +256,7 @@ export async function getDashboard(read: ReadScope, projectFocus: string | null)
       },
       contactsToFollowUp,
       opportunities,
+      awaitingDecision,
       recentActivity,
       upcomingEvents,
       closingDeals,

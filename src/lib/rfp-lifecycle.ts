@@ -1,5 +1,5 @@
-import { dateOnlyInputValue } from "@/lib/dates";
-import { isAwaitingDecision } from "@/lib/enums";
+import { dateOnlyInputValue, describeDateOnlyDeadline, formatDayOnly } from "@/lib/dates";
+import { isAwaitingDecision, isTerminalSubmission } from "@/lib/enums";
 
 /**
  * What a submission means for the dates around it.
@@ -121,4 +121,126 @@ export function meetsProjectTarget(
     };
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// How a lifecycle reads
+// ---------------------------------------------------------------------------
+
+/**
+ * What a surface should say about where this stands.
+ *
+ * One function, so the card, the detail page, the project it belongs to, the
+ * home queues and Tiny AI cannot describe the same record differently. The
+ * stored dates are never altered to make a line read better: a deadline that
+ * was met is still shown as history wherever history belongs, and what changes
+ * is only what the record is said to *owe*.
+ */
+export type LifecycleDisplay = {
+  /** The headline: "Proposal Sep 15", "Submitted Sep 14", "Awarded Oct 8". */
+  primary: string;
+  /** What it means now: "1 day overdue", "Awaiting decision", "Decision expected Oct 8". */
+  secondary: string | null;
+  /** Only ever set when something is worth flagging — lateness, so far. */
+  note: string | null;
+  tone: "danger" | "warn" | "muted" | "positive";
+  submitted: boolean;
+};
+
+const OUTCOME_LABEL: Record<string, string> = {
+  won: "Awarded",
+  lost: "Not awarded",
+  withdrawn: "Withdrawn",
+};
+
+/** Whole days between two dates, by calendar day, or null when either is missing. */
+function daysBetween(from?: Date | string | null, to?: Date | string | null): number | null {
+  if (!from || !to) return null;
+  const a = dateOnlyInputValue(from);
+  const b = dateOnlyInputValue(to);
+  if (!a || !b) return null;
+  return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${Math.abs(n) === 1 ? "" : "s"}`;
+
+/** How an opportunity reads, wherever it is shown. */
+export function describeOpportunityLifecycle(
+  facts: SubmissionFacts & { deadlineAt?: Date | string | null },
+): LifecycleDisplay {
+  const deadline = facts.proposalDeadlineAt ?? facts.deadlineAt ?? null;
+
+  if (isTerminalSubmission(facts.submissionStatus)) {
+    const label = OUTCOME_LABEL[facts.submissionStatus] ?? "Closed";
+    const decided = facts.decidedAt ? formatDayOnly(facts.decidedAt) : null;
+    const waited = daysBetween(facts.submittedAt, facts.decidedAt);
+    return {
+      primary: decided ? `${label} ${decided}` : label,
+      secondary: waited !== null && waited >= 0 ? `${plural(waited, "day")} after submission` : null,
+      note: null,
+      tone: facts.submissionStatus === "won" ? "positive" : "muted",
+      submitted: isSubmitted(facts),
+    };
+  }
+
+  if (isSubmitted(facts)) {
+    // An imported row may be submitted with no date. It says so plainly rather
+    // than borrowing a date from somewhere it does not belong.
+    const when = facts.submittedAt ? formatDayOnly(facts.submittedAt) : null;
+    const timing = submissionTiming(facts);
+    const late = timing?.verdict === "late" ? timing.days : null;
+    return {
+      primary: when ? `Submitted ${when}` : "Submitted",
+      secondary: facts.decisionExpectedAt
+        ? `Decision expected ${formatDayOnly(facts.decisionExpectedAt)}`
+        : "Awaiting decision",
+      // Early and on time are unremarkable; only lateness is worth a word.
+      note: late !== null ? `${plural(late, "day")} after the deadline` : null,
+      tone: late !== null ? "warn" : "muted",
+      submitted: true,
+    };
+  }
+
+  const described = describeDateOnlyDeadline(deadline ?? null);
+  return {
+    primary: deadline ? `Proposal ${formatDayOnly(deadline)}` : "No deadline set",
+    secondary: deadline ? described.label : null,
+    note: null,
+    tone: described.overdue ? "danger" : described.urgent ? "warn" : "muted",
+    submitted: false,
+  };
+}
+
+/**
+ * How a project's target date reads, given what met it.
+ *
+ * The date itself is unchanged and still shown wherever the record's history
+ * is shown. This decides whether it is still something owed.
+ */
+export function describeProjectTarget(
+  targetDate: Date | string | null | undefined,
+  met: MetTarget | null,
+): LifecycleDisplay {
+  if (met) {
+    const when = met.submittedAt ? formatDayOnly(met.submittedAt) : null;
+    const late = met.timing?.verdict === "late" ? met.timing.days : null;
+    return {
+      primary: when ? `Submitted ${when}` : "Submitted",
+      secondary: met.decisionExpectedAt
+        ? `Decision expected ${formatDayOnly(met.decisionExpectedAt)}`
+        : "Awaiting decision",
+      note: late !== null ? `${plural(late, "day")} after the deadline` : null,
+      tone: late !== null ? "warn" : "positive",
+      submitted: true,
+    };
+  }
+
+  const described = describeDateOnlyDeadline(targetDate ?? null);
+  return {
+    primary: targetDate ? formatDayOnly(targetDate) : "No deadline",
+    secondary: targetDate ? described.label : null,
+    note: null,
+    tone: described.overdue ? "danger" : described.urgent ? "warn" : "muted",
+    submitted: false,
+  };
 }

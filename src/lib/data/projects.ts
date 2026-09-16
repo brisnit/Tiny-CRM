@@ -243,6 +243,9 @@ export async function getProject(read: ReadScope, id: string) {
       ...project,
       health: scored.health,
       overdueTasks: scored.overdueTasks,
+      // What met the target date, if anything — the detail page shows the date
+      // either way, and this decides whether it still counts as owed.
+      targetMet: scored.targetMet,
       openTasks,
       doneTasks: project.tasks.filter((t) => t.status === "done"),
       statuses,
