@@ -29,7 +29,8 @@ import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatCompact, formatMoney } from "@/lib/money";
-import { dateOnlyInputValue, describeDateOnlyDeadline, describeDeadline, formatDateOnly, formatDay, formatDayOnly, timeAgo } from "@/lib/dates";
+import { dateOnlyInputValue, describeDeadline, formatDateOnly, formatDay, formatDayOnly, timeAgo } from "@/lib/dates";
+import { describeProjectTarget } from "@/lib/rfp-lifecycle";
 import { PROJECT_HEALTH, PROJECT_PRIORITY, PROJECT_TYPE, SUBMISSION_STATUS } from "@/lib/enums";
 
 export async function generateMetadata({ params }: PageProps<"/projects/[id]">) {
@@ -58,7 +59,8 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
 
   const editContext = await getEditContext(actor, { workspaceIds: [project.workspaceId], userId: actor.identity.id });
 
-  const deadline = describeDateOnlyDeadline(project.targetDate);
+  // The stored target date is still shown; this decides what it means now.
+  const target = describeProjectTarget(project.targetDate, project.targetMet);
   const completedMilestones = project.milestones.filter((m) => m.completedAt).length;
   const progress =
     project.milestones.length > 0
@@ -150,8 +152,12 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
           <StatTile
             label="Deadline"
             value={formatDayOnly(project.targetDate, "Not set")}
-            hint={deadline.label}
-            tone={deadline.overdue ? "danger" : deadline.urgent ? "warn" : "default"}
+            hint={
+              target.submitted
+                ? [target.primary, target.secondary].filter(Boolean).join(" · ")
+                : target.secondary ?? ""
+            }
+            tone={target.tone === "danger" ? "danger" : target.tone === "warn" ? "warn" : "default"}
             icon={<CalendarDays />}
           />
           <StatTile

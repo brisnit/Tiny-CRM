@@ -15,6 +15,7 @@ import { ActivityFeed } from "@/components/app/activity-feed";
 import { TimelineComposer } from "@/components/app/timeline-composer";
 import { AiSummaryCard } from "@/components/app/ai-summary-card";
 import { OpportunityLifecycle } from "@/components/app/opportunity-lifecycle";
+import { describeOpportunityLifecycle } from "@/lib/rfp-lifecycle";
 import { AskAiButton } from "@/components/app/ask-ai-button";
 import { RelatedList } from "@/components/app/related-list";
 import { RecordNotes } from "@/components/app/record-notes";
@@ -63,6 +64,7 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
   const editContext = await getEditContext(actor, { workspaceIds: [opportunity.workspaceId], userId: actor.identity.id });
 
   const deadline = describeDateOnlyDeadline(opportunity.deadlineAt);
+  const life = describeOpportunityLifecycle(opportunity);
   const questions = describeDateOnlyDeadline(opportunity.questionsDeadlineAt);
   const rec = opportunity.assessment.recommendation;
   const openTasks = opportunity.tasks.filter((t) => t.status !== "done");
@@ -305,21 +307,42 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
                   </span>
                 ) : null}
               </Row>
+              {/* The deadline is kept exactly as captured. Once the proposal is
+                  in, it reads as history rather than as something still owed. */}
               <Row label="Proposal due">
                 {opportunity.proposalDeadlineAt ?? opportunity.deadlineAt ? (
                   <span
                     className={
-                      deadline.overdue
-                        ? "font-medium text-rose-600 dark:text-rose-400"
-                        : deadline.urgent
-                          ? "font-medium text-amber-600 dark:text-amber-400"
-                          : undefined
+                      life.submitted
+                        ? undefined
+                        : deadline.overdue
+                          ? "font-medium text-rose-600 dark:text-rose-400"
+                          : deadline.urgent
+                            ? "font-medium text-amber-600 dark:text-amber-400"
+                            : undefined
                     }
                   >
-                    {formatDateOnly(opportunity.proposalDeadlineAt ?? opportunity.deadlineAt)} · {deadline.label}
+                    {formatDateOnly(opportunity.proposalDeadlineAt ?? opportunity.deadlineAt)}
+                    {life.submitted ? " · met" : ` · ${deadline.label}`}
                   </span>
                 ) : null}
               </Row>
+              {life.submitted ? (
+                <Row label="Submitted">
+                  <span className={life.note ? "font-medium text-amber-600 dark:text-amber-400" : undefined}>
+                    {opportunity.submittedAt
+                      ? formatDateOnly(opportunity.submittedAt)
+                      : "Date not recorded"}
+                    {life.note ? ` · ${life.note}` : ""}
+                  </span>
+                </Row>
+              ) : null}
+              {opportunity.decisionExpectedAt ? (
+                <Row label="Decision expected">{formatDateOnly(opportunity.decisionExpectedAt)}</Row>
+              ) : null}
+              {opportunity.decidedAt ? (
+                <Row label="Decided">{formatDateOnly(opportunity.decidedAt)}</Row>
+              ) : null}
             </dl>
           </Panel>
 

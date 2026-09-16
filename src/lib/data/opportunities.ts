@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { ReadScope } from "@/lib/auth/access";
-import { TERMINAL_SUBMISSION_STATUSES, isTerminalSubmission } from "@/lib/enums";
+import { POST_SUBMISSION_STATUSES, TERMINAL_SUBMISSION_STATUSES, isTerminalSubmission } from "@/lib/enums";
 import { isSubmitted } from "@/lib/rfp-lifecycle";
 import { contains, db, isSearchable } from "@/lib/db";
 import { tagsForEntities } from "@/lib/actions/tags";
@@ -220,7 +220,15 @@ export async function listOpportunities(
       where.submissionStatus = { notIn: [...TERMINAL_SUBMISSION_STATUSES] };
       where.deadlineAt = { gte: now, lte: new Date(now.getTime() + 30 * 86_400_000) };
     }
+    // "submitted" is kept: a bookmark or saved link from before the lifecycle
+    // shipped should still land somewhere sensible.
     if (filters.view === "submitted") where.submissionStatus = "submitted";
+    if (filters.view === "awaiting") {
+      where.submissionStatus = { in: [...POST_SUBMISSION_STATUSES] };
+    }
+    if (filters.view === "decided") {
+      where.submissionStatus = { in: [...TERMINAL_SUBMISSION_STATUSES] };
+    }
 
     const rows = await db.opportunity.findMany({
       where,

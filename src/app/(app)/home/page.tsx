@@ -22,7 +22,8 @@ import { getDailyBrief } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { db } from "@/lib/db";
 import { formatCompact, formatMoney } from "@/lib/money";
-import { daysSince, describeDateOnlyDeadline, formatDay, formatDayOnly, formatTime, timeAgo } from "@/lib/dates";
+import { daysSince, formatDay, formatDayOnly, formatTime, timeAgo } from "@/lib/dates";
+import { describeOpportunityLifecycle } from "@/lib/rfp-lifecycle";
 import { PROJECT_HEALTH, SUBMISSION_STATUS, TONE } from "@/lib/enums";
 import { scopedRead } from "@/lib/data/scoped";
 
@@ -412,7 +413,7 @@ export default async function HomePage() {
               ) : (
                 <ul className="divide-y divide-hairline border-t border-hairline">
                   {dashboard.opportunities.map((opp) => {
-                    const deadline = describeDateOnlyDeadline(opp.deadlineAt);
+                    const life = describeOpportunityLifecycle(opp);
                     return (
                       <li key={opp.id}>
                         <Link
@@ -422,9 +423,9 @@ export default async function HomePage() {
                           <p className="truncate text-[13px] font-medium text-body">{opp.name}</p>
                           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                             <span
-                              className={`text-[11px] ${deadline.urgent ? "font-medium text-amber-600 dark:text-amber-400" : "text-faint"}`}
+                              className={`text-[11px] ${life.tone === "danger" ? "font-medium text-rose-600 dark:text-rose-400" : life.tone === "warn" ? "font-medium text-amber-600 dark:text-amber-400" : "text-faint"}`}
                             >
-                              {deadline.label}
+                              {life.secondary ?? life.primary}
                             </span>
                             {opp.estimatedValueCents != null ? (
                               <span className="text-[11px] text-faint">· {formatMoney(opp.estimatedValueCents)}</span>
@@ -440,6 +441,52 @@ export default async function HomePage() {
                 </ul>
               )}
             </Panel>
+
+            {/* Waiting on somebody else. A separate queue because there is
+                nothing to do here but wait — and because a proposal that is in
+                should never sit in a list of deadlines to meet. */}
+            {dashboard.awaitingDecision.length > 0 ? (
+              <Panel>
+                <PanelHeader
+                  title="Awaiting decision"
+                  icon={<Landmark />}
+                  action={
+                    <Button asChild size="xs" variant="ghost">
+                      <Link href="/opportunities?view=awaiting">All</Link>
+                    </Button>
+                  }
+                />
+                <ul className="divide-y divide-hairline border-t border-hairline">
+                  {dashboard.awaitingDecision.map((opp) => {
+                    const life = describeOpportunityLifecycle(opp);
+                    return (
+                      <li key={opp.id}>
+                        <Link
+                          href={`/opportunities/${opp.id}`}
+                          className="block px-4 py-3 transition-colors hover:bg-sunken/60"
+                        >
+                          <p className="truncate text-[13px] font-medium text-body">{opp.name}</p>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="text-[11px] text-faint">{life.primary}</span>
+                            {life.secondary ? (
+                              <span className="text-[11px] text-faint">· {life.secondary}</span>
+                            ) : null}
+                            {life.note ? (
+                              <span className="text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                                · {life.note}
+                              </span>
+                            ) : null}
+                            <Badge tone={SUBMISSION_STATUS.tone(opp.submissionStatus)}>
+                              {SUBMISSION_STATUS.label(opp.submissionStatus)}
+                            </Badge>
+                          </div>
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </Panel>
+            ) : null}
 
             {/* Closing soon */}
             {dashboard.closingDeals.length > 0 ? (

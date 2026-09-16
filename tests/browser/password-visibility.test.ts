@@ -72,6 +72,7 @@ describe("show/hide password", () => {
         const page = await browser.newPage();
         await page.goto(`${BASE_URL}${surface.path}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
         await page.waitForSelector(surface.selector, { timeout: 60_000 });
+        await page.waitForTimeout(750); // hydration — the toggle is a React handler
 
         const field = page.locator(surface.selector);
         const toggle = page.getByRole("button", { name: "Show password" });
