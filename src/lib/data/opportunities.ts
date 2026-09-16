@@ -1,6 +1,8 @@
 import "server-only";
 
 import type { ReadScope } from "@/lib/auth/access";
+import { TERMINAL_SUBMISSION_STATUSES, isTerminalSubmission } from "@/lib/enums";
+import { isSubmitted } from "@/lib/rfp-lifecycle";
 import { contains, db, isSearchable } from "@/lib/db";
 import { tagsForEntities } from "@/lib/actions/tags";
 import { withTenantContext } from "@/lib/tenant-db";
@@ -43,6 +45,7 @@ export function assessOpportunity(input: {
   competitionLevel: string | null;
   estimatedValueCents: number | null;
   deadlineAt: Date | null;
+  submittedAt: Date | null;
   submissionStatus: string;
   requirements: string | null;
   contactCount: number;
@@ -108,22 +111,41 @@ export function assessOpportunity(input: {
   const daysLeft = input.deadlineAt
     ? Math.ceil((input.deadlineAt.getTime() - Date.now()) / 86_400_000)
     : null;
-  if (daysLeft !== null) {
+  //
+  // Once the proposal is in — or the pursuit is over — the clock stops. Scoring
+  // a submitted bid against its own deadline is exactly how "the submission
+  // window has closed" went on being said about work that made it with a day to
+  // spare. The pressure factors below are about proposals still being written,
+  // so they apply to every state before submission, not only "not started".
+  const settled = isSubmitted(input) || isTerminalSubmission(input.submissionStatus);
+  if (settled) {
+    if (isSubmitted(input)) {
+      reasons.push({
+        label: "Submitted",
+        detail: "The proposal is in. The submission deadline no longer applies.",
+        impact: 0,
+      });
+    }
+  } else if (daysLeft !== null) {
     if (daysLeft < 0) {
       score -= 40;
       reasons.push({ label: "Deadline passed", detail: "The submission window has closed.", impact: -40 });
-    } else if (daysLeft <= 5 && input.submissionStatus === "not_started") {
+    } else if (daysLeft <= 5) {
       score -= 20;
       reasons.push({
         label: "Very little time",
-        detail: `${daysLeft} days left and nothing drafted.`,
+        detail: input.submissionStatus === "not_started"
+          ? `${daysLeft} days left and nothing drafted.`
+          : `${daysLeft} days left and the proposal is not in yet.`,
         impact: -20,
       });
-    } else if (daysLeft <= 14 && input.submissionStatus === "not_started") {
+    } else if (daysLeft <= 14) {
       score -= 8;
       reasons.push({
         label: "Tight timeline",
-        detail: `${daysLeft} days left and drafting has not started.`,
+        detail: input.submissionStatus === "not_started"
+          ? `${daysLeft} days left and drafting has not started.`
+          : `${daysLeft} days left and the proposal is not in yet.`,
         impact: -8,
       });
     }
@@ -193,9 +215,9 @@ export async function listOpportunities(
     }
     if (filters.type) where.type = filters.type;
     if (filters.submissionStatus) where.submissionStatus = filters.submissionStatus;
-    if (filters.view === "open") where.submissionStatus = { notIn: ["won", "lost", "no_bid"] };
+    if (filters.view === "open") where.submissionStatus = { notIn: [...TERMINAL_SUBMISSION_STATUSES] };
     if (filters.view === "due_soon") {
-      where.submissionStatus = { notIn: ["won", "lost", "no_bid"] };
+      where.submissionStatus = { notIn: [...TERMINAL_SUBMISSION_STATUSES] };
       where.deadlineAt = { gte: now, lte: new Date(now.getTime() + 30 * 86_400_000) };
     }
     if (filters.view === "submitted") where.submissionStatus = "submitted";
@@ -205,6 +227,7 @@ export async function listOpportunities(
       select: {
         id: true, name: true, type: true, source: true, solicitationNumber: true,
         deadlineAt: true, questionsDeadlineAt: true, proposalDeadlineAt: true,
+        submittedAt: true, decisionExpectedAt: true, decidedAt: true,
         estimatedValueCents: true, fitScore: true, strategicValue: true, competitionLevel: true,
         submissionStatus: true, requirements: true, workspaceId: true,
         company: { select: { id: true, name: true } },
@@ -227,6 +250,7 @@ export async function listOpportunities(
         competitionLevel: o.competitionLevel,
         estimatedValueCents: o.estimatedValueCents,
         deadlineAt: o.deadlineAt,
+        submittedAt: o.submittedAt,
         submissionStatus: o.submissionStatus,
         requirements: o.requirements,
         contactCount: o._count.contacts,
@@ -338,6 +362,7 @@ export async function getOpportunity(read: ReadScope, id: string) {
         competitionLevel: opportunity.competitionLevel,
         estimatedValueCents: opportunity.estimatedValueCents,
         deadlineAt: opportunity.deadlineAt,
+        submittedAt: opportunity.submittedAt,
         submissionStatus: opportunity.submissionStatus,
         requirements: opportunity.requirements,
         contactCount: opportunity.contacts.length,

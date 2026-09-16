@@ -7,7 +7,7 @@
  * can explain itself. Tiny AI reads these scores as input rather than
  * inventing its own — see src/lib/ai/context.ts.
  */
-import { daysFromNowDateOnly, daysSince } from "@/lib/dates";
+import { daysFromNowDateOnly, daysSince, formatDayOnly } from "@/lib/dates";
 
 export type ScoreFactor = {
   label: string;
@@ -392,6 +392,16 @@ export type ProjectHealthInput = {
   budgetCents?: number | null;
   revenueCents?: number | null;
   hasNextAction: boolean;
+  /**
+   * Set when the target date was met by a proposal going in — see
+   * src/lib/rfp-lifecycle.ts. A deadline that was met is history, not an
+   * outstanding obligation, so the two deadline factors below stand down.
+   * Absent for every project that is not an RFP, which is most of them.
+   */
+  targetMetBySubmission?: {
+    submittedAt?: Date | string | null;
+    decisionExpectedAt?: Date | string | null;
+  } | null;
 };
 
 export type ProjectHealth = "on_track" | "at_risk" | "off_track" | "on_hold";
@@ -444,7 +454,26 @@ export function scoreProjectHealth(input: ProjectHealthInput): Score<ProjectHeal
 
   const deadlineIn = daysFromNowDateOnly(input.targetDate);
   if (deadlineIn !== null) {
-    if (deadlineIn < 0) {
+    if (input.targetMetBySubmission) {
+      // The obligation this date described has been discharged. Reported, so
+      // the health panel explains itself, but weighted at nothing: a proposal
+      // that went in on time is not a risk, and the wait for a decision is not
+      // this project slipping. Genuine slippage — overdue tasks, missed
+      // milestones, a project nobody has touched — is scored exactly as before.
+      const submitted = input.targetMetBySubmission.submittedAt;
+      const expected = input.targetMetBySubmission.decisionExpectedAt;
+      factors.push({
+        label: "Proposal submitted",
+        detail: submitted
+          ? expected
+            ? `Submitted ${formatDayOnly(submitted)}. Decision expected ${formatDayOnly(expected)}.`
+            : `Submitted ${formatDayOnly(submitted)}. Awaiting decision.`
+          : expected
+            ? `Submitted. Decision expected ${formatDayOnly(expected)}.`
+            : "Submitted. Awaiting decision.",
+        impact: 0,
+      });
+    } else if (deadlineIn < 0) {
       score -= 30;
       factors.push({ label: "Past deadline", detail: `Target date was ${Math.abs(deadlineIn)} days ago.`, impact: -30 });
     } else if (deadlineIn <= 14) {

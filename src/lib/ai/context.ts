@@ -1,4 +1,5 @@
 import "server-only";
+import { TERMINAL_SUBMISSION_STATUSES } from "@/lib/enums";
 
 import { db } from "@/lib/db";
 import { daysSince, formatDay, formatDayOnly, timeAgo } from "@/lib/dates";
@@ -124,7 +125,7 @@ export async function buildWorkspaceSnapshot(
           take: limit,
         }),
         db.opportunity.findMany({
-          where: { ...where, archivedAt: null, submissionStatus: { notIn: ["won", "lost", "no_bid"] } },
+          where: { ...where, archivedAt: null, submissionStatus: { notIn: [...TERMINAL_SUBMISSION_STATUSES] } },
           select: {
             id: true, name: true, deadlineAt: true, estimatedValueCents: true, fitScore: true,
             submissionStatus: true, type: true, workspaceId: true, company: { select: { name: true } },

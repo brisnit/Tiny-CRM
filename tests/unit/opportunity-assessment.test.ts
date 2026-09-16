@@ -23,6 +23,7 @@ const base = {
   competitionLevel: null as string | null,
   estimatedValueCents: null as number | null,
   deadlineAt: null as Date | null,
+  submittedAt: null as Date | null,
   submissionStatus: "not_started",
   requirements: null as string | null,
   contactCount: 0,

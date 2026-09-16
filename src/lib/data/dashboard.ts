@@ -1,6 +1,8 @@
 import "server-only";
+import { TERMINAL_SUBMISSION_STATUSES } from "@/lib/enums";
 
 import type { ReadScope } from "@/lib/auth/access";
+import { meetsProjectTarget } from "@/lib/rfp-lifecycle";
 import { withTenantContext } from "@/lib/tenant-db";
 import { db } from "@/lib/db";
 import { scoreDeal, scoreProjectHealth } from "@/lib/scoring";
@@ -71,6 +73,7 @@ export async function getDashboard(read: ReadScope, projectFocus: string | null)
           status: { select: { name: true, color: true, isTerminal: true } },
           milestones: { select: { completedAt: true, dueDate: true } },
           tasks: { where: { status: { in: ["open", "in_progress"] } }, select: { dueAt: true } },
+          opportunities: { where: { archivedAt: null }, select: { id: true, submissionStatus: true, submittedAt: true, proposalDeadlineAt: true, decisionExpectedAt: true, decidedAt: true } },
         },
         orderBy: { targetDate: "asc" },
         take: 40,
@@ -95,7 +98,7 @@ export async function getDashboard(read: ReadScope, projectFocus: string | null)
       db.opportunity.findMany({
         where: {
           ...where, archivedAt: null,
-          submissionStatus: { notIn: ["won", "lost", "no_bid"] },
+          submissionStatus: { notIn: [...TERMINAL_SUBMISSION_STATUSES] },
           deadlineAt: { gte: now, lte: in30 },
         },
         select: {
@@ -169,6 +172,7 @@ export async function getDashboard(read: ReadScope, projectFocus: string | null)
     // the data as it stands right now.
     const projects = projectsRaw.map((p) => {
       const overdueTasks = p.tasks.filter((t) => t.dueAt && t.dueAt < now).length;
+      const targetMet = meetsProjectTarget(p.targetDate, p.opportunities);
       const health = scoreProjectHealth({
         targetDate: p.targetDate,
         completedAt: p.completedAt,
@@ -182,8 +186,9 @@ export async function getDashboard(read: ReadScope, projectFocus: string | null)
         budgetCents: p.budgetCents,
         revenueCents: p.revenueCents,
         hasNextAction: Boolean(p.nextAction),
+        targetMetBySubmission: targetMet,
       });
-      return { ...p, computedHealth: health, overdueTasks };
+      return { ...p, computedHealth: health, overdueTasks, targetMet };
     });
 
     const scoredDeals = dealsForScoring.map((d) => {

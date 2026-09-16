@@ -1,4 +1,5 @@
 import "server-only";
+import { POST_SUBMISSION_STATUSES, TERMINAL_SUBMISSION_STATUSES } from "@/lib/enums";
 
 import { db } from "@/lib/db";
 import { daysSince, daysSinceDateOnly } from "@/lib/dates";
@@ -139,7 +140,7 @@ export async function findRecommendations(scope: ContextScope, limit = 25): Prom
       db.opportunity.findMany({
         where: {
           ...where, archivedAt: null,
-          submissionStatus: { notIn: ["won", "lost", "no_bid", "submitted"] },
+          submissionStatus: { notIn: [...TERMINAL_SUBMISSION_STATUSES, ...POST_SUBMISSION_STATUSES] },
           deadlineAt: { gte: now, lte: new Date(now.getTime() + 10 * 86_400_000) },
         },
         select: { id: true, name: true, deadlineAt: true, submissionStatus: true },

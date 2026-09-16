@@ -586,6 +586,20 @@ model Opportunity {
   proposalDeadlineAt  DateTime?
   deadlineAt          DateTime?
 
+  /// When the proposal was submitted. The submission deadline above is never
+  /// rewritten — it stays the historical record, and this is what changes how
+  /// the deadline is *interpreted*: a deadline that was met is not an
+  /// outstanding obligation. Null with submissionStatus "submitted" means an
+  /// imported row whose date was never captured: genuinely submitted, but
+  /// outside the early/on-time/late arithmetic, which needs a date.
+  submittedAt         DateTime?
+  /// When we expect to hear. Drives "Decision expected Oct 8" and nothing else:
+  /// Tiny never infers a state change from it passing.
+  decisionExpectedAt  DateTime?
+  /// When the pursuit ended — awarded, not awarded, or withdrawn. With
+  /// submittedAt it gives the time from submission to decision.
+  decidedAt           DateTime?
+
   estimatedValueCents Int?
   /// 0-100 how well this fits what we do.
   fitScore            Int?

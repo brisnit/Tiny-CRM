@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { ReadScope } from "@/lib/auth/access";
+import { meetsProjectTarget } from "@/lib/rfp-lifecycle";
 import { contains, db, isSearchable } from "@/lib/db";
 import { scoreProjectHealth } from "@/lib/scoring";
 import { tagsForEntities } from "@/lib/actions/tags";
@@ -48,6 +49,7 @@ export async function listProjects(
         select: {
           id: true, name: true, priority: true, type: true, targetDate: true, startDate: true,
           budgetCents: true, revenueCents: true, nextAction: true, nextActionDueAt: true,
+          opportunities: { where: { archivedAt: null }, select: { id: true, submissionStatus: true, submittedAt: true, proposalDeadlineAt: true, decisionExpectedAt: true, decidedAt: true } },
           lastActivityAt: true, completedAt: true, workspaceId: true,
           company: { select: { id: true, name: true } },
           status: { select: { id: true, name: true, color: true, isTerminal: true } },
@@ -96,6 +98,18 @@ type HealthInput = {
   status: { isTerminal: boolean } | null;
   milestones: { completedAt: Date | null; dueDate: Date | null }[];
   tasks: { dueAt: Date | null }[];
+  /**
+   * Linked RFPs, so health can tell a target date that was *met* from one that
+   * was missed. Most projects have none, and nothing changes for those.
+   */
+  opportunities: {
+    id: string;
+    submissionStatus: string;
+    submittedAt: Date | null;
+    proposalDeadlineAt: Date | null;
+    decisionExpectedAt: Date | null;
+    decidedAt: Date | null;
+  }[];
 };
 
 function withHealth<T extends HealthInput>(project: T, now: Date) {
@@ -105,10 +119,16 @@ function withHealth<T extends HealthInput>(project: T, now: Date) {
   ).length;
   const completedMilestones = project.milestones.filter((m) => m.completedAt).length;
 
+  // A target date met by a submitted proposal is history, not an obligation.
+  // The same value is returned alongside the score, so what the screens say and
+  // what the score counted cannot drift apart.
+  const targetMet = meetsProjectTarget(project.targetDate, project.opportunities);
+
   return {
     ...project,
     overdueTasks,
     completedMilestones,
+    targetMet,
     health: scoreProjectHealth({
       targetDate: project.targetDate,
       completedAt: project.completedAt,
@@ -122,6 +142,7 @@ function withHealth<T extends HealthInput>(project: T, now: Date) {
       budgetCents: project.budgetCents,
       revenueCents: project.revenueCents,
       hasNextAction: Boolean(project.nextAction),
+      targetMetBySubmission: targetMet,
     }),
   };
 }
@@ -157,7 +178,10 @@ export async function getProject(read: ReadScope, id: string) {
           orderBy: { valueCents: "desc" },
         },
         opportunities: {
-          select: { id: true, name: true, deadlineAt: true, submissionStatus: true, estimatedValueCents: true },
+          select: {
+            id: true, name: true, deadlineAt: true, submissionStatus: true, estimatedValueCents: true,
+            submittedAt: true, proposalDeadlineAt: true, decisionExpectedAt: true, decidedAt: true,
+          },
         },
         tasks: {
           select: {

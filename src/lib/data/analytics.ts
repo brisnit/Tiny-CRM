@@ -1,4 +1,5 @@
 import "server-only";
+import { TERMINAL_SUBMISSION_STATUSES } from "@/lib/enums";
 
 import type { ReadScope } from "@/lib/auth/access";
 import { withTenantContext } from "@/lib/tenant-db";
@@ -85,7 +86,7 @@ export async function getAnalytics(read: ReadScope, days: AnalyticsRange = 90) {
         }),
       ]),
       db.opportunity.aggregate({
-        where: { ...where, archivedAt: null, submissionStatus: { notIn: ["won", "lost", "no_bid"] } },
+        where: { ...where, archivedAt: null, submissionStatus: { notIn: [...TERMINAL_SUBMISSION_STATUSES] } },
         _sum: { estimatedValueCents: true },
         _count: true,
       }),
