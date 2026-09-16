@@ -344,3 +344,315 @@ export async function deleteOpportunity(
     ),
   );
 }
+
+// ---------------------------------------------------------------------------
+// The submission lifecycle
+// ---------------------------------------------------------------------------
+
+/**
+ * The pipeline stage each lifecycle state belongs in, by name.
+ *
+ * A workspace owns its own pipeline, so this is a best-effort match rather than
+ * a contract: if the stage exists, the record moves with the lifecycle; if it
+ * does not, the stage is left exactly where it was. Nothing here ever creates a
+ * stage — inventing one would rewrite a workspace's process because somebody
+ * pressed a button on one record.
+ *
+ * There is deliberately no entry for "under_review" or "shortlisted": those are
+ * facts about the buyer's process, not positions in our pipeline.
+ */
+const STAGE_FOR_STATUS: Record<string, string> = {
+  submitted: "Submitted",
+  won: "Awarded",
+  lost: "Not Awarded",
+  withdrawn: "Withdrawn",
+};
+
+/** The stage this state belongs in, within this opportunity's own pipeline, or null. */
+async function stageForStatus(
+  tx: Parameters<Parameters<typeof transaction>[0]>[0],
+  pipelineId: string | null,
+  status: string,
+): Promise<{ id: string; name: string } | null> {
+  const wanted = STAGE_FOR_STATUS[status];
+  if (!wanted || !pipelineId) return null;
+  const stages = await tx.pipelineStage.findMany({
+    where: { pipelineId },
+    select: { id: true, name: true },
+  });
+  // Compared here rather than in the query: Prisma's case-insensitive filter is
+  // PostgreSQL-only, and this runs on SQLite too.
+  return stages.find((s) => s.name.trim().toLowerCase() === wanted.toLowerCase()) ?? null;
+}
+
+const markSubmittedSchema = z.object({
+  /** Defaults to today; editable, because a submission may be recorded later. */
+  submittedAt: zOptionalDate,
+  decisionExpectedAt: zOptionalDate,
+  version: zVersion,
+});
+
+/**
+ * Records that the proposal went in.
+ *
+ * This is the moment the submission deadline stops being an obligation: from
+ * here the card reads "Submitted", and a project whose target date is this
+ * RFP's deadline stops reporting overdue (src/lib/rfp-lifecycle.ts). The
+ * deadline itself is never touched — it stays the historical record.
+ */
+export async function markOpportunitySubmitted(
+  id: string,
+  input: { submittedAt?: string | Date | null; decisionExpectedAt?: string | Date | null; version?: number },
+): Promise<ActionResult<{ id: string; name: string; stageMovedTo: string | null }>> {
+  return guard(() =>
+    recordAction("opportunity", id, { permission: "record:edit", rateLimit: "mutation" },
+      async ({ actor, workspaceId, recordId }) => {
+        const data = markSubmittedSchema.parse(input);
+
+        const existing = await db.opportunity.findFirstOrThrow({
+          where: { id: recordId, workspaceId },
+          select: {
+            name: true, stageId: true, pipelineId: true, projectId: true,
+            submissionStatus: true, submittedAt: true, proposalDeadlineAt: true,
+          },
+        });
+
+        const submittedAt = data.submittedAt ?? new Date();
+
+        const moved = await transaction(async (tx) => {
+          const stage = await stageForStatus(tx, existing.pipelineId, "submitted");
+          const moveTo = stage && stage.id !== existing.stageId ? stage : null;
+
+          const result = await tx.opportunity.updateMany({
+            where: {
+              id: recordId, workspaceId,
+              ...(data.version !== undefined ? { version: data.version } : {}),
+            },
+            data: {
+              submissionStatus: "submitted",
+              submittedAt,
+              ...(data.decisionExpectedAt !== undefined
+                ? { decisionExpectedAt: data.decisionExpectedAt ?? null }
+                : {}),
+              ...(moveTo ? { stageId: moveTo.id } : {}),
+              version: { increment: 1 },
+            },
+          });
+          assertVersion(result.count, data.version, "opportunity");
+
+          await logActivity(
+            {
+              workspaceId, actorId: actor.identity.id, type: "field_change",
+              title: `Submitted the proposal`, opportunityId: recordId,
+            },
+            tx,
+          );
+          if (moveTo) {
+            await logActivity(
+              {
+                workspaceId, actorId: actor.identity.id, type: "stage_change",
+                title: `Moved to ${moveTo.name}`, opportunityId: recordId,
+              },
+              tx,
+            );
+          }
+          await emitEvent(
+            {
+              workspaceId, name: "opportunity.submitted", entityType: "opportunity",
+              entityId: recordId, actorId: actor.identity.id,
+              payload: { submittedAt: submittedAt.toISOString() },
+            },
+            tx,
+          );
+          return moveTo;
+        });
+
+        await audit(actor, {
+          workspaceId, action: "record.updated", entityType: "opportunity", entityId: recordId,
+          summary: `Marked ${existing.name} submitted`,
+          metadata: {
+            submissionStatus: { from: existing.submissionStatus, to: "submitted" },
+            submittedAt: { from: existing.submittedAt, to: submittedAt },
+            ...(moved ? { stage: { to: moved.name } } : {}),
+          },
+        });
+
+        revalidateRecord([
+          "/opportunities",
+          `/opportunities/${recordId}`,
+          ...(existing.projectId ? ["/projects", `/projects/${existing.projectId}`] : []),
+          "/home",
+        ]);
+        return { id: recordId, name: existing.name, stageMovedTo: moved?.name ?? null };
+      },
+    ),
+  );
+}
+
+const lifecycleStateSchema = z.object({
+  status: z.enum(["under_review", "shortlisted"]),
+  version: zVersion,
+});
+
+/**
+ * Moves a submitted proposal along the buyer's process.
+ *
+ * Manual on purpose. Tiny cannot see a buyer's shortlist, and time passing is
+ * not evidence of anything — inferring "under review" from a date would be
+ * inventing a fact, which is the failure this whole change exists to correct.
+ */
+export async function setOpportunityLifecycleState(
+  id: string,
+  input: { status: "under_review" | "shortlisted"; version?: number },
+): Promise<ActionResult<{ id: string; name: string }>> {
+  return guard(() =>
+    recordAction("opportunity", id, { permission: "record:edit", rateLimit: "mutation" },
+      async ({ actor, workspaceId, recordId }) => {
+        const data = lifecycleStateSchema.parse(input);
+
+        const existing = await db.opportunity.findFirstOrThrow({
+          where: { id: recordId, workspaceId },
+          select: { name: true, submissionStatus: true, projectId: true },
+        });
+
+        await transaction(async (tx) => {
+          const result = await tx.opportunity.updateMany({
+            where: {
+              id: recordId, workspaceId,
+              ...(data.version !== undefined ? { version: data.version } : {}),
+            },
+            data: { submissionStatus: data.status, version: { increment: 1 } },
+          });
+          assertVersion(result.count, data.version, "opportunity");
+          await logActivity(
+            {
+              workspaceId, actorId: actor.identity.id, type: "field_change",
+              title: data.status === "under_review" ? "Under review" : "Shortlisted",
+              opportunityId: recordId,
+            },
+            tx,
+          );
+        });
+
+        await audit(actor, {
+          workspaceId, action: "record.updated", entityType: "opportunity", entityId: recordId,
+          summary: `${existing.name} is ${data.status === "under_review" ? "under review" : "shortlisted"}`,
+          metadata: { submissionStatus: { from: existing.submissionStatus, to: data.status } },
+        });
+
+        revalidateRecord([
+          "/opportunities",
+          `/opportunities/${recordId}`,
+          ...(existing.projectId ? [`/projects/${existing.projectId}`] : []),
+        ]);
+        return { id: recordId, name: existing.name };
+      },
+    ),
+  );
+}
+
+const outcomeSchema = z.object({
+  /** Stored values are unchanged: won and lost are shown as Awarded and Not awarded. */
+  outcome: z.enum(["won", "lost", "withdrawn"]),
+  /** Defaults to today; editable, because an outcome may be recorded later. */
+  decidedAt: zOptionalDate,
+  version: zVersion,
+});
+
+const OUTCOME_LABEL: Record<string, string> = {
+  won: "Awarded",
+  lost: "Not awarded",
+  withdrawn: "Withdrawn",
+};
+
+/**
+ * Records how the pursuit ended.
+ *
+ * Withdrawal is an ending in its own right and does not imply the proposal was
+ * ever sent — a pursuit can be abandoned while it is still being written.
+ */
+export async function recordOpportunityOutcome(
+  id: string,
+  input: { outcome: "won" | "lost" | "withdrawn"; decidedAt?: string | Date | null; version?: number },
+): Promise<ActionResult<{ id: string; name: string; stageMovedTo: string | null }>> {
+  return guard(() =>
+    recordAction("opportunity", id, { permission: "record:edit", rateLimit: "mutation" },
+      async ({ actor, workspaceId, recordId }) => {
+        const data = outcomeSchema.parse(input);
+
+        const existing = await db.opportunity.findFirstOrThrow({
+          where: { id: recordId, workspaceId },
+          select: {
+            name: true, stageId: true, pipelineId: true, projectId: true,
+            submissionStatus: true, decidedAt: true,
+          },
+        });
+
+        const decidedAt = data.decidedAt ?? new Date();
+
+        const moved = await transaction(async (tx) => {
+          const stage = await stageForStatus(tx, existing.pipelineId, data.outcome);
+          const moveTo = stage && stage.id !== existing.stageId ? stage : null;
+
+          const result = await tx.opportunity.updateMany({
+            where: {
+              id: recordId, workspaceId,
+              ...(data.version !== undefined ? { version: data.version } : {}),
+            },
+            data: {
+              submissionStatus: data.outcome,
+              decidedAt,
+              ...(moveTo ? { stageId: moveTo.id } : {}),
+              version: { increment: 1 },
+            },
+          });
+          assertVersion(result.count, data.version, "opportunity");
+
+          await logActivity(
+            {
+              workspaceId, actorId: actor.identity.id, type: "field_change",
+              title: OUTCOME_LABEL[data.outcome] ?? "Outcome recorded", opportunityId: recordId,
+            },
+            tx,
+          );
+          if (moveTo) {
+            await logActivity(
+              {
+                workspaceId, actorId: actor.identity.id, type: "stage_change",
+                title: `Moved to ${moveTo.name}`, opportunityId: recordId,
+              },
+              tx,
+            );
+          }
+          await emitEvent(
+            {
+              workspaceId, name: "opportunity.decided", entityType: "opportunity",
+              entityId: recordId, actorId: actor.identity.id,
+              payload: { outcome: data.outcome, decidedAt: decidedAt.toISOString() },
+            },
+            tx,
+          );
+          return moveTo;
+        });
+
+        await audit(actor, {
+          workspaceId, action: "record.updated", entityType: "opportunity", entityId: recordId,
+          summary: `${existing.name}: ${OUTCOME_LABEL[data.outcome] ?? data.outcome}`,
+          metadata: {
+            submissionStatus: { from: existing.submissionStatus, to: data.outcome },
+            decidedAt: { from: existing.decidedAt, to: decidedAt },
+            ...(moved ? { stage: { to: moved.name } } : {}),
+          },
+        });
+
+        revalidateRecord([
+          "/opportunities",
+          `/opportunities/${recordId}`,
+          ...(existing.projectId ? ["/projects", `/projects/${existing.projectId}`] : []),
+          "/home",
+        ]);
+        return { id: recordId, name: existing.name, stageMovedTo: moved?.name ?? null };
+      },
+    ),
+  );
+}
