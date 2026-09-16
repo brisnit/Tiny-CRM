@@ -32,6 +32,8 @@ export const DOMAIN_EVENTS = [
   "task.completed",
   "task.overdue",
   "opportunity.created",
+  "opportunity.submitted",
+  "opportunity.decided",
   "opportunity.deadline.near",
   "note.created",
   "member.added",

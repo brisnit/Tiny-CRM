@@ -14,6 +14,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ActivityFeed } from "@/components/app/activity-feed";
 import { TimelineComposer } from "@/components/app/timeline-composer";
 import { AiSummaryCard } from "@/components/app/ai-summary-card";
+import { OpportunityLifecycle } from "@/components/app/opportunity-lifecycle";
 import { AskAiButton } from "@/components/app/ask-ai-button";
 import { RelatedList } from "@/components/app/related-list";
 import { RecordNotes } from "@/components/app/record-notes";
@@ -110,6 +111,15 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
         }
         actions={
           <>
+            {can(role, "record:edit") ? (
+              <OpportunityLifecycle
+                id={opportunity.id}
+                submissionStatus={opportunity.submissionStatus}
+                version={opportunity.version}
+                submittedAt={opportunity.submittedAt}
+                decisionExpectedAt={opportunity.decisionExpectedAt}
+              />
+            ) : null}
             <AskAiButton focus={{ type: "opportunity", id: opportunity.id, label: opportunity.name }} />
             <RecordHeaderActions
               kind="opportunity"
