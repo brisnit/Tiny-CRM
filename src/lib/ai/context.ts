@@ -5,6 +5,7 @@ import { daysSince, formatDay, formatDayOnly, timeAgo } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { scoreDeal, scoreProjectHealth } from "@/lib/scoring";
 import { truncate } from "@/lib/utils";
+import type { ReadScope } from "@/lib/auth/access";
 import { withTenantContext } from "@/lib/tenant-db";
 
 /**
@@ -24,7 +25,15 @@ import { withTenantContext } from "@/lib/tenant-db";
  *      calculated rather than inventing its own arithmetic.
  */
 
-export type ContextScope = { workspaceIds: string[]; workspaceNames: Map<string, string> };
+/**
+ * Who is retrieving, and from which workspaces.
+ *
+ * Extends ReadScope rather than repeating it: retrieval runs the same queries a
+ * page does, so it needs the same context — including the identity, without
+ * which the person-scoped policies match nothing. Tiny AI can therefore never
+ * be given a wider view of the database than the person who asked.
+ */
+export type ContextScope = ReadScope & { workspaceNames: Map<string, string> };
 
 const MAX_CHARS = 14_000;
 
@@ -53,7 +62,7 @@ export async function buildWorkspaceSnapshot(
   // actions, so it establishes its own context rather than relying on an ambient
   // one. Under RLS an unscoped read returns nothing, which for AI means a
   // confident answer built from an empty CRM.
-  return withTenantContext({ workspaceIds: scope.workspaceIds }, async () => {
+  return withTenantContext(scope, async () => {
     const where = { workspaceId: { in: scope.workspaceIds } };
     const limit = options.limit ?? 12;
     const now = new Date();
@@ -262,7 +271,7 @@ export async function buildRecordContext(
   // actions, so it establishes its own context rather than relying on an ambient
   // one. Under RLS an unscoped read returns nothing, which for AI means a
   // confident answer built from an empty CRM.
-  return withTenantContext({ workspaceIds: scope.workspaceIds }, async () => {
+  return withTenantContext(scope, async () => {
     const inScope = { workspaceId: { in: scope.workspaceIds } };
     const citations: CrmSnapshot["citations"] = [];
 

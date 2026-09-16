@@ -52,7 +52,7 @@ describe("AI failures degrade instead of breaking the page", () => {
       const actor = await requireActor();
       await getRecordSummary(
         actor,
-        { workspaceIds: [t.workspaceId], workspaceNames: new Map([[t.workspaceId, "AiBoundary"]]) },
+        { workspaceIds: [t.workspaceId], userId: t.ownerId, workspaceNames: new Map([[t.workspaceId, "AiBoundary"]]) },
         "deal",
         t.dealId,
         { workspaceId: t.workspaceId, force: true },
@@ -86,7 +86,7 @@ describe("AI failures degrade instead of breaking the page", () => {
       const actor = await requireActor();
       return getRecordSummary(
         actor,
-        { workspaceIds: [t.workspaceId], workspaceNames: new Map([[t.workspaceId, "AiBoundary"]]) },
+        { workspaceIds: [t.workspaceId], userId: t.ownerId, workspaceNames: new Map([[t.workspaceId, "AiBoundary"]]) },
         "deal",
         t.dealId,
         { workspaceId: t.workspaceId, force: true },
@@ -109,7 +109,7 @@ describe("AI failures degrade instead of breaking the page", () => {
       const actor = await requireActor();
       return getDailyBrief(
         actor,
-        { workspaceIds: [t.workspaceId], workspaceNames: new Map([[t.workspaceId, "AiBoundary"]]) },
+        { workspaceIds: [t.workspaceId], userId: t.ownerId, workspaceNames: new Map([[t.workspaceId, "AiBoundary"]]) },
         { force: true },
       );
     });

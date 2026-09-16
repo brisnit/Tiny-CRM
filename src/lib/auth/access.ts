@@ -107,7 +107,27 @@ export function assertCanAssignRole(actor: WorkspaceActor, targetRole: string): 
 }
 
 /**
- * Resolves the workspace ids a read may touch.
+ * What a read is allowed to touch: which workspaces, and on whose behalf.
+ *
+ * Both halves are load-bearing at the database level. `workspaceIds` drives
+ * `app.workspace_ids`, which every workspace-scoped policy reads. `userId`
+ * drives `app.user_id`, which the person-scoped policies read — `SavedView` and
+ * `Notification` are gated on `"userId" = app_user_id()`, and with no identity
+ * in context that comparison is NULL, so a person reads none of their own rows.
+ * That failure is silent, and invisible on SQLite, which has no policies.
+ *
+ * So identity travels with the scope rather than beside it: a read cannot
+ * establish tenant context without saying who is reading.
+ * `tests/security/read-identity.test.ts` proves both halves against PostgreSQL,
+ * including that identity changes nothing a full-workspace member can see.
+ */
+export type ReadScope = {
+  workspaceIds: string[];
+  userId: string;
+};
+
+/**
+ * Resolves the workspace ids a read may touch, and the identity reading them.
  *
  * `scope` is either one workspace id or "all". An id the user is not a member of
  * silently falls back to their full set rather than erroring, because a stale
@@ -116,15 +136,16 @@ export function assertCanAssignRole(actor: WorkspaceActor, targetRole: string): 
  */
 export async function resolveReadScope(
   scope: string | null | undefined,
-): Promise<{ workspaceIds: string[]; workspaceId: string | null; isAll: boolean; memberships: WorkspaceMembership[] }> {
+): Promise<ReadScope & { workspaceId: string | null; isAll: boolean; memberships: WorkspaceMembership[] }> {
   const actor = await requireActor();
   const ids = actor.memberships.map((m) => m.id);
+  const userId = actor.identity.id;
 
   if (!scope || scope === "all" || !ids.includes(scope)) {
-    return { workspaceIds: ids, workspaceId: null, isAll: true, memberships: actor.memberships };
+    return { workspaceIds: ids, userId, workspaceId: null, isAll: true, memberships: actor.memberships };
   }
   enrichContext({ workspaceId: scope });
-  return { workspaceIds: [scope], workspaceId: scope, isAll: false, memberships: actor.memberships };
+  return { workspaceIds: [scope], userId, workspaceId: scope, isAll: false, memberships: actor.memberships };
 }
 
 // ---------------------------------------------------------------------------

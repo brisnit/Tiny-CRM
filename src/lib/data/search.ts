@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { ReadScope } from "@/lib/auth/access";
 import { contains, db, isSearchable } from "@/lib/db";
 import type { EntityType } from "@/lib/enums";
 import { withTenantContext } from "@/lib/tenant-db";
@@ -27,7 +28,7 @@ export type SearchHit = {
  * external index — the call sites only depend on the SearchHit shape.
  */
 export async function searchEverything(
-  workspaceIds: string[],
+  read: ReadScope,
   query: string,
   limitPerType = 5,
 ): Promise<SearchHit[]> {
@@ -35,7 +36,8 @@ export async function searchEverything(
   // the RLS model. The ids are the caller's already-authorised scope
   // (resolveReadScope), so this narrows the database to exactly what the
   // application had already decided the request may see.
-  return withTenantContext({ workspaceIds }, async () => {
+  const { workspaceIds } = read;
+  return withTenantContext(read, async () => {
     const q = query.trim();
     // A wildcard-only term matches every row on both engines, so it is treated as
     // no search rather than as the most expensive query in the product.

@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { ReadScope } from "@/lib/auth/access";
 import { contains, db, isSearchable } from "@/lib/db";
 import { scoreRelationship } from "@/lib/scoring";
 import { tagsForEntities } from "@/lib/actions/tags";
@@ -25,12 +26,13 @@ const PAGE_SIZE = 50;
  * than a query per contact. That keeps the page O(page size) instead of
  * O(contacts).
  */
-export async function listContacts(workspaceIds: string[], filters: ContactFilters) {
+export async function listContacts(read: ReadScope, filters: ContactFilters) {
+  const { workspaceIds } = read;
   // Read paths do not go through the action wrapper, so this is where they join
   // the RLS model. The ids are the caller's already-authorised scope
   // (resolveReadScope), so this narrows the database to exactly what the
   // application had already decided the request may see.
-  return withTenantContext({ workspaceIds }, async () => {
+  return withTenantContext(read, async () => {
     const now = new Date();
     const page = Math.max(1, filters.page ?? 1);
 
@@ -189,12 +191,13 @@ async function attachScores<T extends ContactRow>(rows: T[], now: Date) {
 }
 
 /** One contact with everything its page shows. */
-export async function getContact(workspaceIds: string[], id: string) {
+export async function getContact(read: ReadScope, id: string) {
+  const { workspaceIds } = read;
   // Read paths do not go through the action wrapper, so this is where they join
   // the RLS model. The ids are the caller's already-authorised scope
   // (resolveReadScope), so this narrows the database to exactly what the
   // application had already decided the request may see.
-  return withTenantContext({ workspaceIds }, async () => {
+  return withTenantContext(read, async () => {
     const contact = await db.contact.findFirst({
       where: { id, workspaceId: { in: workspaceIds } },
       include: {

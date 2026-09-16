@@ -40,6 +40,7 @@ describe("AI boundary", () => {
       const { buildWorkspaceSnapshot } = await import("../../src/lib/ai/context");
       const snapshot = await buildWorkspaceSnapshot({
         workspaceIds: [A.workspaceId],
+        userId: A.ownerId,
         workspaceNames: new Map([[A.workspaceId, "AiAlpha"]]),
       });
       assert.ok(!snapshot.text.includes("AiBravo"), "AI context leaked another workspace");
@@ -52,7 +53,7 @@ describe("AI boundary", () => {
     test("a record summary cannot pull context from outside that record's workspace", async () => {
       const { buildRecordContext } = await import("../../src/lib/ai/context");
       const context = await buildRecordContext(
-        { workspaceIds: [A.workspaceId], workspaceNames: new Map() },
+        { workspaceIds: [A.workspaceId], userId: A.ownerId, workspaceNames: new Map() },
         "deal",
         B.dealId,
       );
@@ -66,6 +67,7 @@ describe("AI boundary", () => {
       const { LIMITS } = await import("../../src/lib/validation/limits");
       const snapshot = await buildWorkspaceSnapshot({
         workspaceIds: [A.workspaceId],
+        userId: A.ownerId,
         workspaceNames: new Map([[A.workspaceId, "AiAlpha"]]),
       });
       assert.ok(
@@ -102,6 +104,7 @@ describe("AI boundary", () => {
       const { buildWorkspaceSnapshot } = await import("../../src/lib/ai/context");
       const snapshot = await buildWorkspaceSnapshot({
         workspaceIds: [A.workspaceId],
+        userId: A.ownerId,
         workspaceNames: new Map([[A.workspaceId, "AiAlpha"]]),
       });
       const wrapped = withContext("What is due today?", snapshot.text);

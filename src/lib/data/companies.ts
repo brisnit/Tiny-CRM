@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { ReadScope } from "@/lib/auth/access";
 import { contains, db, isSearchable } from "@/lib/db";
 import { tagsForEntities } from "@/lib/actions/tags";
 import { withTenantContext } from "@/lib/tenant-db";
@@ -7,14 +8,15 @@ import { withTenantContext } from "@/lib/tenant-db";
 const PAGE_SIZE = 50;
 
 export async function listCompanies(
-  workspaceIds: string[],
+  read: ReadScope,
   filters: { q?: string; type?: string; relationshipStatus?: string; tag?: string; view?: string; page?: number },
 ) {
   // Read paths do not go through the action wrapper, so this is where they join
   // the RLS model. The ids are the caller's already-authorised scope
   // (resolveReadScope), so this narrows the database to exactly what the
   // application had already decided the request may see.
-  return withTenantContext({ workspaceIds }, async () => {
+  const { workspaceIds } = read;
+  return withTenantContext(read, async () => {
     const page = Math.max(1, filters.page ?? 1);
     const where: Record<string, unknown> = { workspaceId: { in: workspaceIds }, archivedAt: null };
 
@@ -86,12 +88,13 @@ export async function listCompanies(
   });
 }
 
-export async function getCompany(workspaceIds: string[], id: string) {
+export async function getCompany(read: ReadScope, id: string) {
+  const { workspaceIds } = read;
   // Read paths do not go through the action wrapper, so this is where they join
   // the RLS model. The ids are the caller's already-authorised scope
   // (resolveReadScope), so this narrows the database to exactly what the
   // application had already decided the request may see.
-  return withTenantContext({ workspaceIds }, async () => {
+  return withTenantContext(read, async () => {
     const company = await db.company.findFirst({
       where: { id, workspaceId: { in: workspaceIds } },
       include: {

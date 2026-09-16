@@ -196,11 +196,12 @@ async function main() {
       `${tier.deals.toLocaleString()} deals, ${tier.activities.toLocaleString()} activities…`,
   );
   const seedStart = performance.now();
-  const { workspaceId } = await seed();
+  const { workspaceId, userId } = await seed();
   console.log(`Seeded in ${((performance.now() - seedStart) / 1000).toFixed(1)}s\n`);
 
   const ids = [workspaceId];
-  const scope = { workspaceIds: ids, workspaceNames: new Map([[workspaceId, "Perf"]]) };
+  const read = { workspaceIds: ids, userId };
+  const scope = { ...read, workspaceNames: new Map([[workspaceId, "Perf"]]) };
 
   const results: { name: string; ms: number; budget: number; ok: boolean }[] = [];
 
@@ -214,16 +215,16 @@ async function main() {
     results.push({ name, ms, budget, ok: ms <= budget });
   };
 
-  await measure("Dashboard (home)", () => getDashboard(ids, null));
-  await measure("Contacts list, page 1", () => listContacts(ids, { page: 1 }));
-  await measure("Contacts list, deep page", () => listContacts(ids, { page: 100 }));
-  await measure("Contacts search", () => listContacts(ids, { q: "Person12345" }));
-  await measure("Contacts: needs follow-up", () => listContacts(ids, { view: "follow_up" }));
-  await measure("Projects list", () => listProjects(ids, {}));
-  await measure("Pipeline board", () => getPipelineBoard(ids, {}));
-  await measure("Analytics (90 days)", () => getAnalytics(ids, 90));
-  await measure("Analytics (1 year)", () => getAnalytics(ids, 365));
-  await measure("Global search", () => searchEverything(ids, "Person999"));
+  await measure("Dashboard (home)", () => getDashboard(read, null));
+  await measure("Contacts list, page 1", () => listContacts(read, { page: 1 }));
+  await measure("Contacts list, deep page", () => listContacts(read, { page: 100 }));
+  await measure("Contacts search", () => listContacts(read, { q: "Person12345" }));
+  await measure("Contacts: needs follow-up", () => listContacts(read, { view: "follow_up" }));
+  await measure("Projects list", () => listProjects(read, {}));
+  await measure("Pipeline board", () => getPipelineBoard(read, {}));
+  await measure("Analytics (90 days)", () => getAnalytics(read, 90));
+  await measure("Analytics (1 year)", () => getAnalytics(read, 365));
+  await measure("Global search", () => searchEverything(read, "Person999"));
   await measure("AI context snapshot", () => buildWorkspaceSnapshot(scope));
   await measure("AI cleanup scan", () => findRecommendations(scope));
 

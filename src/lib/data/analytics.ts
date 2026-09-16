@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { ReadScope } from "@/lib/auth/access";
 import { withTenantContext } from "@/lib/tenant-db";
 import { db } from "@/lib/db";
 
@@ -14,12 +15,13 @@ import { db } from "@/lib/db";
 
 export type AnalyticsRange = 30 | 90 | 180 | 365;
 
-export async function getAnalytics(workspaceIds: string[], days: AnalyticsRange = 90) {
+export async function getAnalytics(read: ReadScope, days: AnalyticsRange = 90) {
+  const { workspaceIds } = read;
   // Read paths do not go through the action wrapper, so this is where they join
   // the RLS model. The ids are the caller's already-authorised scope
   // (resolveReadScope), so this narrows the database to exactly what the
   // application had already decided the request may see.
-  return withTenantContext({ workspaceIds }, async () => {
+  return withTenantContext(read, async () => {
     const now = new Date();
     const since = new Date(now.getTime() - days * 86_400_000);
     const where = { workspaceId: { in: workspaceIds } };

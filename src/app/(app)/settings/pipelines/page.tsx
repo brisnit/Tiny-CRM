@@ -12,7 +12,7 @@ export default async function PipelineSettings() {
   const actor = await requireActor();
   const workspaces = actor.memberships;
 
-  const pipelines = await scopedRead(workspaces.map((w) => w.id), async () => {
+  const pipelines = await scopedRead({ workspaceIds: workspaces.map((w) => w.id), userId: actor.identity.id }, async () => {
     return db.pipeline.findMany({
       where: { workspaceId: { in: workspaces.map((w) => w.id) } },
       select: {

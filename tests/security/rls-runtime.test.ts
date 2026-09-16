@@ -192,7 +192,7 @@ describe("fresh account onboarding", () => {
 
     const dashboardReads = await runAsTestIdentity(userId, async () => {
       const { getDashboard } = await import("../../src/lib/data/dashboard");
-      return getDashboard([ws.id], null);
+      return getDashboard({ workspaceIds: [ws.id], userId }, null);
     });
     assert.ok(dashboardReads, "the dashboard could not read the new workspace");
   });

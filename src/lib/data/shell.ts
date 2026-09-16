@@ -2,7 +2,7 @@ import "server-only";
 
 import { withTenantContext } from "@/lib/tenant-db";
 import { db } from "@/lib/db";
-import type { Actor } from "@/lib/auth/access";
+import type { Actor, ReadScope } from "@/lib/auth/access";
 import { describeProvider, isModelBacked } from "@/lib/ai/provider";
 import { colorForKey } from "@/lib/utils";
 import type { ShellData } from "@/components/app/shell";
@@ -15,14 +15,15 @@ import type { ShellData } from "@/components/app/shell";
 export async function getShellData(
   actor: Actor,
   scope: string,
-  workspaceIds: string[],
+  read: ReadScope,
   projectFocus: string | null,
 ): Promise<ShellData> {
+  const { workspaceIds } = read;
   // Read paths do not go through the action wrapper, so this is where they join
   // the RLS model. The ids are the caller's already-authorised scope
   // (resolveReadScope), so this narrows the database to exactly what the
   // application had already decided the request may see.
-  return withTenantContext({ workspaceIds }, async () => {
+  return withTenantContext(read, async () => {
     const workspaces = actor.memberships;
     const where = { workspaceId: { in: workspaceIds } };
     const now = new Date();
@@ -156,7 +157,7 @@ function hrefFor(entityType: string | null, entityId: string | null): string | n
  */
 export async function getEditContext(
   actor: Actor,
-  workspaceIds: string[],
+  read: ReadScope,
 ): Promise<{
   workspaces: { id: string; name: string }[];
   defaultWorkspaceId: string | null;
@@ -164,7 +165,8 @@ export async function getEditContext(
   statuses: { id: string; name: string; workspaceId: string }[];
   members: { id: string; name: string; workspaceId: string }[];
 }> {
-  return withTenantContext({ workspaceIds }, async () => {
+  const { workspaceIds } = read;
+  return withTenantContext(read, async () => {
     const where = { workspaceId: { in: workspaceIds } };
     const [pipelines, statuses, memberships] = await Promise.all([
       db.pipeline.findMany({

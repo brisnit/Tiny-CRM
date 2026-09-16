@@ -30,28 +30,28 @@ import { LEAD_SOURCE, RELATIONSHIP_STRENGTH, RELATIONSHIP_TYPE } from "@/lib/enu
 export async function generateMetadata({ params }: PageProps<"/contacts/[id]">) {
   const { id } = await params;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
-  const contact = await getContact(workspaceIds, id);
+  const read = await resolveReadScope(await readScope());
+  const contact = await getContact(read, id);
   return { title: contact?.fullName ?? "Contact" };
 }
 
 export default async function ContactPage({ params }: PageProps<"/contacts/[id]">) {
   const { id } = await params;
   const actor = await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
-  const contact = await getContact(workspaceIds, id);
+  const read = await resolveReadScope(await readScope());
+  const contact = await getContact(read, id);
   if (!contact) notFound();
 
   const workspaces = actor.memberships;
   const summary = await getRecordSummary(
     actor,
-    { workspaceIds, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
+    { ...read, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
     "contact",
     id,
     { workspaceId: contact.workspaceId },
   );
 
-  const editContext = await getEditContext(actor, [contact.workspaceId]);
+  const editContext = await getEditContext(actor, { workspaceIds: [contact.workspaceId], userId: actor.identity.id });
 
   const openDeals = contact.deals.filter((d) => d.deal.stage.kind === "open");
   const since = daysSince(contact.lastContactedAt);

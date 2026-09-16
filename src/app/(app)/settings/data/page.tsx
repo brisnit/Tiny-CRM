@@ -15,10 +15,11 @@ export const metadata = { title: "Import & export" };
 export default async function DataSettings() {
   const actor = await requireActor();
   const workspaces = actor.memberships;
-  const { workspaceIds, workspaceId } = await resolveReadScope(await readScope());
-  const where = { workspaceId: { in: workspaceIds } };
+  const read = await resolveReadScope(await readScope());
+  const { workspaceId } = read;
+  const where = { workspaceId: { in: read.workspaceIds } };
 
-  const [contacts, companies, deals, projects, opportunities, tasks] = await scopedRead(workspaceIds, async () => {
+  const [contacts, companies, deals, projects, opportunities, tasks] = await scopedRead(read, async () => {
     return Promise.all([
       db.contact.count({ where }),
       db.company.count({ where }),
@@ -29,7 +30,7 @@ export default async function DataSettings() {
     ]);
   });
 
-  const batches = await scopedRead(workspaceIds, () =>
+  const batches = await scopedRead(read, () =>
     db.importBatch.findMany({
       where,
       orderBy: { createdAt: "desc" },

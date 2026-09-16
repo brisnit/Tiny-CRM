@@ -33,12 +33,12 @@ export default async function AnalyticsPage({ searchParams }: PageProps<"/analyt
 async function Report({ searchParams }: { searchParams: PageProps<"/analytics">["searchParams"] }) {
   const params = await searchParams;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
+  const read = await resolveReadScope(await readScope());
 
   const rangeParam = Number(typeof params.range === "string" ? params.range : 90);
   const range = ([30, 90, 180, 365].includes(rangeParam) ? rangeParam : 90) as AnalyticsRange;
 
-  const data = await getAnalytics(workspaceIds, range);
+  const data = await getAnalytics(read, range);
   const rangeLabel =
     range === 30 ? "last 30 days" : range === 90 ? "last 90 days" : range === 180 ? "last 6 months" : "last year";
 

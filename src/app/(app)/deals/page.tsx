@@ -31,10 +31,10 @@ export default async function DealsPage({ searchParams }: PageProps<"/deals">) {
 async function Board({ searchParams }: { searchParams: PageProps<"/deals">["searchParams"] }) {
   const params = await searchParams;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
+  const read = await resolveReadScope(await readScope());
   const projectFocus = await readProjectFocus();
 
-  const board = await getPipelineBoard(workspaceIds, {
+  const board = await getPipelineBoard(read, {
     pipelineId: typeof params.pipeline === "string" ? params.pipeline : undefined,
     projectId: projectFocus ?? undefined,
     kind: "deal",

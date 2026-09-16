@@ -36,11 +36,12 @@ import type { ContextScope } from "@/lib/ai/context";
 /** Builds the retrieval scope from the session. Never from a request or a model. */
 async function scopeFor(scopeParam?: string | null): Promise<{ actor: Actor; scope: ContextScope }> {
   const actor = await requireActor();
-  const { workspaceIds, memberships } = await resolveReadScope(zScope.parse(scopeParam ?? null));
+  const read = await resolveReadScope(zScope.parse(scopeParam ?? null));
+  const { memberships } = read;
   return {
     actor,
     scope: {
-      workspaceIds,
+      ...read,
       workspaceNames: new Map(memberships.map((m) => [m.id, m.name])),
     },
   };
@@ -85,6 +86,7 @@ export async function refreshRecordSummary(
       async ({ actor, workspaceId, recordId }) => {
         const scope: ContextScope = {
           workspaceIds: [workspaceId],
+          userId: actor.identity.id,
           workspaceNames: new Map(
             actor.memberships.filter((m) => m.id === workspaceId).map((m) => [m.id, m.name]),
           ),

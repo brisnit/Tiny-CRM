@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { ReadScope } from "@/lib/auth/access";
 import { contains, db, isSearchable } from "@/lib/db";
 import { withTenantContext } from "@/lib/tenant-db";
 
@@ -48,14 +49,15 @@ export type TrashFilters = {
  * scale — tens to hundreds of rows — six indexed reads are not the bottleneck.
  */
 export async function listTrash(
-  workspaceIds: string[],
+  read: ReadScope,
   filters: TrashFilters = {},
 ): Promise<{ items: TrashItem[]; countsByType: Record<TrashableType, number> }> {
   // Read paths do not go through the action wrapper, so this is where they join
   // the RLS model. The ids are the caller's already-authorised scope
   // (resolveReadScope), so this narrows the database to exactly what the
   // application had already decided the request may see.
-  return withTenantContext({ workspaceIds }, async () => {
+  const { workspaceIds } = read;
+  return withTenantContext(read, async () => {
     if (workspaceIds.length === 0) {
       return { items: [], countsByType: emptyCounts() };
     }

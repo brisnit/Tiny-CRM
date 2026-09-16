@@ -101,7 +101,7 @@ export async function askTinyAiOnce(request: AgentRequest): Promise<string> {
 export async function ensureThread(userId: string, workspaceId: string | null, title?: string) {
   // Establishes its own tenant context: reachable from pages and from job
   // handlers, not only from the action wrapper.
-  return withTenantContext({ workspaceIds: workspaceId ? [workspaceId] : [] }, async () => {
+  return withTenantContext({ workspaceIds: workspaceId ? [workspaceId] : [], userId }, async () => {
     const existing = await db.aiThread.findFirst({
       where: { userId, workspaceId },
       orderBy: { updatedAt: "desc" },

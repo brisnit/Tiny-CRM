@@ -39,13 +39,13 @@ describe("record lifecycle", () => {
     assert.equal(created.ok, true);
     if (!created.ok) return;
 
-    const before = await listContacts([A.workspaceId], {});
+    const before = await listContacts({ workspaceIds: [A.workspaceId], userId: A.ownerId }, {});
     assert.ok(before.contacts.some((c) => c.id === created.data.id), "the new contact was not listed");
 
     const archived = await asMember(() => archiveContact(created.data.id));
     assert.equal(archived.ok, true, "a member could not archive");
 
-    const during = await listContacts([A.workspaceId], {});
+    const during = await listContacts({ workspaceIds: [A.workspaceId], userId: A.ownerId }, {});
     assert.ok(
       !during.contacts.some((c) => c.id === created.data.id),
       "an archived contact still appears in the default list",
@@ -58,7 +58,7 @@ describe("record lifecycle", () => {
     const restored = await asMember(() => restoreContact(created.data.id));
     assert.equal(restored.ok, true);
 
-    const after = await listContacts([A.workspaceId], {});
+    const after = await listContacts({ workspaceIds: [A.workspaceId], userId: A.ownerId }, {});
     assert.ok(after.contacts.some((c) => c.id === created.data.id), "restore did not bring it back");
   });
 

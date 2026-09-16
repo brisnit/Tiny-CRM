@@ -17,7 +17,7 @@ export default async function WorkspacesSettings() {
   const workspaces = actor.memberships;
   const plan = planFor(actor.identity.plan);
 
-  const details = await scopedRead(workspaces.map((w) => w.id), async () => {
+  const details = await scopedRead({ workspaceIds: workspaces.map((w) => w.id), userId: actor.identity.id }, async () => {
     return db.workspace.findMany({
       where: { id: { in: workspaces.map((w) => w.id) } },
       select: {

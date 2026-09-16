@@ -38,28 +38,28 @@ import {
 export async function generateMetadata({ params }: PageProps<"/opportunities/[id]">) {
   const { id } = await params;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
-  const opportunity = await getOpportunity(workspaceIds, id);
+  const read = await resolveReadScope(await readScope());
+  const opportunity = await getOpportunity(read, id);
   return { title: opportunity?.name ?? "Opportunity" };
 }
 
 export default async function OpportunityPage({ params }: PageProps<"/opportunities/[id]">) {
   const { id } = await params;
   const actor = await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
-  const opportunity = await getOpportunity(workspaceIds, id);
+  const read = await resolveReadScope(await readScope());
+  const opportunity = await getOpportunity(read, id);
   if (!opportunity) notFound();
 
   const workspaces = actor.memberships;
   const summary = await getRecordSummary(
     actor,
-    { workspaceIds, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
+    { ...read, workspaceNames: new Map(workspaces.map((w) => [w.id, w.name])) },
     "opportunity",
     id,
     { workspaceId: opportunity.workspaceId },
   );
 
-  const editContext = await getEditContext(actor, [opportunity.workspaceId]);
+  const editContext = await getEditContext(actor, { workspaceIds: [opportunity.workspaceId], userId: actor.identity.id });
 
   const deadline = describeDateOnlyDeadline(opportunity.deadlineAt);
   const questions = describeDateOnlyDeadline(opportunity.questionsDeadlineAt);

@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { ReadScope } from "@/lib/auth/access";
 import { withTenantContext } from "@/lib/tenant-db";
 import { db } from "@/lib/db";
 import { scoreDeal, scoreProjectHealth } from "@/lib/scoring";
@@ -11,12 +12,13 @@ import { scoreDeal, scoreProjectHealth } from "@/lib/scoring";
  * `take`-limited, and no query loads a whole table. The dashboard costs the same
  * whether a workspace holds 30 contacts or 30,000.
  */
-export async function getDashboard(workspaceIds: string[], projectFocus: string | null) {
+export async function getDashboard(read: ReadScope, projectFocus: string | null) {
+  const { workspaceIds } = read;
   // Read paths do not go through the action wrapper, so this is where they join
   // the RLS model. The ids are the caller's already-authorised scope
   // (resolveReadScope), so this narrows the database to exactly what the
   // application had already decided the request may see.
-  return withTenantContext({ workspaceIds }, async () => {
+  return withTenantContext(read, async () => {
     const where = { workspaceId: { in: workspaceIds } };
     const projectFilter = projectFocus ? { projectId: projectFocus } : {};
     const now = new Date();

@@ -15,8 +15,8 @@ export const metadata = { title: "Trash" };
  */
 export default async function TrashSettings() {
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
-  const { items } = await listTrash(workspaceIds);
+  const read = await resolveReadScope(await readScope());
+  const { items } = await listTrash(read);
 
   return (
     <Panel>

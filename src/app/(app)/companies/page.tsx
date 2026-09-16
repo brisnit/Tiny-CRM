@@ -43,11 +43,11 @@ async function CompaniesTable({
 }) {
   const params = await searchParams;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
+  const read = await resolveReadScope(await readScope());
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 
   const [{ companies, total, page, pageCount }, tags] = await Promise.all([
-    listCompanies(workspaceIds, {
+    listCompanies(read, {
       q: str("q"),
       type: str("type"),
       relationshipStatus: str("relationshipStatus"),
@@ -55,9 +55,9 @@ async function CompaniesTable({
       view: str("view"),
       page: Number(str("page") ?? 1),
     }),
-    scopedRead(workspaceIds, () =>
+    scopedRead(read, () =>
       db.tag.findMany({
-        where: { workspaceId: { in: workspaceIds } },
+        where: { workspaceId: { in: read.workspaceIds } },
         select: { name: true },
         orderBy: { name: "asc" },
         take: 40,

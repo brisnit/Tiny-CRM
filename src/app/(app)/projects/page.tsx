@@ -40,10 +40,10 @@ async function ProjectList({
 }) {
   const params = await searchParams;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
+  const read = await resolveReadScope(await readScope());
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 
-  const { projects, statuses, total, page, pageCount } = await listProjects(workspaceIds, {
+  const { projects, statuses, total, page, pageCount } = await listProjects(read, {
     q: str("q"),
     statusId: str("statusId"),
     type: str("type"),

@@ -55,7 +55,7 @@ export async function classifyText(
 ): Promise<ClassificationResult> {
   // Establishes its own tenant context: reachable from pages and from job
   // handlers, not only from the action wrapper.
-  return withTenantContext({ workspaceIds: workspaceIds }, async () => {
+  return withTenantContext({ workspaceIds, userId: actor.identity.id }, async () => {
     // Extraction sends the pasted text — often the most sensitive thing a user
     // will ever put into this product — so it honours the workspace's mode before
     // a model sees it. Falling back to the heuristic extractor keeps capture

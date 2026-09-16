@@ -17,13 +17,13 @@ export const metadata = { title: "Calendar" };
 
 export default async function CalendarPage() {
   const actor = await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
+  const read = await resolveReadScope(await readScope());
   const now = new Date();
 
-  const [upcoming, past, unanswered, integrations] = await scopedRead(workspaceIds, async () => {
+  const [upcoming, past, unanswered, integrations] = await scopedRead(read, async () => {
     return Promise.all([
       db.calendarEvent.findMany({
-        where: { workspaceId: { in: workspaceIds }, startAt: { gte: now } },
+        where: { workspaceId: { in: read.workspaceIds }, startAt: { gte: now } },
         select: {
           id: true, title: true, startAt: true, endAt: true, meetingUrl: true, location: true,
           contact: { select: { id: true, fullName: true } },
@@ -35,7 +35,7 @@ export default async function CalendarPage() {
         take: 40,
       }),
       db.calendarEvent.findMany({
-        where: { workspaceId: { in: workspaceIds }, startAt: { lt: now } },
+        where: { workspaceId: { in: read.workspaceIds }, startAt: { lt: now } },
         select: {
           id: true, title: true, startAt: true,
           contact: { select: { id: true, fullName: true } },
@@ -45,7 +45,7 @@ export default async function CalendarPage() {
         take: 10,
       }),
       db.emailMessage.findMany({
-        where: { workspaceId: { in: workspaceIds }, needsReply: true },
+        where: { workspaceId: { in: read.workspaceIds }, needsReply: true },
         select: {
           id: true, subject: true, snippet: true, sentAt: true, direction: true,
           contact: { select: { id: true, fullName: true } },
@@ -54,7 +54,7 @@ export default async function CalendarPage() {
         take: 10,
       }),
       db.integration.findMany({
-        where: { workspaceId: { in: workspaceIds }, userId: actor.identity.id },
+        where: { workspaceId: { in: read.workspaceIds }, userId: actor.identity.id },
         select: { provider: true, status: true, accountEmail: true, lastSyncAt: true },
         distinct: ["provider"],
       }),

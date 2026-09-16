@@ -42,10 +42,10 @@ async function OpportunityList({
 }) {
   const params = await searchParams;
   await requireActor();
-  const { workspaceIds } = await resolveReadScope(await readScope());
+  const read = await resolveReadScope(await readScope());
   const str = (key: string) => (typeof params[key] === "string" ? (params[key] as string) : undefined);
 
-  const opportunities = await listOpportunities(workspaceIds, {
+  const opportunities = await listOpportunities(read, {
     q: str("q"),
     type: str("type"),
     submissionStatus: str("submissionStatus"),
