@@ -192,15 +192,48 @@ export const OPPORTUNITY_TYPE = optionMap([
   { value: "other", label: "Other", tone: TONE.neutral },
 ] as const);
 
+/**
+ * The RFP lifecycle, in the order it happens.
+ *
+ * `won` and `lost` keep their stored values and are simply labelled Awarded and
+ * Not awarded: renaming the strings would mean migrating every row and every
+ * saved filter to say the same thing in different words.
+ *
+ * Two endings are deliberately distinct. `no_bid` is deciding not to pursue.
+ * `withdrawn` is leaving a pursuit already under way — which may happen before
+ * or after the proposal went in, so it never implies a submission.
+ */
 export const SUBMISSION_STATUS = optionMap([
   { value: "not_started", label: "Not started", tone: TONE.neutral },
   { value: "drafting", label: "Drafting", tone: TONE.blue },
   { value: "internal_review", label: "Internal review", tone: TONE.violet },
   { value: "submitted", label: "Submitted", tone: TONE.amber },
-  { value: "won", label: "Won", tone: TONE.green },
-  { value: "lost", label: "Lost", tone: TONE.rose },
+  { value: "under_review", label: "Under review", tone: TONE.blue },
+  { value: "shortlisted", label: "Shortlisted", tone: TONE.violet },
+  { value: "won", label: "Awarded", tone: TONE.green },
+  { value: "lost", label: "Not awarded", tone: TONE.rose },
+  { value: "withdrawn", label: "Withdrawn", tone: TONE.stone },
   { value: "no_bid", label: "No bid", tone: TONE.stone },
 ] as const);
+
+/**
+ * The pursuit is over, whatever the ending.
+ *
+ * Six places used to carry their own `["won", "lost", "no_bid"]` literal, which
+ * is how a new ending gets adopted in five of them and forgotten in the sixth.
+ */
+export const TERMINAL_SUBMISSION_STATUSES = ["won", "lost", "no_bid", "withdrawn"] as const;
+
+/** In, and waiting on somebody else. The deadline is met; the decision is not ours. */
+export const POST_SUBMISSION_STATUSES = ["submitted", "under_review", "shortlisted"] as const;
+
+export function isTerminalSubmission(status: string): boolean {
+  return (TERMINAL_SUBMISSION_STATUSES as readonly string[]).includes(status);
+}
+
+export function isAwaitingDecision(status: string): boolean {
+  return (POST_SUBMISSION_STATUSES as readonly string[]).includes(status);
+}
 
 export const STRATEGIC_VALUE = optionMap([
   { value: "low", label: "Low", tone: TONE.neutral },

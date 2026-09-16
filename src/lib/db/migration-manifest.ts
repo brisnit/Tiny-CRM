@@ -13,6 +13,7 @@ export const SQLITE_MIGRATIONS = [
   "20260906120000_sessions_mfa_jobs_alerts",
   "20260910224036_import_batches",
   "20260911180035_workspace_invitations",
+  "20260916025334_rfp_lifecycle_dates",
 ] as const;
 
 /** prisma/migrations-postgres — PostgreSQL, every deployed environment. */
@@ -20,4 +21,5 @@ export const POSTGRES_MIGRATIONS = [
   "00000000000000_init",
   "20260910224119_import_batches",
   "20260911180102_workspace_invitations",
+  "20260916025335_rfp_lifecycle_dates",
 ] as const;

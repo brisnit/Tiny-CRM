@@ -14,9 +14,7 @@ import { readScope } from "@/lib/scope";
 import { listOpportunities } from "@/lib/data/opportunities";
 import { formatCompact, formatMoneyOrDash } from "@/lib/money";
 import { describeDateOnlyDeadline, formatDayOnly } from "@/lib/dates";
-import {
-  COMPETITION_LEVEL, OPPORTUNITY_TYPE, STRATEGIC_VALUE, SUBMISSION_STATUS, TONE,
-} from "@/lib/enums";
+import { COMPETITION_LEVEL, OPPORTUNITY_TYPE, STRATEGIC_VALUE, SUBMISSION_STATUS, TONE, isTerminalSubmission } from "@/lib/enums";
 
 export const metadata = { title: "Opportunities" };
 
@@ -52,7 +50,7 @@ async function OpportunityList({
     view: str("view") ?? "open",
   });
 
-  const openOnes = opportunities.filter((o) => !["won", "lost", "no_bid"].includes(o.submissionStatus));
+  const openOnes = opportunities.filter((o) => !isTerminalSubmission(o.submissionStatus));
   const totalValue = openOnes.reduce((sum, o) => sum + (o.estimatedValueCents ?? 0), 0);
   // Only opportunities somebody has actually judged can be counted as worth
   // bidding; an unassessed one is neither a go nor a no.
