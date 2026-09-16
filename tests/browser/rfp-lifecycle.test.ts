@@ -143,8 +143,17 @@ describe("an RFP submitted on time stops reading as overdue", () => {
       waitUntil: "domcontentloaded",
       timeout: 120_000,
     });
-    await page.getByRole("button", { name: "Mark submitted", exact: true }).first().click();
+    // Before hydration the button is inert markup and the click does nothing —
+    // silently, so the only symptom is a dialog that never opens. A cold CI
+    // runner can be many seconds behind the HTML, and a fixed pause is a guess
+    // about a machine we do not control, so ask for the dialog until it comes.
+    const markSubmitted = page.getByRole("button", { name: "Mark submitted", exact: true }).first();
+    await markSubmitted.waitFor({ timeout: 60_000 });
     const dialog = page.getByRole("dialog");
+    for (let attempt = 0; attempt < 8 && !(await dialog.isVisible()); attempt++) {
+      await markSubmitted.click({ timeout: 15_000 }).catch(() => {});
+      await dialog.waitFor({ timeout: 15_000 }).catch(() => {});
+    }
     await dialog.waitFor({ timeout: 30_000 });
     await dialog.locator('input[type="date"]').first().fill(inputValue(host.deadline));
     await dialog.getByRole("button", { name: "Mark submitted", exact: true }).click();
@@ -154,7 +163,7 @@ describe("an RFP submitted on time stops reading as overdue", () => {
     // anything saved — which is exactly how this test first passed a flow that
     // did nothing.
     let saved: { submissionStatus: string; submittedAt: Date | null } | null = null;
-    for (let attempt = 0; attempt < 30; attempt++) {
+    for (let attempt = 0; attempt < 90; attempt++) {
       saved = await db.opportunity.findFirst({
         where: { id: host.opportunityId },
         select: { submissionStatus: true, submittedAt: true },
