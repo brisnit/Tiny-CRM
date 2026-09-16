@@ -2,7 +2,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Locator, type Page } from "playwright";
 
 import { db } from "../helpers/fixtures";
 
@@ -103,6 +103,53 @@ async function ownerWithRfp(label: string, options: { submitted?: boolean } = {}
   return { email, workspaceId: workspace.id, projectId: project.id, opportunityId: opportunity.id, deadline };
 }
 
+/**
+ * Waits for the stored row, not the words on screen.
+ *
+ * Screen text is how this test first passed a flow that did nothing: "Submitted"
+ * was the dialog's own title. The record is the only witness worth asking.
+ */
+async function waitForRow(
+  page: Page,
+  id: string,
+  matches: (row: {
+    submissionStatus: string;
+    submittedAt: Date | null;
+    decisionExpectedAt: Date | null;
+  }) => boolean,
+): Promise<void> {
+  let row: {
+    submissionStatus: string;
+    submittedAt: Date | null;
+    decisionExpectedAt: Date | null;
+  } | null = null;
+  for (let attempt = 0; attempt < 90; attempt++) {
+    row = await db.opportunity.findFirst({
+      where: { id },
+      select: { submissionStatus: true, submittedAt: true, decisionExpectedAt: true },
+    });
+    if (row && matches(row)) return;
+    await page.waitForTimeout(500);
+  }
+  const toast = await page.locator("[data-sonner-toast]").allInnerTexts().catch(() => []);
+  assert.fail(
+    `the stored row never matched. row: ${JSON.stringify(row)} · toast: ${toast.join(" | ") || "none"}`,
+  );
+}
+
+/** Update status → Decision expected…, edit, save. */
+async function setExpectedDecision(
+  page: Page,
+  edit: (dialog: Locator) => Promise<void>,
+): Promise<void> {
+  await page.getByRole("button", { name: /Update status/i }).first().click();
+  await page.getByRole("menuitem", { name: /Decision expected/i }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.waitFor({ timeout: 30_000 });
+  await edit(dialog);
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+}
+
 describe("an RFP submitted on time stops reading as overdue", () => {
   before(async () => {
     browser = await chromium.launch();
@@ -200,6 +247,86 @@ describe("an RFP submitted on time stops reading as overdue", () => {
     assert.doesNotMatch(projectAfter, /overdue/i, "the project still treats a met target date as overdue");
     assert.match(projectAfter, /Submitted/i, "the project card does not follow the RFP");
     assert.match(projectAfter, /On track/i, "the project is still at risk after meeting its date");
+
+    await page.close();
+  });
+
+  test("unknown is a choice at submission, and can be changed afterwards", async () => {
+    const host = await ownerWithRfp("Unknown");
+    const page = await browser.newPage();
+    await signIn(page, host.email);
+
+    await page.goto(`${BASE_URL}/opportunities/${host.opportunityId}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 120_000,
+    });
+
+    const markSubmitted = page.getByRole("button", { name: "Mark submitted", exact: true }).first();
+    await markSubmitted.waitFor({ timeout: 60_000 });
+    const dialog = page.getByRole("dialog");
+    for (let attempt = 0; attempt < 8 && !(await dialog.isVisible()); attempt++) {
+      await markSubmitted.click({ timeout: 15_000 }).catch(() => {});
+      await dialog.waitFor({ timeout: 15_000 }).catch(() => {});
+    }
+    await dialog.waitFor({ timeout: 30_000 });
+
+    // The hint says the submission date defaults to today, so it had better.
+    // It read "" for a while, which left the field blank and the button dead.
+    assert.equal(
+      await dialog.locator('input[type="date"]').first().inputValue(),
+      inputValue(day(0)),
+      "the submitted date did not default to today",
+    );
+
+    // Unknown is offered as an answer, and is the one already selected.
+    const unknown = dialog.getByRole("radio", { name: "Unknown" });
+    await unknown.waitFor({ timeout: 15_000 });
+    assert.equal(await unknown.isChecked(), true, "Unknown was not the default answer");
+
+    await dialog.getByRole("button", { name: "Mark submitted", exact: true }).click();
+    await waitForRow(page, host.opportunityId, (row) => row.submissionStatus === "submitted");
+    const stored = await db.opportunity.findFirst({
+      where: { id: host.opportunityId },
+      select: { decisionExpectedAt: true },
+    });
+    assert.equal(stored?.decisionExpectedAt, null, "choosing Unknown invented a date");
+
+    // The record says it plainly rather than leaving the question unanswered.
+    const detail = await page.locator("body").innerText();
+    assert.match(detail, /Not known yet/i, "the detail page hid the unknown decision date");
+
+    // And the card, where the waiting is the whole story.
+    const card = async () => {
+      await page.goto(`${BASE_URL}/opportunities`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      await page.getByText("Unknown Authority RFP", { exact: false }).first().waitFor({ timeout: 60_000 });
+      return page.locator("body").innerText();
+    };
+    const awaiting = await card();
+    assert.match(awaiting, /Submitted/i, "the card does not say the proposal is in");
+    assert.match(awaiting, /Awaiting decision/i, "an unknown decision date did not read as awaiting");
+    assert.doesNotMatch(awaiting, /overdue/i, "an unknown decision date produced an overdue state");
+
+    // Unknown -> a date.
+    const detailUrl = `${BASE_URL}/opportunities/${host.opportunityId}`;
+    await page.goto(detailUrl, { waitUntil: "domcontentloaded", timeout: 120_000 });
+    await setExpectedDecision(page, async (body) => {
+      await body.getByRole("radio", { name: "On a date" }).check();
+      await body.getByLabel("Expected decision date").fill(inputValue(day(30)));
+    });
+    await waitForRow(page, host.opportunityId, (row) => row.decisionExpectedAt !== null);
+    assert.match(await card(), /Decision expected/i, "a known decision date never reached the card");
+
+    // ...and back to Unknown again, which is the direction that tends to be
+    // impossible: a date you can add but never take away is not an answer.
+    await page.goto(detailUrl, { waitUntil: "domcontentloaded", timeout: 120_000 });
+    await setExpectedDecision(page, async (body) => {
+      await body.getByRole("radio", { name: "Unknown" }).check();
+    });
+    await waitForRow(page, host.opportunityId, (row) => row.decisionExpectedAt === null);
+
+    const ended = await card();
+    assert.match(ended, /Awaiting decision/i, "returning to unknown lost the awaiting state");
+    assert.doesNotMatch(ended, /overdue/i, "returning to unknown produced an overdue state");
 
     await page.close();
   });
