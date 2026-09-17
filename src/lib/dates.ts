@@ -176,6 +176,19 @@ export function dateOnlyInputValue(value: Date | string | null | undefined) {
   return date.toISOString().slice(0, 10);
 }
 
+/**
+ * Today, as the viewer's calendar day, ready for an `<input type="date">`.
+ *
+ * Not `dateOnlyInputValue(new Date())`. That reads the UTC day off an instant,
+ * and after 5pm in California the UTC day is already tomorrow — so a dialog
+ * promising "defaults to today" offered tomorrow's date to anyone working in
+ * the evening. Everything else here calls a date-only value the viewer's own
+ * calendar day (see civilToday); this makes the default agree.
+ */
+export function todayDateOnlyInputValue(now = new Date()) {
+  return dateOnlyInputValue(new Date(civilToday(now)));
+}
+
 /** Whole calendar days from the viewer's today. Negative means past. */
 export function daysFromNowDateOnly(
   value: Date | string | null | undefined,

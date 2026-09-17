@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   dateOnlyInputValue, daysFromNowDateOnly, formatDate, formatDateOnly,
-  formatDateTime, formatDayOnly,
+  formatDateTime, formatDayOnly, todayDateOnlyInputValue,
 } from "../../src/lib/dates";
 
 /**
@@ -120,5 +120,59 @@ describe("real timestamps keep their timezone meaning", () => {
     // Guards against someone "fixing" the timestamp path by switching it to UTC.
     const la = inZone("America/Los_Angeles", () => formatDate(new Date("2026-09-29T02:00:00Z")));
     assert.equal(la, "Sep 28, 2026", "formatDate stopped being local-time");
+  });
+});
+
+describe("\"today\" is the viewer's day, not UTC's", () => {
+  /**
+   * The evening problem. At 21:07 in California it is already tomorrow in UTC,
+   * so a default read off the UTC day offers a date the person has not lived
+   * through yet. "Mark submitted" promised today and pre-filled tomorrow, which
+   * is how a proposal could be recorded as going in on a day it did not.
+   *
+   * Found by a browser test failing in the evening and passing in CI, which
+   * runs in UTC — where the bug cannot appear at all.
+   */
+  const EVENING_IN_CALIFORNIA = new Date("2026-09-17T04:07:00Z");
+
+  test("an evening in Pacific still says today, not tomorrow", () => {
+    const value = inZone("America/Los_Angeles", () => todayDateOnlyInputValue(EVENING_IN_CALIFORNIA));
+    assert.equal(value, "2026-09-16", "the default jumped to the UTC day");
+  });
+
+  test("the old rule is what got this wrong", () => {
+    // Kept as the contrast: dateOnlyInputValue reads the UTC day off an
+    // instant, which is correct for a stored date-only value and wrong for
+    // "now". This asserts the difference rather than describing it.
+    const old = inZone("America/Los_Angeles", () => dateOnlyInputValue(EVENING_IN_CALIFORNIA));
+    assert.equal(old, "2026-09-17", "the UTC reading is no longer what it was");
+    assert.notEqual(
+      inZone("America/Los_Angeles", () => todayDateOnlyInputValue(EVENING_IN_CALIFORNIA)),
+      old,
+      "the today helper is still reading the UTC day",
+    );
+  });
+
+  // The date the field offers must be the one the rest of the app calls
+  // "Today" — the two disagreeing is the whole defect. daysFromNowDateOnly is
+  // the comparison that takes the instant, so both sides read the same clock.
+  const isToday = (tz: string, value: string, now: Date) =>
+    inZone(tz, () => daysFromNowDateOnly(new Date(`${value}T00:00:00Z`), now));
+
+  test("every zone gets its own day, and the app agrees it is today", () => {
+    for (const tz of ZONES) {
+      const value = inZone(tz, () => todayDateOnlyInputValue(EVENING_IN_CALIFORNIA));
+      const days = isToday(tz, value, EVENING_IN_CALIFORNIA);
+      assert.equal(days, 0, `${tz} pre-filled ${value}, which is ${days} day(s) from its own today`);
+    }
+  });
+
+  test("a midday instant is unremarkable in every zone", () => {
+    const midday = new Date("2026-09-17T12:00:00Z");
+    for (const tz of ZONES) {
+      const value = inZone(tz, () => todayDateOnlyInputValue(midday));
+      const days = isToday(tz, value, midday);
+      assert.equal(days, 0, `${tz} pre-filled ${value}, which is ${days} day(s) from its own today`);
+    }
   });
 });
