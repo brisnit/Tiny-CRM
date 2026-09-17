@@ -164,3 +164,53 @@ function currentPeriod() {
   const now = new Date();
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
 }
+
+describe("the daily brief still belongs to the person who asked for it", () => {
+  // The brief is owned by a column now rather than by a naming convention, and
+  // its policy refuses a row with no owner at all. That makes the ordinary path
+  // worth driving end to end: a boundary that also breaks the feature it
+  // protects is not a fix. This runs on both engines, because the behaviour is
+  // the application's; the policy behind it is proven separately in
+  // tests/security/person-scoped-ai-output.test.ts.
+  let B: Tenant;
+
+  after(async () => {
+    if (B) await cleanupTenants([B]);
+  });
+
+  test("it generates, caches, regenerates on force, and carries its owner", async () => {
+    B ??= await createTenant("AiBrief2");
+    const { getDailyBrief } = await import("../../src/lib/ai/summaries");
+    const { requireActor } = await import("../../src/lib/auth/access");
+
+    const scope = {
+      workspaceIds: [B.workspaceId],
+      userId: B.ownerId,
+      workspaceNames: new Map([[B.workspaceId, "AiBrief2"]]),
+    };
+
+    await runAsTestIdentity(B.ownerId, async () => {
+      const actor = await requireActor();
+
+      const first = await getDailyBrief(actor, scope, { force: true });
+      assert.ok(first.body.length > 0, "the brief generated nothing");
+
+      const second = await getDailyBrief(actor, scope);
+      assert.equal(second.cached, true, "the brief did not come back from cache");
+      assert.equal(second.body, first.body, "the cached brief is not the one that was stored");
+
+      const forced = await getDailyBrief(actor, scope, { force: true });
+      assert.equal(forced.cached, false, "force did not regenerate");
+    });
+
+    const stored = await db.aiInsight.findMany({
+      where: { workspaceId: B.workspaceId, kind: "brief" },
+      select: { userId: true },
+    });
+    assert.ok(stored.length > 0, "no brief was stored");
+    assert.ok(
+      stored.every((row) => row.userId === B.ownerId),
+      `a brief was stored without its owner: ${JSON.stringify(stored)}`,
+    );
+  });
+});
