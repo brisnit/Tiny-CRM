@@ -68,7 +68,7 @@ export function DailyBrief({
             <div>
               <h2 className="text-[15px] font-semibold tracking-[-0.015em] text-body">{heading}</h2>
               <p className="text-[11px] text-faint">
-                Your daily brief · updated {timeAgo(stamp)} · {providerLabel}
+                Updated {timeAgo(stamp)} · {providerLabel}
               </p>
             </div>
           </div>
