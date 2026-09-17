@@ -18,7 +18,7 @@ import {
   markOpportunitySubmitted, recordOpportunityOutcome, setOpportunityDecisionExpected,
   setOpportunityLifecycleState,
 } from "@/lib/actions/opportunities";
-import { dateOnlyInputValue } from "@/lib/dates";
+import { dateOnlyInputValue, todayDateOnlyInputValue } from "@/lib/dates";
 import { isAwaitingDecision, isTerminalSubmission } from "@/lib/enums";
 
 /**
@@ -83,7 +83,7 @@ function ExpectedDecision({
             name={`expected-${inputId}`}
             className="size-3.5 accent-current"
             checked={known}
-            onChange={() => onChange(dateOnlyInputValue(new Date()))}
+            onChange={() => onChange(todayDateOnlyInputValue())}
           />
           On a date
         </label>
@@ -131,7 +131,7 @@ export function OpportunityLifecycle({
   // dateOnlyInputValue returns "" for an absent date, never null, so these fall
   // back with || rather than ??. With ?? the "defaults to today" below silently
   // became an empty field and a disabled button.
-  const today = dateOnlyInputValue(new Date());
+  const today = todayDateOnlyInputValue();
   const [submittedOn, setSubmittedOn] = React.useState(
     () => dateOnlyInputValue(submittedAt) || today,
   );
