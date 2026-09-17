@@ -37,6 +37,8 @@ export type Actor = {
 export type WorkspaceActor = Actor & {
   workspaceId: string;
   role: Role;
+  /** "workspace" | "restricted" — which records this actor may act on. */
+  scopeMode: string;
   can: (permission: Permission) => boolean;
 };
 
@@ -89,6 +91,7 @@ export async function requireWorkspaceAccess(
     ...actor,
     workspaceId,
     role: membership.role,
+    scopeMode: membership.scopeMode,
     can: (p: Permission) => can(membership.role, p),
   };
 }
@@ -124,6 +127,13 @@ export function assertCanAssignRole(actor: WorkspaceActor, targetRole: string): 
 export type ReadScope = {
   workspaceIds: string[];
   userId: string;
+  /**
+   * The subset of `workspaceIds` in which this person is restricted to granted
+   * records. Empty for everyone today, and read by nothing — it travels with
+   * the scope so that enforcing it later is a change to policies rather than a
+   * change to every read in the application.
+   */
+  restrictedWorkspaceIds?: string[];
 };
 
 /**
@@ -141,11 +151,53 @@ export async function resolveReadScope(
   const ids = actor.memberships.map((m) => m.id);
   const userId = actor.identity.id;
 
+  const restrictedIn = (within: string[]) =>
+    actor.memberships.filter((m) => m.scopeMode === "restricted" && within.includes(m.id)).map((m) => m.id);
+
   if (!scope || scope === "all" || !ids.includes(scope)) {
-    return { workspaceIds: ids, userId, workspaceId: null, isAll: true, memberships: actor.memberships };
+    return {
+      workspaceIds: ids,
+      userId,
+      restrictedWorkspaceIds: restrictedIn(ids),
+      workspaceId: null,
+      isAll: true,
+      memberships: actor.memberships,
+    };
   }
   enrichContext({ workspaceId: scope });
-  return { workspaceIds: [scope], userId, workspaceId: scope, isAll: false, memberships: actor.memberships };
+  return {
+    workspaceIds: [scope],
+    userId,
+    restrictedWorkspaceIds: restrictedIn([scope]),
+    workspaceId: scope,
+    isAll: false,
+    memberships: actor.memberships,
+  };
+}
+
+/**
+ * Whether this person may start a new Opportunity or Project.
+ *
+ * Two conditions, and the second is the point. The role has to grant
+ * `anchor:create`, and the membership has to be full-workspace: creating an
+ * anchor is the one create that widens what its author can see, so a member
+ * confined to granted work cannot perform it and thereby grant themselves more.
+ *
+ * Derived rather than stored. A per-member override would be an exception that
+ * quietly becomes the rule — if someone is meant to start new pursuits, they
+ * are not restricted, and the honest way to say so is their scope.
+ */
+export function mayCreateAnchor(membership: { role: string; scopeMode: string }): boolean {
+  return can(membership.role, "anchor:create") && membership.scopeMode === "workspace";
+}
+
+/** Throws unless this actor may start a new anchor. */
+export function requireAnchorCreate(actor: WorkspaceActor): void {
+  if (mayCreateAnchor(actor)) return;
+  // Two reasons, one message: a person confined to assigned work is told the
+  // same thing as a viewer, because "you cannot create these" is the whole of
+  // what either needs to know.
+  throw forbidden("Your access does not allow starting a new opportunity or project.");
 }
 
 // ---------------------------------------------------------------------------

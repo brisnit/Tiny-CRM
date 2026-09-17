@@ -23,14 +23,17 @@ describe("permissions", () => {
      */
     const EXPECTED: Record<Role, Permission[]> = {
       viewer: ["record:view"],
-      member: ["record:view", "record:create", "record:edit", "record:archive", "ai:use", "ai:apply"],
+      member: [
+        "record:view", "record:create", "anchor:create", "record:edit", "record:archive",
+        "ai:use", "ai:apply",
+      ],
       manager: [
-        "record:view", "record:create", "record:edit", "record:archive", "record:delete",
+        "record:view", "record:create", "anchor:create", "record:edit", "record:archive", "record:delete",
         "record:export", "automations:manage", "pipelines:manage", "fields:manage",
         "ai:use", "ai:apply", "import:run",
       ],
       admin: [
-        "record:view", "record:create", "record:edit", "record:archive", "record:delete",
+        "record:view", "record:create", "anchor:create", "record:edit", "record:archive", "record:delete",
         "record:export", "workspace:manage", "members:manage", "automations:manage",
         "integrations:manage", "pipelines:manage", "fields:manage",
         "ai:use", "ai:apply", "import:run", "audit:view",

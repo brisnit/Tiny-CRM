@@ -73,6 +73,7 @@ node scripts/apply-sql.mjs prisma/postgres/005_identity_policies.sql
 node scripts/apply-sql.mjs prisma/postgres/006_job_claim.sql
 node scripts/apply-sql.mjs prisma/postgres/007_account_scoped_ai_threads.sql
 node scripts/apply-sql.mjs prisma/postgres/008_person_scoped_ai_output.sql
+node scripts/apply-sql.mjs prisma/postgres/009_record_grants.sql
 ```
 
 `003` is not optional. `Company.primaryContactId` and `Contact.companyId` form a

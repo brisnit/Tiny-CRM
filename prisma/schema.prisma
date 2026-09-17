@@ -132,6 +132,7 @@ model Workspace {
   owner User @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
 
   members        WorkspaceMember[]
+  recordGrants   RecordGrant[]
   companies      Company[]
   contacts       Contact[]
   projects       Project[]
@@ -173,6 +174,13 @@ model WorkspaceMember {
   userId      String
   // owner | admin | manager | member | viewer
   role        String   @default("member")
+  /// workspace | restricted
+  ///
+  /// Role says what a person may do; scope says which records they may do it
+  /// to. The two are deliberately orthogonal, so "restricted manager" and
+  /// "restricted viewer" are both coherent. Everyone is `workspace` — the
+  /// behaviour Tiny has always had — until record-level access is enforced.
+  scopeMode   String   @default("workspace")
   createdAt   DateTime @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -180,6 +188,38 @@ model WorkspaceMember {
 
   @@unique([workspaceId, userId])
   @@index([userId])
+}
+
+/// A restricted member's reach: one anchor record they were given.
+///
+/// Anchors are Opportunity and Project only. Everything else a restricted
+/// member can see is reachable from one of these — its tasks, notes, files and
+/// activity — so access is granted by naming work, not by naming tables.
+///
+/// A row, not a column on the membership, because "who can see this
+/// opportunity?" has to be answerable for an audit screen, and because a grant
+/// needs to record who gave it.
+///
+/// Inert until record-level policies land: no policy reads this table yet, and
+/// nothing in the product can set a membership to `restricted`.
+model RecordGrant {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  /// opportunity | project
+  anchorType  String
+  anchorId    String
+  /// Who granted it. Kept for the audit trail, not for authorization.
+  grantedById String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId, anchorType, anchorId])
+  /// The probe a policy makes for every row it considers.
+  @@index([userId, workspaceId, anchorType, anchorId])
+  /// The other direction: who can reach this record?
+  @@index([workspaceId, anchorType, anchorId])
 }
 
 /// An outstanding offer to join a workspace.

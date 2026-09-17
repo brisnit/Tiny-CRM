@@ -41,6 +41,14 @@ export type WorkspaceMembership = {
   slug: string;
   color: string;
   role: Role;
+  /**
+   * "workspace" | "restricted" — which records this person may act on.
+   *
+   * Orthogonal to `role`, which decides what they may do. Everyone is
+   * "workspace" until record-level access is enforced; nothing in the product
+   * can set the other value yet.
+   */
+  scopeMode: string;
 };
 
 /**
@@ -165,6 +173,7 @@ export const getMemberships = cache(async (userId: string): Promise<WorkspaceMem
       where: { userId, workspace: { archivedAt: null } },
       select: {
         role: true,
+        scopeMode: true,
         workspace: { select: { id: true, name: true, slug: true, color: true, createdAt: true } },
       },
         orderBy: { workspace: { createdAt: "asc" } },
@@ -177,5 +186,6 @@ export const getMemberships = cache(async (userId: string): Promise<WorkspaceMem
     slug: row.workspace.slug,
     color: row.workspace.color,
     role: row.role as Role,
+    scopeMode: row.scopeMode,
   }));
 });

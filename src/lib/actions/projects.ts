@@ -7,7 +7,7 @@ import {
   assertVersion, audit, emitEvent, guard, logActivity, pickDefined, readWorkspaceId,
   recordAction, revalidateRecord, transaction, workspaceAction, type ActionResult,
 } from "@/lib/actions/base";
-import { assertRelations } from "@/lib/auth/access";
+import { assertRelations, requireAnchorCreate } from "@/lib/auth/access";
 import { noSuchRecord } from "@/lib/errors";
 import { assertWithinLimit } from "@/lib/entitlements";
 import { assertConfirmation } from "@/lib/destructive";
@@ -57,6 +57,10 @@ export async function createProject(
     workspaceAction(
       { workspaceId: readWorkspaceId(input), permission: "record:create", rateLimit: "mutation" },
       async (actor) => {
+        // Starting a new anchor is the one create that widens what its author
+        // can see, so it asks a second question: not just may you create, but
+        // is your access the whole workspace.
+        requireAnchorCreate(actor);
         const data = projectSchema.parse(input);
         const workspaceId = actor.workspaceId;
 

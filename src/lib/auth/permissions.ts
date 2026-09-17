@@ -15,9 +15,22 @@
 export const ROLES = ["owner", "admin", "manager", "member", "viewer"] as const;
 export type Role = (typeof ROLES)[number];
 
+/**
+ * `anchor:create` is the right to start a new Opportunity or Project.
+ *
+ * It is separate from `record:create` because creating an anchor is the one
+ * create that widens what its author can see. A restricted member may add
+ * tasks, notes and files inside work they were given; being able to conjure a
+ * new Opportunity would let them grant themselves access and call it work.
+ *
+ * Holding the permission is necessary and not sufficient — see
+ * `mayCreateAnchor` in src/lib/auth/access.ts, where it meets scope. Role says
+ * what a person may do; scope says which records they may do it to.
+ */
 export const PERMISSIONS = [
   "record:view",
   "record:create",
+  "anchor:create",
   "record:edit",
   "record:archive",
   "record:delete",
@@ -44,23 +57,26 @@ export type Permission = (typeof PERMISSIONS)[number];
 const GRANTS: Record<Role, readonly Permission[]> = {
   viewer: ["record:view"],
 
-  member: ["record:view", "record:create", "record:edit", "record:archive", "ai:use", "ai:apply"],
+  member: [
+    "record:view", "record:create", "anchor:create", "record:edit", "record:archive",
+    "ai:use", "ai:apply",
+  ],
 
   manager: [
-    "record:view", "record:create", "record:edit", "record:archive", "record:delete",
+    "record:view", "record:create", "anchor:create", "record:edit", "record:archive", "record:delete",
     "record:export", "automations:manage", "pipelines:manage", "fields:manage",
     "ai:use", "ai:apply", "import:run",
   ],
 
   admin: [
-    "record:view", "record:create", "record:edit", "record:archive", "record:delete",
+    "record:view", "record:create", "anchor:create", "record:edit", "record:archive", "record:delete",
     "record:export", "workspace:manage", "members:manage", "automations:manage",
     "integrations:manage", "pipelines:manage", "fields:manage",
     "ai:use", "ai:apply", "import:run", "audit:view",
   ],
 
   owner: [
-    "record:view", "record:create", "record:edit", "record:archive", "record:delete",
+    "record:view", "record:create", "anchor:create", "record:edit", "record:archive", "record:delete",
     "record:export", "workspace:manage", "workspace:delete", "members:manage",
     "billing:manage", "automations:manage", "integrations:manage", "pipelines:manage",
     "fields:manage", "ai:use", "ai:apply", "import:run", "audit:view",
