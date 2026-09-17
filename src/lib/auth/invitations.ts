@@ -356,6 +356,18 @@ async function grantMembership(
             workspaceId: invitation.workspaceId,
             userId: user.id,
             role: invitation.role,
+            // Carried from the invitation, not defaulted here. The schema has
+            // held scopeMode on the invitation since the first migration for
+            // exactly this reason: an invitation that changed meaning between
+            // being issued and being accepted is a security bug, not an
+            // inconvenience. Nothing can issue a restricted invitation today,
+            // so today this always writes "workspace".
+            //
+            // The anchors in invitation.scope become grants when record-level
+            // access is enforced. Until then a restricted invitation would
+            // produce a member who can reach nothing, which is the safe
+            // direction to be wrong in.
+            scopeMode: invitation.scopeMode,
           },
         });
       }
