@@ -207,6 +207,7 @@ async function main() {
     "007_account_scoped_ai_threads.sql",
     "008_person_scoped_ai_output.sql",
     "009_record_grants.sql",
+    "010_record_scope.sql",
   ]) {
     const out = run("node", ["scripts/apply-sql.mjs", `prisma/postgres/${file}`], {
       DATABASE_URL: ownerUrl,
