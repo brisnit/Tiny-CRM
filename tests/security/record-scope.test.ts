@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { createTenant, cleanupTenants, db as observer, type Tenant } from "../helpers/fixtures";
 import { db } from "../../src/lib/db";
 import { withTenantContext } from "../../src/lib/tenant-db";
+import { runAsTestIdentity } from "../../src/lib/auth/context";
+import { resetRateLimit } from "../../src/lib/rate-limit";
 import { isPostgres } from "../../src/lib/env";
 
 /**
@@ -527,5 +529,161 @@ describe("the AI boundary from S7 is unchanged", () => {
     assert.match(byTable.get("AiInsight") ?? "", /app_user_id\(\)/, "the brief is no longer owner-scoped");
     assert.match(byTable.get("AiThread") ?? "", /app_user_id\(\)/, "threads are no longer person-scoped");
     assert.match(byTable.get("AiMessage") ?? "", /app_user_id\(\)/, "messages are no longer person-scoped");
+  });
+});
+
+describe("the data layer discloses nothing about invisible anchors", () => {
+  // Defence in depth, and a property worth pinning rather than assuming: the
+  // opportunity read selects its project as a nested relation rather than as a
+  // scalar id, so an ungranted project comes back null instead of as an
+  // opaque identifier the reader could carry elsewhere.
+  test("a granted opportunity linked to an ungranted project reveals neither id nor name", pgOnly ?? {}, async () => {
+    await observer.opportunity.update({
+      where: { id: id.grantedOpp },
+      data: { projectId: id.ungrantedProject },
+    });
+
+    try {
+      const { getOpportunity } = await import("../../src/lib/data/opportunities");
+      const seen = await getOpportunity(
+        { workspaceIds: [A.workspaceId], userId: A.memberId, restrictedWorkspaceIds: [A.workspaceId] },
+        id.grantedOpp,
+      );
+      assert.ok(seen, "the granted opportunity became unreadable");
+      assert.equal(seen.project, null, "an ungranted project was disclosed through its opportunity");
+
+      const asOwner = await getOpportunity(
+        { workspaceIds: [A.workspaceId], userId: A.ownerId },
+        id.grantedOpp,
+      );
+      assert.equal(
+        asOwner?.project?.id,
+        id.ungrantedProject,
+        "the link is genuinely there — this test would pass on a broken query otherwise",
+      );
+    } finally {
+      await observer.opportunity.update({ where: { id: id.grantedOpp }, data: { projectId: null } });
+    }
+  });
+
+  test("derived state is computed from what the reader can see, not what exists", pgOnly ?? {}, async () => {
+    // S3A-5. A project's target date counts as met when a linked opportunity
+    // was submitted on that day. To a member granted the project but not the
+    // opportunity, that submission does not exist — so the conclusion drawn
+    // for them must not depend on it. The alternative leaks the opportunity by
+    // its consequences.
+    const day = new Date();
+    day.setHours(12, 0, 0, 0);
+    await observer.project.update({ where: { id: id.grantedProject }, data: { targetDate: day } });
+    const hidden = await observer.opportunity.create({
+      data: {
+        workspaceId: A.workspaceId,
+        name: "The submission that met the date",
+        projectId: id.grantedProject,
+        proposalDeadlineAt: day,
+        deadlineAt: day,
+        submissionStatus: "submitted",
+        submittedAt: day,
+      },
+      select: { id: true },
+    });
+
+    try {
+      const { getProject } = await import("../../src/lib/data/projects");
+      // targetMet is the submission that met the date, or null — so the owner
+      // gets the detail and the restricted reader must get nothing at all.
+      const forOwner = await getProject({ workspaceIds: [A.workspaceId], userId: A.ownerId }, id.grantedProject);
+      assert.ok(forOwner?.targetMet, "the owner should see the target as met by the submission");
+
+      const forRestricted = await getProject(
+        { workspaceIds: [A.workspaceId], userId: A.memberId, restrictedWorkspaceIds: [A.workspaceId] },
+        id.grantedProject,
+      );
+      assert.ok(forRestricted, "the granted project became unreadable");
+      assert.equal(
+        forRestricted.targetMet,
+        null,
+        "a conclusion was drawn from an opportunity the reader cannot see",
+      );
+    } finally {
+      await observer.opportunity.delete({ where: { id: hidden.id } });
+      await observer.project.update({ where: { id: id.grantedProject }, data: { targetDate: null } });
+    }
+  });
+});
+
+describe("granting access is access control", () => {
+  // S3A-4: Owner and Admin only, through members:manage. A manager runs the
+  // work without deciding who else may see it.
+  test("a member without members:manage cannot grant access", pgOnly ?? {}, async () => {
+    await resetRateLimit("mutation", { user: A.memberId, workspace: A.workspaceId });
+    const { grantRecordAccess } = await import("../../src/lib/actions/record-grants");
+    const result = await runAsTestIdentity(A.memberId, () =>
+      grantRecordAccess({
+        workspaceId: A.workspaceId,
+        userId: A.memberId,
+        anchorType: "opportunity",
+        anchorId: id.ungrantedOpp,
+      }),
+    );
+    assert.equal(result.ok, false, "a restricted member granted themselves access");
+
+    const rows = await observer.recordGrant.count({
+      where: { workspaceId: A.workspaceId, userId: A.memberId, anchorId: id.ungrantedOpp },
+    });
+    assert.equal(rows, 0, "the grant was written anyway");
+  });
+
+  test("an owner can grant and revoke, and both are recorded", pgOnly ?? {}, async () => {
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId });
+    const { grantRecordAccess, revokeRecordAccess } = await import("../../src/lib/actions/record-grants");
+
+    const granted = await runAsTestIdentity(A.ownerId, () =>
+      grantRecordAccess({
+        workspaceId: A.workspaceId,
+        userId: A.memberId,
+        anchorType: "project",
+        anchorId: id.ungrantedProject,
+      }),
+    );
+    assert.equal(granted.ok, true, `the owner could not grant access: ${granted.ok ? "" : granted.error}`);
+    assert.equal(await visible("project", id.ungrantedProject), true, "the new grant did not take effect");
+
+    const revoked = await runAsTestIdentity(A.ownerId, () =>
+      revokeRecordAccess({
+        workspaceId: A.workspaceId,
+        userId: A.memberId,
+        anchorType: "project",
+        anchorId: id.ungrantedProject,
+      }),
+    );
+    assert.equal(revoked.ok, true, "the owner could not revoke access");
+    assert.equal(await visible("project", id.ungrantedProject), false, "access survived its revocation");
+
+    const trail = await observer.auditLog.findMany({
+      where: { workspaceId: A.workspaceId, action: { in: ["member.access_granted", "member.access_revoked"] } },
+      select: { action: true },
+    });
+    assert.ok(
+      trail.some((r) => r.action === "member.access_granted") &&
+        trail.some((r) => r.action === "member.access_revoked"),
+      `both sides of the decision should be in the audit log: ${JSON.stringify(trail)}`,
+    );
+  });
+
+  test("access cannot be granted to an anchor the granter cannot see", pgOnly ?? {}, async () => {
+    // The owner is full-workspace, so the case that matters is cross-workspace:
+    // B's opportunity is invisible here, and naming it must not create a grant.
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId });
+    const { grantRecordAccess } = await import("../../src/lib/actions/record-grants");
+    const result = await runAsTestIdentity(A.ownerId, () =>
+      grantRecordAccess({
+        workspaceId: A.workspaceId,
+        userId: A.memberId,
+        anchorType: "opportunity",
+        anchorId: id.foreignOpportunity,
+      }),
+    );
+    assert.equal(result.ok, false, "a grant was created for another workspace's record");
   });
 });
