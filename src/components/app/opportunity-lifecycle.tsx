@@ -15,7 +15,8 @@ import {
   Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  markOpportunitySubmitted, recordOpportunityOutcome, setOpportunityLifecycleState,
+  markOpportunitySubmitted, recordOpportunityOutcome, setOpportunityDecisionExpected,
+  setOpportunityLifecycleState,
 } from "@/lib/actions/opportunities";
 import { dateOnlyInputValue } from "@/lib/dates";
 import { isAwaitingDecision, isTerminalSubmission } from "@/lib/enums";
@@ -39,6 +40,69 @@ import { isAwaitingDecision, isTerminalSubmission } from "@/lib/enums";
  */
 
 type Outcome = "won" | "lost" | "withdrawn";
+
+/**
+ * When we expect to hear back, including not knowing.
+ *
+ * Most buyers never name a date, so "Unknown" is offered as an answer rather
+ * than left as the empty field you get for skipping the question. It is also
+ * the honest default: a date typed to fill a blank would read later like
+ * something the buyer told us.
+ */
+function ExpectedDecision({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string | null;
+  onChange: (next: string | null) => void;
+  disabled?: boolean;
+}) {
+  const known = value !== null;
+  const inputId = React.useId();
+
+  return (
+    <fieldset className="space-y-2" disabled={disabled}>
+      <legend className="mb-1.5 block text-[12.5px] font-medium text-secondary">
+        Decision expected
+      </legend>
+      <div className="flex gap-4">
+        <label className="flex items-center gap-1.5 text-[13px]">
+          <input
+            type="radio"
+            name={`expected-${inputId}`}
+            className="size-3.5 accent-current"
+            checked={!known}
+            onChange={() => onChange(null)}
+          />
+          Unknown
+        </label>
+        <label className="flex items-center gap-1.5 text-[13px]">
+          <input
+            type="radio"
+            name={`expected-${inputId}`}
+            className="size-3.5 accent-current"
+            checked={known}
+            onChange={() => onChange(dateOnlyInputValue(new Date()))}
+          />
+          On a date
+        </label>
+      </div>
+      {known ? (
+        <Input
+          type="date"
+          aria-label="Expected decision date"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      ) : (
+        <p className="text-[11.5px] text-faint">
+          Tiny will say “Awaiting decision” and leave it at that — no deadline, no chasing.
+        </p>
+      )}
+    </fieldset>
+  );
+}
 
 const OUTCOMES: { value: Outcome; label: string; description: string }[] = [
   { value: "won", label: "Awarded", description: "We won it." },
@@ -64,14 +128,20 @@ export function OpportunityLifecycle({
   const [submitOpen, setSubmitOpen] = React.useState(false);
   const [outcome, setOutcome] = React.useState<Outcome | null>(null);
 
-  const today = dateOnlyInputValue(new Date()) ?? "";
+  // dateOnlyInputValue returns "" for an absent date, never null, so these fall
+  // back with || rather than ??. With ?? the "defaults to today" below silently
+  // became an empty field and a disabled button.
+  const today = dateOnlyInputValue(new Date());
   const [submittedOn, setSubmittedOn] = React.useState(
-    () => dateOnlyInputValue(submittedAt) ?? today,
+    () => dateOnlyInputValue(submittedAt) || today,
   );
-  const [expectedOn, setExpectedOn] = React.useState(
-    () => dateOnlyInputValue(decisionExpectedAt) ?? "",
+  // null is "unknown", a string is a chosen date — the distinction the record
+  // itself keeps, rather than an empty input standing in for both.
+  const [expectedOn, setExpectedOn] = React.useState<string | null>(
+    () => dateOnlyInputValue(decisionExpectedAt) || null,
   );
   const [decidedOn, setDecidedOn] = React.useState(today);
+  const [expectedOpen, setExpectedOpen] = React.useState(false);
 
   const settled = isTerminalSubmission(submissionStatus);
   const awaiting = isAwaitingDecision(submissionStatus);
@@ -139,6 +209,9 @@ export function OpportunityLifecycle({
                 Shortlisted
               </DropdownMenuItem>
             ) : null}
+            <DropdownMenuItem onSelect={() => setExpectedOpen(true)}>
+              Decision expected…
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             {OUTCOMES.map((option) => (
               <DropdownMenuItem key={option.value} onSelect={() => setOutcome(option.value)}>
@@ -167,13 +240,7 @@ export function OpportunityLifecycle({
                 onChange={(event) => setSubmittedOn(event.target.value)}
               />
             </Field>
-            <Field label="Decision expected" hint="Optional. Shown on the card while you wait.">
-              <Input
-                type="date"
-                value={expectedOn}
-                onChange={(event) => setExpectedOn(event.target.value)}
-              />
-            </Field>
+            <ExpectedDecision value={expectedOn} onChange={setExpectedOn} disabled={pending} />
           </DialogBody>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setSubmitOpen(false)} disabled={pending}>
@@ -186,7 +253,7 @@ export function OpportunityLifecycle({
                   () =>
                     markOpportunitySubmitted(id, {
                       submittedAt: submittedOn,
-                      decisionExpectedAt: expectedOn || null,
+                      decisionExpectedAt: expectedOn,
                       version,
                     }),
                   "Marked submitted",
@@ -195,6 +262,50 @@ export function OpportunityLifecycle({
               }
             >
               {pending ? "Saving…" : "Mark submitted"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* When we expect to hear back — changeable in both directions */}
+      <Dialog
+        open={expectedOpen}
+        onOpenChange={(open) => {
+          setExpectedOpen(open);
+          // Reopening should show what is stored, not what was typed and abandoned.
+          if (!open) setExpectedOn(dateOnlyInputValue(decisionExpectedAt) || null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Decision expected</DialogTitle>
+            <DialogDescription>
+              When the buyer has said when they will decide. Unknown is a fine answer, and
+              the usual one — it changes nothing about how Tiny treats the proposal.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody>
+            <ExpectedDecision value={expectedOn} onChange={setExpectedOn} disabled={pending} />
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setExpectedOpen(false)} disabled={pending}>
+              Cancel
+            </Button>
+            <Button
+              disabled={pending || expectedOn === ""}
+              onClick={() =>
+                run(
+                  () =>
+                    setOpportunityDecisionExpected(id, {
+                      decisionExpectedAt: expectedOn,
+                      version,
+                    }),
+                  expectedOn ? "Decision date saved" : "Decision date set to unknown",
+                  () => setExpectedOpen(false),
+                )
+              }
+            >
+              {pending ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>

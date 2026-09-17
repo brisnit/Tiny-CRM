@@ -11,6 +11,7 @@ import { assertRelations } from "@/lib/auth/access";
 import { assertWithinLimit } from "@/lib/entitlements";
 import { assertConfirmation } from "@/lib/destructive";
 import { diffFields } from "@/lib/audit";
+import { formatDayOnly } from "@/lib/dates";
 import {
   COMPETITION_LEVEL, OPPORTUNITY_TYPE, STRATEGIC_VALUE, SUBMISSION_STATUS,
 } from "@/lib/enums";
@@ -652,6 +653,86 @@ export async function recordOpportunityOutcome(
           "/home",
         ]);
         return { id: recordId, name: existing.name, stageMovedTo: moved?.name ?? null };
+      },
+    ),
+  );
+}
+
+const decisionExpectedSchema = z.object({
+  /** Null is a real answer here, not a missing one: we do not know yet. */
+  decisionExpectedAt: zOptionalDate,
+  version: zVersion,
+});
+
+/**
+ * When we expect to hear back — including not knowing.
+ *
+ * A buyer's timetable is their business, and often they never say. "Unknown" is
+ * therefore a state the record can hold rather than the absence of one, and it
+ * is reachable in both directions: a date can be added when the buyer names one
+ * and taken away again when that date turns out to mean nothing. Neither makes
+ * the proposal overdue, and neither invents a follow-up — waiting is not
+ * slippage, and this stores what we know rather than a guess that would read
+ * like a commitment.
+ */
+export async function setOpportunityDecisionExpected(
+  id: string,
+  input: { decisionExpectedAt?: string | Date | null; version?: number },
+): Promise<ActionResult<{ id: string; name: string; decisionExpectedAt: Date | null }>> {
+  return guard(() =>
+    recordAction("opportunity", id, { permission: "record:edit", rateLimit: "mutation" },
+      async ({ actor, workspaceId, recordId }) => {
+        const data = decisionExpectedSchema.parse(input);
+        // An omitted field means the same as an explicit null here: this action
+        // exists to answer the question, and "unknown" is one of its answers.
+        const expected = data.decisionExpectedAt ?? null;
+
+        const existing = await db.opportunity.findFirstOrThrow({
+          where: { id: recordId, workspaceId },
+          select: { name: true, decisionExpectedAt: true, projectId: true },
+        });
+
+        await transaction(async (tx) => {
+          const result = await tx.opportunity.updateMany({
+            where: {
+              id: recordId, workspaceId,
+              ...(data.version !== undefined ? { version: data.version } : {}),
+            },
+            // Written unconditionally: this action exists to be able to clear it,
+            // so a null here means "unknown", never "leave it as it was".
+            data: { decisionExpectedAt: expected, version: { increment: 1 } },
+          });
+          assertVersion(result.count, data.version, "opportunity");
+
+          await logActivity(
+            {
+              workspaceId, actorId: actor.identity.id, type: "field_change",
+              title: expected
+                ? `Decision expected ${formatDayOnly(expected)}`
+                : "Decision date is unknown",
+              opportunityId: recordId,
+            },
+            tx,
+          );
+        });
+
+        await audit(actor, {
+          workspaceId, action: "record.updated", entityType: "opportunity", entityId: recordId,
+          summary: expected
+            ? `${existing.name}: decision expected ${formatDayOnly(expected)}`
+            : `${existing.name}: decision date unknown`,
+          metadata: {
+            decisionExpectedAt: { from: existing.decisionExpectedAt, to: expected },
+          },
+        });
+
+        revalidateRecord([
+          "/opportunities",
+          `/opportunities/${recordId}`,
+          ...(existing.projectId ? ["/projects", `/projects/${existing.projectId}`] : []),
+          "/home",
+        ]);
+        return { id: recordId, name: existing.name, decisionExpectedAt: expected };
       },
     ),
   );

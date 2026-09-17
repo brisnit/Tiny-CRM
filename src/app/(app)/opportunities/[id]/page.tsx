@@ -337,8 +337,14 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
                   </span>
                 </Row>
               ) : null}
-              {opportunity.decisionExpectedAt ? (
-                <Row label="Decision expected">{formatDateOnly(opportunity.decisionExpectedAt)}</Row>
+              {/* While we are waiting, not knowing is worth saying: an absent row
+                  reads like an unanswered question rather than the answer. */}
+              {opportunity.decisionExpectedAt || (life.submitted && !opportunity.decidedAt) ? (
+                <Row label="Decision expected">
+                  {opportunity.decisionExpectedAt
+                    ? formatDateOnly(opportunity.decisionExpectedAt)
+                    : "Not known yet"}
+                </Row>
               ) : null}
               {opportunity.decidedAt ? (
                 <Row label="Decided">{formatDateOnly(opportunity.decidedAt)}</Row>

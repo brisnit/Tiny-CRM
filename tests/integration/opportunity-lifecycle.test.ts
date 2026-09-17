@@ -349,4 +349,91 @@ describe("recording what happened to a proposal", () => {
       );
     });
   });
+
+  describe("when we expect to hear back", () => {
+    // "Unknown" is a state the record holds, not the absence of one, so the
+    // interesting direction is the one that removes a date: an implementation
+    // that treats null as "leave it alone" passes every test that only ever
+    // sets a date, and then silently refuses to forget one.
+    test("a date can be set after submission, and then taken away again", async () => {
+      const opp = await opportunity(A, "Expected round trip");
+      const { markOpportunitySubmitted, setOpportunityDecisionExpected } = await import(
+        "../../src/lib/actions/opportunities"
+      );
+
+      await runAsTestIdentity(A.ownerId, () =>
+        markOpportunitySubmitted(opp.id, { version: opp.version }),
+      );
+      const submitted = await read(opp.id);
+      assert.equal(submitted.decisionExpectedAt, null, "submission invented an expected date");
+
+      await runAsTestIdentity(A.ownerId, () =>
+        setOpportunityDecisionExpected(opp.id, {
+          decisionExpectedAt: "2026-11-20",
+          version: submitted.version,
+        }),
+      );
+      const known = await read(opp.id);
+      assert.ok(known.decisionExpectedAt, "the expected date was not stored");
+      assert.equal(known.decisionExpectedAt?.toISOString().slice(0, 10), "2026-11-20");
+
+      await runAsTestIdentity(A.ownerId, () =>
+        setOpportunityDecisionExpected(opp.id, {
+          decisionExpectedAt: null,
+          version: known.version,
+        }),
+      );
+      const unknown = await read(opp.id);
+      assert.equal(unknown.decisionExpectedAt, null, "a known date could not be made unknown again");
+
+      // The thing being edited is one field: the submission itself is untouched.
+      assert.equal(unknown.submissionStatus, "submitted", "the submission status changed");
+      assert.ok(unknown.submittedAt, "the submission date was lost");
+      assert.deepEqual(
+        unknown.proposalDeadlineAt,
+        opp.proposalDeadlineAt,
+        "the historical deadline was rewritten",
+      );
+    });
+
+    test("unknown is recorded as a decision, in the record's own history", async () => {
+      const opp = await opportunity(A, "Expected history");
+      const { markOpportunitySubmitted, setOpportunityDecisionExpected } = await import(
+        "../../src/lib/actions/opportunities"
+      );
+      await runAsTestIdentity(A.ownerId, () =>
+        markOpportunitySubmitted(opp.id, { decisionExpectedAt: "2026-12-01", version: opp.version }),
+      );
+      const before = await read(opp.id);
+      await runAsTestIdentity(A.ownerId, () =>
+        setOpportunityDecisionExpected(opp.id, { decisionExpectedAt: null, version: before.version }),
+      );
+
+      const titles = (await activityTitles(opp.id)).map((a) => a.title);
+      assert.ok(
+        titles.some((t) => /unknown/i.test(t)),
+        `no activity recorded the change: ${titles.join(" | ") || "none"}`,
+      );
+    });
+
+    test("a stale version is refused, like every other edit", async () => {
+      const opp = await opportunity(A, "Expected concurrency");
+      const { markOpportunitySubmitted, setOpportunityDecisionExpected } = await import(
+        "../../src/lib/actions/opportunities"
+      );
+      await runAsTestIdentity(A.ownerId, () =>
+        markOpportunitySubmitted(opp.id, { version: opp.version }),
+      );
+      // opp.version is now one behind, because the submission incremented it.
+      const result = await runAsTestIdentity(A.ownerId, () =>
+        setOpportunityDecisionExpected(opp.id, {
+          decisionExpectedAt: "2026-10-05",
+          version: opp.version,
+        }),
+      );
+      assert.equal(result.ok, false, "a stale version was accepted");
+      const after = await read(opp.id);
+      assert.equal(after.decisionExpectedAt, null, "the refused edit was written anyway");
+    });
+  });
 });
