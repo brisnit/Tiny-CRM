@@ -45,6 +45,7 @@ before(async () => {
     const brief = await db.aiInsight.create({
       data: {
         workspaceId: A.workspaceId,
+        userId: A.ownerId,
         kind: "brief",
         entityType: "user",
         entityId: `${A.ownerId}:${A.workspaceId}`,
@@ -141,6 +142,54 @@ describe("a colleague cannot read AI output generated for someone else", () => {
       select: { status: true },
     });
     assert.equal(after?.status, "new", "the owner's brief was modified by someone else");
+  });
+});
+
+describe("a brief cannot be written for anyone else", () => {
+  // The read side is only half of it. If a member can write a row carrying
+  // someone else's id, or a row carrying nobody's, they can put text where it
+  // does not belong or park it where nobody can account for it.
+  test("a member cannot write a brief in another member's name", skip ?? {}, async () => {
+    await assert.rejects(
+      () =>
+        asOtherMember(() =>
+          db.aiInsight.create({
+            data: {
+              workspaceId: A.workspaceId,
+              userId: A.ownerId,
+              kind: "brief",
+              entityType: "user",
+              entityId: `${A.ownerId}:${A.workspaceId}`,
+              title: "Planted",
+              body: "Text the owner never asked for.",
+            },
+          }),
+        ),
+      /row-level security/i,
+      "a member wrote a brief in someone else's name",
+    );
+  });
+
+  test("an unowned brief cannot be written at all", skip ?? {}, async () => {
+    // Discovered by this suite rather than reasoned about: the first version of
+    // the fixture here wrote a brief with no userId, and the policy refused it.
+    await assert.rejects(
+      () =>
+        asOwner(() =>
+          db.aiInsight.create({
+            data: {
+              workspaceId: A.workspaceId,
+              kind: "brief",
+              entityType: "user",
+              entityId: `${A.ownerId}:${A.workspaceId}`,
+              title: "Ownerless",
+              body: "A brief belonging to nobody.",
+            },
+          }),
+        ),
+      /row-level security/i,
+      "a brief was stored with no owner, readable by nobody and accountable to no one",
+    );
   });
 });
 

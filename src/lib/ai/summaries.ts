@@ -169,8 +169,18 @@ export async function getDailyBrief(
     const scopeKey = scope.workspaceIds.slice().sort().join(",");
 
     if (!options.force) {
+      // Asked for by owner. The composed entityId still identifies which scope
+      // the brief covers, but who it belongs to is a column now: the old query
+      // relied on a string convention to keep one person's brief from another,
+      // and a convention is not a boundary.
       const cached = await db.aiInsight.findFirst({
-        where: { kind: "brief", entityType: "user", entityId: `${actor.identity.id}:${scopeKey}`, fingerprint: print },
+        where: {
+          kind: "brief",
+          userId: actor.identity.id,
+          entityType: "user",
+          entityId: `${actor.identity.id}:${scopeKey}`,
+          fingerprint: print,
+        },
         orderBy: { createdAt: "desc" },
       });
       // Briefs also expire on the hour so "today" stays meaningful even when
@@ -218,11 +228,17 @@ export async function getDailyBrief(
       const workspaceId = scope.workspaceIds[0];
       if (workspaceId) {
         await db.aiInsight.deleteMany({
-          where: { kind: "brief", entityType: "user", entityId: `${actor.identity.id}:${scopeKey}` },
+          where: {
+            kind: "brief",
+            userId: actor.identity.id,
+            entityType: "user",
+            entityId: `${actor.identity.id}:${scopeKey}`,
+          },
         });
         await db.aiInsight.create({
           data: {
             workspaceId,
+            userId: actor.identity.id,
             kind: "brief",
             entityType: "user",
             entityId: `${actor.identity.id}:${scopeKey}`,

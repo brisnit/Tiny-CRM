@@ -1069,6 +1069,11 @@ model AutomationRun {
 model AiInsight {
   id          String @id @default(cuid())
   workspaceId String
+  /// The person this insight was generated for, when it belongs to one.
+  /// A daily brief is assembled from everything its reader may see, so it is
+  /// theirs; a record summary is derived from one record and is shared by
+  /// everyone who can open it, and leaves this null.
+  userId      String?
   /// summary | risk | recommendation | duplicate | cleanup | brief | deal_score
   kind        String
   entityType  String
@@ -1091,6 +1096,7 @@ model AiInsight {
   @@index([workspaceId, kind, status])
   @@index([entityType, entityId, kind])
   @@index([workspaceId, createdAt])
+  @@index([userId, kind, createdAt])
 }
 
 model AiThread {
