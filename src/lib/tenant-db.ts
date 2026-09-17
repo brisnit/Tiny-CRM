@@ -49,6 +49,15 @@ export type TenantContext = {
   workspaceIds: string[];
   /** The acting user, for person-scoped tables. */
   userId?: string | null;
+  /**
+   * Workspaces in which this person is restricted to granted records.
+   *
+   * Carried so the boundary can be established in one place rather than at
+   * forty call sites. No policy reads it yet — record-level policies arrive
+   * with the step that enforces them, and until then this is plumbing that
+   * changes nothing.
+   */
+  restrictedWorkspaceIds?: string[];
 };
 
 /**
@@ -106,6 +115,12 @@ export async function withTenantContext<T>(
         // value can be a bound parameter instead of interpolated SQL.
         await tx.$executeRaw`SELECT set_config('app.workspace_ids', ${ids.join(",")}, true)`;
         await tx.$executeRaw`SELECT set_config('app.user_id', ${context.userId ?? ""}, true)`;
+        // Set for every unit of work so the value is never half-present, and
+        // read by nothing yet. The policies that will consult it arrive with
+        // the step that enforces record-level access; establishing it here
+        // first means that step changes policies alone.
+        const restricted = (context.restrictedWorkspaceIds ?? []).filter((id) => ids.includes(id));
+        await tx.$executeRaw`SELECT set_config('app.restricted_workspace_ids', ${restricted.join(",")}, true)`;
       }
       // Bind the transaction as the ambient client so every `db.<model>` call
       // inside `fn` — including in code that never heard of tenant context —
