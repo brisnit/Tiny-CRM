@@ -536,7 +536,7 @@ async function BriefBlock({ scope, scopeCookie }: { scope: string; scopeCookie: 
 
   return (
     <DailyBrief
-      greeting={`${greeting()}.`}
+      heading="Daily Brief"
       body={brief.body}
       generatedAt={brief.generatedAt.toISOString()}
       providerLabel={describeProvider().label}
