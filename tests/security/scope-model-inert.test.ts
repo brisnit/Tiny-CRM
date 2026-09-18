@@ -142,16 +142,17 @@ describe("the data model exists, and changes nothing", () => {
     }
   });
 
-  test("a restricted membership with a grant still reads the whole workspace", async () => {
-    // The strongest form of the claim, and the one worth having: not merely
-    // that an unused table is harmless, but that the *whole configuration* —
-    // a membership marked restricted, a grant naming one anchor, and the
-    // restricted id travelling in the tenant context — still changes nothing,
-    // because no policy consults any of it yet.
+  test("a restricted membership is now enforced, and this is where that shows", pgOnly ?? {}, async () => {
+    // This test used to assert the opposite, and its comment said: "if the
+    // enforcement step ever lands half-applied, this is the test that fails."
+    // It failed, at the moment record-level access was enforced, which is the
+    // one time that failure is good news. It is kept — flipped — rather than
+    // deleted, because the transition is worth being able to see in the
+    // history.
     //
-    // If Step 3 ever lands half-applied, this is the test that fails.
-    const before = await visibleCounts(A, A.memberId);
-
+    // The behaviour itself lives in tests/security/record-scope.test.ts; this
+    // is only the tripwire, and what it now guards is that the file around it
+    // still describes reality.
     const extra = await observer.opportunity.create({
       data: { workspaceId: A.workspaceId, name: "Work this member was never given" },
       select: { id: true },
@@ -172,37 +173,18 @@ describe("the data model exists, and changes nothing", () => {
     });
 
     try {
-      // Read with the restriction declared in the context, the way the request
-      // path will declare it: app.restricted_workspace_ids is set, and nothing
-      // reads it.
-      const after = await withTenantContext(
+      const seen = await withTenantContext(
         {
           workspaceIds: [A.workspaceId],
           userId: A.memberId,
           restrictedWorkspaceIds: [A.workspaceId],
         },
-        async () => ({
-          contacts: await db.contact.count(),
-          companies: await db.company.count(),
-          deals: await db.deal.count(),
-          projects: await db.project.count(),
-          opportunities: await db.opportunity.count(),
-          tasks: await db.task.count(),
-          notes: await db.note.count(),
-          activities: await db.activity.count(),
-          pipelines: await db.pipeline.count(),
-        }),
-      );
-
-      assert.equal(
-        after.opportunities,
-        before.opportunities + 1,
-        "a restricted membership with one grant saw a narrowed set of opportunities",
+        async () => db.opportunity.findMany({ select: { id: true } }),
       );
       assert.deepEqual(
-        { ...after, opportunities: before.opportunities },
-        before,
-        "a restricted membership changed what could be read before anything enforces it",
+        seen.map((o) => o.id),
+        [A.opportunityId],
+        "a restricted member sees something other than exactly the opportunity they were granted",
       );
     } finally {
       await observer.workspaceMember.updateMany({

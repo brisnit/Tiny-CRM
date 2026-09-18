@@ -28,6 +28,10 @@ export type AuditAction =
   | "auth.mfa_enabled" | "auth.mfa_disabled" | "auth.mfa_recovery_regenerated"
   | "member.invited" | "member.invite_resent" | "member.invite_revoked"
   | "member.invite_accepted" | "member.role_changed" | "member.removed"
+  // Record-level access: who was given which piece of work, and who took it
+  // back. Filed with the membership events rather than the record ones — this
+  // is access control, and reads as such in the log.
+  | "member.access_granted" | "member.access_revoked"
   | "workspace.created" | "workspace.updated" | "workspace.archived" | "workspace.deleted"
   | "record.created" | "record.updated" | "record.archived" | "record.restored" | "record.deleted"
   | "pipeline.changed" | "automation.changed" | "field.changed"
