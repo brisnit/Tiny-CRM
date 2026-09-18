@@ -1,7 +1,7 @@
 import "server-only";
 
 import { db } from "@/lib/db";
-import { withTenantContext } from "@/lib/tenant-db";
+import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
 import { log } from "@/lib/logger";
 import { PermanentJobError, registerHandler } from "@/lib/jobs";
 import { DOMAIN_EVENTS, TRIGGER_FOR_EVENT, type DomainEventName } from "@/lib/events";
@@ -101,7 +101,7 @@ export function registerJobHandlers(): void {
     // PostgreSQL until it ran in the owner's own context. Isolated, so the job's
     // identity is not reused for it.
     await withTenantContext(
-      { workspaceIds: [job.workspaceId], userId: ownerId },
+      { workspaceIds: [job.workspaceId], userId: ownerId , restrictedWorkspaceIds: NO_RECORD_READS},
       (tx) =>
         tx.notification.create({
           data: {

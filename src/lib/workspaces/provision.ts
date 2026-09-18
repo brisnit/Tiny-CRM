@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { withTenantContext } from "@/lib/tenant-db";
+import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
 import { recordAudit } from "@/lib/audit";
 import { slugify } from "@/lib/utils";
 import {
@@ -190,7 +190,9 @@ export async function provisionWorkspace(
   // This failed only on the deployed application: called directly, as a test
   // does, there is no ambient context to reuse and the bug is invisible.
   return withTenantContext(
-    { workspaceIds: [workspaceId], userId },
+    // Bootstrapping a workspace for its first member: no grants exist, and the
+    // membership that would carry a scope is being created here.
+    { workspaceIds: [workspaceId], userId, restrictedWorkspaceIds: NO_RECORD_READS },
     (client) => (tx ? run(tx) : run(client)),
     { timeout: 15_000, isolated: true },
   );

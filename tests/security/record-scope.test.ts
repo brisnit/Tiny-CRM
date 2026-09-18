@@ -78,7 +78,7 @@ function asRestricted<T>(fn: () => Promise<T>): Promise<T> {
 
 /** Reads as a full-workspace member of the same workspace. */
 function asFullMember<T>(fn: () => Promise<T>): Promise<T> {
-  return withTenantContext({ workspaceIds: [A.workspaceId], userId: A.ownerId }, fn);
+  return withTenantContext({ workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] }, fn);
 }
 
 /** Whether the restricted member can see one row of a model, by exact id. */
@@ -553,7 +553,7 @@ describe("the data layer discloses nothing about invisible anchors", () => {
       assert.equal(seen.project, null, "an ungranted project was disclosed through its opportunity");
 
       const asOwner = await getOpportunity(
-        { workspaceIds: [A.workspaceId], userId: A.ownerId },
+        { workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] },
         id.grantedOpp,
       );
       assert.equal(
@@ -592,7 +592,7 @@ describe("the data layer discloses nothing about invisible anchors", () => {
       const { getProject } = await import("../../src/lib/data/projects");
       // targetMet is the submission that met the date, or null — so the owner
       // gets the detail and the restricted reader must get nothing at all.
-      const forOwner = await getProject({ workspaceIds: [A.workspaceId], userId: A.ownerId }, id.grantedProject);
+      const forOwner = await getProject({ workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] }, id.grantedProject);
       assert.ok(forOwner?.targetMet, "the owner should see the target as met by the submission");
 
       const forRestricted = await getProject(

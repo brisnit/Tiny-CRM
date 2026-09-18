@@ -1,7 +1,7 @@
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { Badge } from "@/components/ui/badge";
 import { FieldManager } from "@/components/app/field-manager";
-import { requireActor } from "@/lib/auth/access";
+import { requireActor, restrictedIdsFor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 import { parseJson } from "@/lib/json";
 import { CUSTOM_FIELD_TYPE, ENTITY_LABEL, type EntityType } from "@/lib/enums";
@@ -13,7 +13,11 @@ export default async function FieldSettings() {
   const actor = await requireActor();
   const workspaces = actor.memberships;
 
-  const fields = await scopedRead({ workspaceIds: workspaces.map((w) => w.id), userId: actor.identity.id }, async () => {
+  const fields = await scopedRead({
+    workspaceIds: workspaces.map((w) => w.id),
+    userId: actor.identity.id,
+    restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, workspaces.map((w) => w.id)),
+  }, async () => {
     return db.customFieldDef.findMany({
       where: { workspaceId: { in: workspaces.map((w) => w.id) } },
       select: {

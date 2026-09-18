@@ -4,7 +4,7 @@ import { Panel, PanelHeader } from "@/components/ui/surface";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { NewWorkspaceForm } from "@/components/app/workspace-forms";
-import { requireActor } from "@/lib/auth/access";
+import { requireActor, restrictedIdsFor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 import { planFor, UNLIMITED } from "@/lib/plans";
 import { WORKSPACE_ROLE } from "@/lib/enums";
@@ -17,7 +17,11 @@ export default async function WorkspacesSettings() {
   const workspaces = actor.memberships;
   const plan = planFor(actor.identity.plan);
 
-  const details = await scopedRead({ workspaceIds: workspaces.map((w) => w.id), userId: actor.identity.id }, async () => {
+  const details = await scopedRead({
+    workspaceIds: workspaces.map((w) => w.id),
+    userId: actor.identity.id,
+    restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, workspaces.map((w) => w.id)),
+  }, async () => {
     return db.workspace.findMany({
       where: { id: { in: workspaces.map((w) => w.id) } },
       select: {

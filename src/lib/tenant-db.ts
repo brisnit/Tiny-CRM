@@ -44,21 +44,60 @@ import type { Prisma } from "@/generated/prisma/client";
  * -level isolation is unchanged and remains the primary control on both.
  */
 
-export type TenantContext = {
-  /** Workspaces this unit of work may touch. Empty means: see nothing. */
-  workspaceIds: string[];
-  /** The acting user, for person-scoped tables. */
-  userId?: string | null;
-  /**
-   * Workspaces in which this person is restricted to granted records.
-   *
-   * Carried so the boundary can be established in one place rather than at
-   * forty call sites. No policy reads it yet — record-level policies arrive
-   * with the step that enforces them, and until then this is plumbing that
-   * changes nothing.
-   */
-  restrictedWorkspaceIds?: string[];
-};
+/**
+ * Who is acting, and how far they may reach.
+ *
+ * Written as a union so the compiler asks the question. A context that names a
+ * person must also say which of their workspaces restrict them to granted
+ * records — `[]` for almost everyone, and the type will not let a new call
+ * site quietly omit it. The omission is not hypothetical: every server action
+ * once built `{ workspaceIds, userId }`, which left
+ * `app.restricted_workspace_ids` empty, and a restricted member was therefore
+ * unrestricted through every write path in the application while the policies
+ * themselves were correct. See
+ * tests/security/restricted-context-plumbing.test.ts.
+ *
+ * A context with no person — a job, a system write — cannot be restricted by
+ * anybody's membership, so it says nothing.
+ */
+export type TenantContext =
+  | {
+      /** Workspaces this unit of work may touch. Empty means: see nothing. */
+      workspaceIds: string[];
+      userId?: null | undefined;
+      restrictedWorkspaceIds?: never;
+    }
+  | {
+      workspaceIds: string[];
+      /** The acting user, for person-scoped tables. */
+      userId: string | null;
+      /**
+       * Workspaces in which this person is confined to records they were
+       * granted. Derived from their own memberships — never from a request —
+       * by `restrictedIdsFor` in src/lib/auth/access.ts.
+       */
+      restrictedWorkspaceIds: string[];
+    };
+
+/**
+ * The scope of a context that reads no records at all.
+ *
+ * Audit rows, domain events, job bookkeeping, invitation tables, the
+ * membership lookup itself: none of them read a CRM record, so there is
+ * nothing for a record-level restriction to narrow, and saying `[]` there is a
+ * statement of fact rather than a shortcut.
+ *
+ * It is a named constant so the claim is greppable and so it can be pinned.
+ * tests/security/no-record-reads-allowlist.test.ts holds the list of files
+ * allowed to make it, with a reason for each; a new file claiming it fails
+ * that test until somebody writes down why. The claim is about what the
+ * context *reads*, and the type system cannot check that — a person has to.
+ *
+ * Not for actor-bearing contexts. A server action, a page read or anything
+ * else that touches records derives its scope from the actor's own
+ * memberships through `restrictedIdsFor`.
+ */
+export const NO_RECORD_READS: string[] = [];
 
 /**
  * Runs a unit of work with database-enforced tenant context.

@@ -1,7 +1,7 @@
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { Badge } from "@/components/ui/badge";
 import { PipelineManager } from "@/components/app/pipeline-manager";
-import { requireActor } from "@/lib/auth/access";
+import { requireActor, restrictedIdsFor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 import { PIPELINE_KIND } from "@/lib/enums";
 import { scopedRead } from "@/lib/data/scoped";
@@ -12,7 +12,11 @@ export default async function PipelineSettings() {
   const actor = await requireActor();
   const workspaces = actor.memberships;
 
-  const pipelines = await scopedRead({ workspaceIds: workspaces.map((w) => w.id), userId: actor.identity.id }, async () => {
+  const pipelines = await scopedRead({
+    workspaceIds: workspaces.map((w) => w.id),
+    userId: actor.identity.id,
+    restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, workspaces.map((w) => w.id)),
+  }, async () => {
     return db.pipeline.findMany({
       where: { workspaceId: { in: workspaces.map((w) => w.id) } },
       select: {

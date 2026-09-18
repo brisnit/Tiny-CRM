@@ -30,7 +30,7 @@ let A: Tenant;
 
 /** What this person can see, model by model. */
 async function visibleCounts(tenant: Tenant, userId: string) {
-  return withTenantContext({ workspaceIds: [tenant.workspaceId], userId }, async () => ({
+  return withTenantContext({ workspaceIds: [tenant.workspaceId], userId, restrictedWorkspaceIds: [] }, async () => ({
     contacts: await db.contact.count(),
     companies: await db.company.count(),
     deals: await db.deal.count(),
@@ -78,11 +78,11 @@ describe("the scope model is inert", () => {
     const stranger = await createTenant("ScopeStranger");
     try {
       const seen = await withTenantContext(
-        { workspaceIds: [stranger.workspaceId], userId: A.ownerId },
+        { workspaceIds: [stranger.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] },
         async () => db.contact.count(),
       );
       const mine = await withTenantContext(
-        { workspaceIds: [A.workspaceId], userId: A.ownerId },
+        { workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] },
         async () => db.contact.count(),
       );
       assert.ok(mine > 0, "the owner cannot see their own workspace");
@@ -211,7 +211,7 @@ describe("the data model exists, and changes nothing", () => {
     });
     try {
       const seen = await withTenantContext(
-        { workspaceIds: [other.workspaceId], userId: other.ownerId },
+        { workspaceIds: [other.workspaceId], userId: other.ownerId, restrictedWorkspaceIds: [] },
         async () => db.recordGrant.findMany({ select: { id: true } }),
       );
       assert.deepEqual(

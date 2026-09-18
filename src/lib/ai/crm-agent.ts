@@ -7,7 +7,7 @@ import { buildRecordContext, buildWorkspaceSnapshot, type ContextScope } from "@
 import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
 import type { Actor } from "@/lib/auth/access";
 import type { AiMessage } from "@/lib/ai/provider";
-import { withTenantContext } from "@/lib/tenant-db";
+import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
 
 /**
  * The conversational agent behind ⌘K and the Tiny AI panel.
@@ -72,7 +72,11 @@ export async function* askTinyAi(request: AgentRequest): AsyncIterable<string> {
     // buildWorkspaceSnapshot; this is the only write.
     const threadId = request.threadId;
     await withTenantContext(
-      { workspaceIds: request.scope.workspaceIds, userId: request.actor.identity.id },
+      {
+            workspaceIds: request.scope.workspaceIds,
+            userId: request.actor.identity.id,
+            restrictedWorkspaceIds: request.scope.restrictedWorkspaceIds,
+          },
       async () => {
         await db.aiMessage.createMany({
           data: [
@@ -101,7 +105,8 @@ export async function askTinyAiOnce(request: AgentRequest): Promise<string> {
 export async function ensureThread(userId: string, workspaceId: string | null, title?: string) {
   // Establishes its own tenant context: reachable from pages and from job
   // handlers, not only from the action wrapper.
-  return withTenantContext({ workspaceIds: workspaceId ? [workspaceId] : [], userId }, async () => {
+  return withTenantContext(// AiThread is person-scoped, not record-scoped.
+    { workspaceIds: workspaceId ? [workspaceId] : [], userId, restrictedWorkspaceIds: NO_RECORD_READS }, async () => {
     const existing = await db.aiThread.findFirst({
       where: { userId, workspaceId },
       orderBy: { updatedAt: "desc" },

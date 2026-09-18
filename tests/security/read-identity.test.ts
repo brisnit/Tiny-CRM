@@ -272,7 +272,7 @@ describe("identity in a read context", { skip: enabled ? false : "PostgreSQL wit
         const { getActor } = await import("../../src/lib/auth/access");
         const { getShellData } = await import("../../src/lib/data/shell");
         const actor = (await getActor())!;
-        return getShellData(actor, "all", { workspaceIds: [A.workspaceId], userId: A.ownerId }, null);
+        return getShellData(actor, "all", { workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] }, null);
       });
 
       assert.ok(
@@ -289,7 +289,7 @@ describe("identity in a read context", { skip: enabled ? false : "PostgreSQL wit
         const { getActor } = await import("../../src/lib/auth/access");
         const { getShellData } = await import("../../src/lib/data/shell");
         const actor = (await getActor())!;
-        return getShellData(actor, "all", { workspaceIds: [A.workspaceId], userId: A.memberId }, null);
+        return getShellData(actor, "all", { workspaceIds: [A.workspaceId], userId: A.memberId, restrictedWorkspaceIds: [] }, null);
       });
 
       assert.equal(

@@ -5,7 +5,7 @@ import { getProvider, isModelBacked } from "@/lib/ai/provider";
 import { SYSTEM_PROMPTS, withContext } from "@/lib/ai/prompts";
 import { parseJson } from "@/lib/json";
 import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
-import type { Actor } from "@/lib/auth/access";
+import { restrictedIdsFor, type Actor } from "@/lib/auth/access";
 import { withTenantContext } from "@/lib/tenant-db";
 
 /**
@@ -55,7 +55,13 @@ export async function classifyText(
 ): Promise<ClassificationResult> {
   // Establishes its own tenant context: reachable from pages and from job
   // handlers, not only from the action wrapper.
-  return withTenantContext({ workspaceIds, userId: actor.identity.id }, async () => {
+  return withTenantContext(
+    {
+      workspaceIds,
+      userId: actor.identity.id,
+      restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, workspaceIds),
+    },
+    async () => {
     // Extraction sends the pasted text — often the most sensitive thing a user
     // will ever put into this product — so it honours the workspace's mode before
     // a model sees it. Falling back to the heuristic extractor keeps capture

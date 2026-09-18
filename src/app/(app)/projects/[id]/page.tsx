@@ -22,7 +22,7 @@ import { TaskRow } from "@/components/app/task-row";
 import { RecordHeaderActions } from "@/components/app/record-edit";
 import { AddProjectPerson, RemoveProjectPerson } from "@/components/app/project-people";
 import { ProjectStatusPicker, NextActionEditor, MilestoneList } from "@/components/app/project-controls";
-import { requireActor, resolveReadScope } from "@/lib/auth/access";
+import { requireActor, resolveReadScope, restrictedIdsFor } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getProject } from "@/lib/data/projects";
 import { getEditContext } from "@/lib/data/shell";
@@ -57,7 +57,7 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
     { workspaceId: project.workspaceId },
   );
 
-  const editContext = await getEditContext(actor, { workspaceIds: [project.workspaceId], userId: actor.identity.id });
+  const editContext = await getEditContext(actor, { workspaceIds: [project.workspaceId], userId: actor.identity.id, restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [project.workspaceId]) });
 
   // The stored target date is still shown; this decides what it means now.
   const target = describeProjectTarget(project.targetDate, project.targetMet);

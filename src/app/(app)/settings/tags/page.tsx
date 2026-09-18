@@ -1,6 +1,6 @@
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { TagManager } from "@/components/app/tag-manager";
-import { requireActor } from "@/lib/auth/access";
+import { requireActor, restrictedIdsFor } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 import { scopedRead } from "@/lib/data/scoped";
 
@@ -10,7 +10,11 @@ export default async function TagSettings() {
   const actor = await requireActor();
   const workspaces = actor.memberships;
 
-  const tags = await scopedRead({ workspaceIds: workspaces.map((w) => w.id), userId: actor.identity.id }, async () => {
+  const tags = await scopedRead({
+    workspaceIds: workspaces.map((w) => w.id),
+    userId: actor.identity.id,
+    restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, workspaces.map((w) => w.id)),
+  }, async () => {
     return db.tag.findMany({
       where: { workspaceId: { in: workspaces.map((w) => w.id) } },
       select: {

@@ -19,7 +19,7 @@ import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
 import { RecordHeaderActions } from "@/components/app/record-edit";
 import { StageSelector } from "@/components/app/stage-selector";
-import { requireActor, resolveReadScope } from "@/lib/auth/access";
+import { requireActor, resolveReadScope, restrictedIdsFor } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getDeal } from "@/lib/data/deals";
 import { getEditContext } from "@/lib/data/shell";
@@ -53,7 +53,7 @@ export default async function DealPage({ params }: PageProps<"/deals/[id]">) {
     { workspaceId: deal.workspaceId },
   );
 
-  const editContext = await getEditContext(actor, { workspaceIds: [deal.workspaceId], userId: actor.identity.id });
+  const editContext = await getEditContext(actor, { workspaceIds: [deal.workspaceId], userId: actor.identity.id, restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [deal.workspaceId]) });
 
   const daysInStage = daysSince(deal.stageEnteredAt) ?? 0;
 

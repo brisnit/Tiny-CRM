@@ -7,7 +7,7 @@ import {
   action, audit, emitEvent, guard, recordAction, revalidatePathSafely, revalidateRecord,
   transaction, workspaceAction, type ActionResult, type Actor,
 } from "@/lib/actions/base";
-import { assertRelations, requireActor, resolveReadScope } from "@/lib/auth/access";
+import { assertRelations, requireActor, resolveReadScope, restrictedIdsFor } from "@/lib/auth/access";
 import { getDailyBrief, getRecordSummary } from "@/lib/ai/summaries";
 import { classifyText, type Proposal } from "@/lib/ai/classification";
 import { findRecommendations } from "@/lib/ai/recommendations";
@@ -87,6 +87,7 @@ export async function refreshRecordSummary(
         const scope: ContextScope = {
           workspaceIds: [workspaceId],
           userId: actor.identity.id,
+            restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [workspaceId]),
           workspaceNames: new Map(
             actor.memberships.filter((m) => m.id === workspaceId).map((m) => [m.id, m.name]),
           ),

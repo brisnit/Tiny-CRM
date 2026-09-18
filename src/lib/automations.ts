@@ -2,7 +2,7 @@ import "server-only";
 
 import { db } from "@/lib/db";
 import { parseJson } from "@/lib/json";
-import { withTenantContext } from "@/lib/tenant-db";
+import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
 
 /**
  * Lightweight workflow engine.
@@ -176,7 +176,7 @@ async function applyAction(
       // recipient's, and reusing the ambient transaction would keep the
       // identity that was refused.
       await withTenantContext(
-        { workspaceIds: [input.workspaceId], userId: recipientId },
+        { workspaceIds: [input.workspaceId], userId: recipientId , restrictedWorkspaceIds: NO_RECORD_READS},
         (tx) =>
           tx.notification.create({
             data: {
