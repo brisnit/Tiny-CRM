@@ -240,12 +240,12 @@ describe("adversarial: the new controls", () => {
       const { searchEverything } = await import("../../src/lib/data/search");
       const { archiveContact } = await import("../../src/lib/actions/contacts");
 
-      const before = await searchEverything({ workspaceIds: [A.workspaceId], userId: A.ownerId }, "Confidential");
+      const before = await searchEverything({ workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] }, "Confidential");
       assert.ok(before.length > 0, "nothing to archive for this test");
 
       await asA(() => archiveContact(A.contactId));
 
-      const after = await searchEverything({ workspaceIds: [A.workspaceId], userId: A.ownerId }, "Confidential");
+      const after = await searchEverything({ workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] }, "Confidential");
       assert.ok(
         !after.some((hit) => hit.id === A.contactId),
         "an archived contact was still returned by search",
@@ -263,7 +263,7 @@ describe("adversarial: the new controls", () => {
 
       const snapshot = await buildWorkspaceSnapshot({
         workspaceIds: [A.workspaceId],
-        userId: A.ownerId,
+        userId: A.ownerId, restrictedWorkspaceIds: [],
         workspaceNames: new Map([[A.workspaceId, "Pass2Alpha"]]),
       });
       assert.ok(
@@ -294,7 +294,7 @@ describe("adversarial: the new controls", () => {
       const { listTrash } = await import("../../src/lib/data/trash");
       await db.contact.update({ where: { id: B.contactId }, data: { archivedAt: new Date() } });
 
-      const trash = await listTrash({ workspaceIds: [A.workspaceId], userId: A.ownerId });
+      const trash = await listTrash({ workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] });
       assert.ok(
         !trash.items.some((item) => item.id === B.contactId),
         "trash listed another tenant's archived record",

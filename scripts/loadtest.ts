@@ -163,7 +163,7 @@ async function main() {
   console.log(`Built in ${((Date.now() - t0) / 1000).toFixed(1)}s\n`);
 
   const ids = [ws.id];
-  const read = { workspaceIds: ids, userId: user.id };
+  const read = { workspaceIds: ids, userId: user.id, restrictedWorkspaceIds: [] };
   const scope = { ...read, workspaceNames: new Map([[ws.id, "Scale Test"]]) };
 
   const time = async (name: string, fn: () => Promise<unknown>) => {

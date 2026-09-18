@@ -52,7 +52,7 @@ describe("AI failures degrade instead of breaking the page", () => {
       const actor = await requireActor();
       await getRecordSummary(
         actor,
-        { workspaceIds: [t.workspaceId], userId: t.ownerId, workspaceNames: new Map([[t.workspaceId, "AiBoundary"]]) },
+        { workspaceIds: [t.workspaceId], userId: t.ownerId, restrictedWorkspaceIds: [], workspaceNames: new Map([[t.workspaceId, "AiBoundary"]]) },
         "deal",
         t.dealId,
         { workspaceId: t.workspaceId, force: true },
@@ -86,7 +86,7 @@ describe("AI failures degrade instead of breaking the page", () => {
       const actor = await requireActor();
       return getRecordSummary(
         actor,
-        { workspaceIds: [t.workspaceId], userId: t.ownerId, workspaceNames: new Map([[t.workspaceId, "AiBoundary"]]) },
+        { workspaceIds: [t.workspaceId], userId: t.ownerId, restrictedWorkspaceIds: [], workspaceNames: new Map([[t.workspaceId, "AiBoundary"]]) },
         "deal",
         t.dealId,
         { workspaceId: t.workspaceId, force: true },
@@ -109,7 +109,7 @@ describe("AI failures degrade instead of breaking the page", () => {
       const actor = await requireActor();
       return getDailyBrief(
         actor,
-        { workspaceIds: [t.workspaceId], userId: t.ownerId, workspaceNames: new Map([[t.workspaceId, "AiBoundary"]]) },
+        { workspaceIds: [t.workspaceId], userId: t.ownerId, restrictedWorkspaceIds: [], workspaceNames: new Map([[t.workspaceId, "AiBoundary"]]) },
         { force: true },
       );
     });
@@ -185,7 +185,7 @@ describe("the daily brief still belongs to the person who asked for it", () => {
 
     const scope = {
       workspaceIds: [B.workspaceId],
-      userId: B.ownerId,
+      userId: B.ownerId, restrictedWorkspaceIds: [],
       workspaceNames: new Map([[B.workspaceId, "AiBrief2"]]),
     };
 

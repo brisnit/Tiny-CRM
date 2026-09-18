@@ -41,7 +41,7 @@ before(async () => {
 
   // Written the way the application writes them: as the owner, in the owner's
   // own tenant context, through the restricted client.
-  await withTenantContext({ workspaceIds: [A.workspaceId], userId: A.ownerId }, async () => {
+  await withTenantContext({ workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] }, async () => {
     const brief = await db.aiInsight.create({
       data: {
         workspaceId: A.workspaceId,
@@ -79,12 +79,12 @@ before(async () => {
 
 /** Runs a read as the other member of the same workspace. */
 function asOtherMember<T>(fn: () => Promise<T>): Promise<T> {
-  return withTenantContext({ workspaceIds: [A.workspaceId], userId: A.memberId }, fn);
+  return withTenantContext({ workspaceIds: [A.workspaceId], userId: A.memberId, restrictedWorkspaceIds: [] }, fn);
 }
 
 /** Runs a read as the person the output belongs to. */
 function asOwner<T>(fn: () => Promise<T>): Promise<T> {
-  return withTenantContext({ workspaceIds: [A.workspaceId], userId: A.ownerId }, fn);
+  return withTenantContext({ workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] }, fn);
 }
 
 describe("a colleague cannot read AI output generated for someone else", () => {
@@ -247,12 +247,12 @@ describe("record summaries stay shared, deliberately", () => {
 
 describe("no identity, no access", () => {
   test("a context with no user reads no person-owned AI output", skip ?? {}, async () => {
-    const seen = await withTenantContext({ workspaceIds: [A.workspaceId], userId: null }, () =>
+    const seen = await withTenantContext({ workspaceIds: [A.workspaceId], userId: null, restrictedWorkspaceIds: [] }, () =>
       db.aiInsight.findMany({ where: { kind: "brief" }, select: { id: true } }),
     );
     assert.deepEqual(seen, [], "briefs were readable with no identity in context");
 
-    const threads = await withTenantContext({ workspaceIds: [A.workspaceId], userId: null }, () =>
+    const threads = await withTenantContext({ workspaceIds: [A.workspaceId], userId: null, restrictedWorkspaceIds: [] }, () =>
       db.aiThread.findMany({ where: { id: ownerThreadId }, select: { id: true } }),
     );
     assert.deepEqual(threads, [], "threads were readable with no identity in context");

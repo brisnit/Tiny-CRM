@@ -384,7 +384,7 @@ describe("row-level security", { skip: enabled ? false : "PostgreSQL with RLS_AP
       const { withTenantContext } = await import("../../src/lib/tenant-db");
 
       const inside = await withTenantContext(
-        { workspaceIds: [A.workspaceId, B.workspaceId], userId: A.ownerId },
+        { workspaceIds: [A.workspaceId, B.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] },
         async (tx) =>
           tx.$queryRaw<{ workspaces: string; user: string }[]>`
             SELECT current_setting('app.workspace_ids', true) AS workspaces,
@@ -403,7 +403,7 @@ describe("row-level security", { skip: enabled ? false : "PostgreSQL with RLS_AP
       const { withTenantContext } = await import("../../src/lib/tenant-db");
 
       await withTenantContext(
-        { workspaceIds: [A.workspaceId], userId: A.ownerId },
+        { workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] },
         async (tx) => tx.$queryRaw`SELECT 1`,
       );
 

@@ -25,7 +25,7 @@ let A: Tenant;
 
 /** Runs a write as the workspace, on both engines, the way the app does. */
 function asWorkspace<T>(tenant: Tenant, fn: () => Promise<T>): Promise<T> {
-  return withTenantContext({ workspaceIds: [tenant.workspaceId], userId: tenant.ownerId }, fn);
+  return withTenantContext({ workspaceIds: [tenant.workspaceId], userId: tenant.ownerId, restrictedWorkspaceIds: [] }, fn);
 }
 
 /** An opportunity pipeline with the stages named in `stages`. */

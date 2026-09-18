@@ -200,7 +200,7 @@ async function main() {
   console.log(`Seeded in ${((performance.now() - seedStart) / 1000).toFixed(1)}s\n`);
 
   const ids = [workspaceId];
-  const read = { workspaceIds: ids, userId };
+  const read = { workspaceIds: ids, userId, restrictedWorkspaceIds: [] };
   const scope = { ...read, workspaceNames: new Map([[workspaceId, "Perf"]]) };
 
   const results: { name: string; ms: number; budget: number; ok: boolean }[] = [];

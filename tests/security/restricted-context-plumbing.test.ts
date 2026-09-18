@@ -130,12 +130,19 @@ describe("a server action carries the caller's restriction", () => {
       updateTask(visibleTask, { opportunityId: invisibleOpportunity }),
     );
 
-    assert.equal(result.ok, false, "a restricted member moved a record onto an anchor they cannot see");
-
     const after = await observer.task.findFirst({
       where: { id: visibleTask },
       select: { opportunityId: true },
     });
+    // Restored before asserting: when this test failed, it failed by actually
+    // moving the record, which then hid it from every test after this one.
+    // A red test should not take the rest of the file with it.
+    await observer.task.update({
+      where: { id: visibleTask },
+      data: { opportunityId: grantedOpportunity },
+    });
+
+    assert.equal(result.ok, false, "a restricted member moved a record onto an anchor they cannot see");
     assert.equal(
       after?.opportunityId,
       grantedOpportunity,

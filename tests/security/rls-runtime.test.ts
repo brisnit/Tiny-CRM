@@ -94,7 +94,7 @@ describe("membership discovery", () => {
   });
 
   test("a user cannot enumerate another user's memberships", skip ?? {}, async () => {
-    const seen = await withTenantContext({ workspaceIds: [], userId: A.ownerId }, async () =>
+    const seen = await withTenantContext({ workspaceIds: [], userId: A.ownerId, restrictedWorkspaceIds: [] }, async () =>
       db.workspaceMember.findMany({ select: { userId: true, workspaceId: true } }),
     );
     assert.ok(seen.length > 0, "the user cannot see their own membership either");
@@ -111,7 +111,7 @@ describe("membership discovery", () => {
   });
 
   test("a user sees only workspaces they belong to", skip ?? {}, async () => {
-    const seen = await withTenantContext({ workspaceIds: [], userId: A.ownerId }, async () =>
+    const seen = await withTenantContext({ workspaceIds: [], userId: A.ownerId, restrictedWorkspaceIds: [] }, async () =>
       db.workspace.findMany({ select: { id: true } }),
     );
     assert.ok(seen.some((w) => w.id === A.workspaceId), "own workspace not visible");
@@ -192,7 +192,7 @@ describe("fresh account onboarding", () => {
 
     const dashboardReads = await runAsTestIdentity(userId, async () => {
       const { getDashboard } = await import("../../src/lib/data/dashboard");
-      return getDashboard({ workspaceIds: [ws.id], userId }, null);
+      return getDashboard({ workspaceIds: [ws.id], userId, restrictedWorkspaceIds: [] }, null);
     });
     assert.ok(dashboardReads, "the dashboard could not read the new workspace");
   });
@@ -227,7 +227,7 @@ describe("fresh account onboarding", () => {
     const id = `c${randomUUID().replace(/-/g, "")}`;
     await assert.rejects(
       () =>
-        withTenantContext({ workspaceIds: [id], userId: A.ownerId }, async () =>
+        withTenantContext({ workspaceIds: [id], userId: A.ownerId, restrictedWorkspaceIds: [] }, async () =>
           db.workspace.create({
             data: { id, name: "Stolen", slug: `stolen-${Date.now()}`, ownerId: B.ownerId },
           }),
@@ -297,7 +297,7 @@ describe("audit logging", () => {
 
   test("an orphaned audit row is still not readable by an unrelated user", skip ?? {}, async () => {
     // Writing it must not have required loosening who can read it.
-    const seen = await withTenantContext({ workspaceIds: [], userId: A.ownerId }, async () =>
+    const seen = await withTenantContext({ workspaceIds: [], userId: A.ownerId, restrictedWorkspaceIds: [] }, async () =>
       db.auditLog.count({ where: { actorEmail: "someone@example.invalid" } }),
     );
     assert.equal(seen, 0, "an unrelated user can read another account's orphaned audit rows");
@@ -305,7 +305,7 @@ describe("audit logging", () => {
 
   test("one tenant cannot read another tenant's audit rows", skip ?? {}, async () => {
     const seen = await withTenantContext(
-      { workspaceIds: [A.workspaceId], userId: A.ownerId },
+      { workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] },
       async () => db.auditLog.findMany({ select: { workspaceId: true } }),
     );
     assert.ok(seen.length > 0, "the tenant cannot read its own audit rows either");
@@ -322,7 +322,7 @@ describe("audit logging", () => {
       () => db.$executeRaw`DELETE FROM "AuditLog"`,
     ]) {
       await assert.rejects(
-        () => withTenantContext({ workspaceIds: [A.workspaceId], userId: A.ownerId }, attempt),
+        () => withTenantContext({ workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] }, attempt),
         /permission denied/i,
         "the application role can rewrite the audit trail",
       );
@@ -404,7 +404,7 @@ describe("pooled tenant context isolation", () => {
       label: string,
     ) => {
       const own = await withTenantContext(
-        { workspaceIds: [tenant.workspaceId], userId: tenant.ownerId },
+        { workspaceIds: [tenant.workspaceId], userId: tenant.ownerId, restrictedWorkspaceIds: [] },
         async () => {
           const mine = await db.contact.count();
           const theirs = await db.contact.count({ where: { workspaceId: other.workspaceId } });
@@ -440,7 +440,7 @@ describe("pooled tenant context isolation", () => {
     // The mechanism is SET LOCAL. If it were a session SET, the next borrower
     // of this connection would inherit the previous tenant's context — the
     // exact cross-tenant leak the mechanism exists to prevent.
-    await withTenantContext({ workspaceIds: [A.workspaceId], userId: A.ownerId }, async () => {
+    await withTenantContext({ workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] }, async () => {
       const [row] = await db.$queryRaw<{ v: string }[]>`
         SELECT current_setting('app.workspace_ids', true) AS v
       `;
@@ -463,7 +463,7 @@ describe("pooled tenant context isolation", () => {
 
   test("a failed transaction does not strand its context", skip ?? {}, async () => {
     await assert.rejects(() =>
-      withTenantContext({ workspaceIds: [A.workspaceId], userId: A.ownerId }, async () => {
+      withTenantContext({ workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] }, async () => {
         await db.contact.count();
         throw new Error("deliberate rollback");
       }),

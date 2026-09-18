@@ -282,13 +282,13 @@ async function main() {
   // Search — through the application's own path, not raw SQL
   // -------------------------------------------------------------------------
   const { searchEverything } = await import("../src/lib/data/search");
-  const lower = await searchEverything({ workspaceIds: [workspaceId], userId }, "alpha");
-  const upper = await searchEverything({ workspaceIds: [workspaceId], userId }, "ALPHA");
+  const lower = await searchEverything({ workspaceIds: [workspaceId], userId, restrictedWorkspaceIds: [] }, "alpha");
+  const upper = await searchEverything({ workspaceIds: [workspaceId], userId, restrictedWorkspaceIds: [] }, "ALPHA");
   record("search", "app search is case-insensitive", lower.length > 0 && lower.length === upper.length);
   record("search", "app search hit count for 'alpha'", lower.length);
 
   const { listContacts } = await import("../src/lib/data/contacts");
-  const listed = await listContacts({ workspaceIds: [workspaceId], userId }, { q: "beta" });
+  const listed = await listContacts({ workspaceIds: [workspaceId], userId, restrictedWorkspaceIds: [] }, { q: "beta" });
   record("search", "list filter is case-insensitive", listed.contacts.length === 1);
 
   // -------------------------------------------------------------------------
