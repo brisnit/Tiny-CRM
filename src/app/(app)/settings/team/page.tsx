@@ -1,7 +1,7 @@
 import { Panel, PanelHeader } from "@/components/ui/surface";
 import { EmptyState } from "@/components/ui/empty-state";
 import { TeamManager } from "@/components/app/team-manager";
-import { requireActor } from "@/lib/auth/access";
+import { requireActor, restrictedIdsFor } from "@/lib/auth/access";
 import { can } from "@/lib/auth/permissions";
 import { db } from "@/lib/db";
 import { invitationStatus } from "@/lib/auth/invitations";
@@ -39,7 +39,7 @@ export default async function TeamSettings() {
   const workspaceId = membership.id;
   const manages = can(membership.role, "members:manage");
 
-  const [workspace, invitations] = await scopedRead({ workspaceIds: [workspaceId], userId: actor.identity.id }, async () => {
+  const [workspace, invitations] = await scopedRead({ workspaceIds: [workspaceId], userId: actor.identity.id, restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [workspaceId]) }, async () => {
     return Promise.all([
       db.workspace.findFirst({
         where: { id: workspaceId },

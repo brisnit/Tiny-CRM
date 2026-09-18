@@ -22,7 +22,7 @@ import { RecordNotes } from "@/components/app/record-notes";
 import { TaskRow } from "@/components/app/task-row";
 import { RecordHeaderActions } from "@/components/app/record-edit";
 import { StageSelector } from "@/components/app/stage-selector";
-import { requireActor, resolveReadScope } from "@/lib/auth/access";
+import { requireActor, resolveReadScope, restrictedIdsFor } from "@/lib/auth/access";
 import { can } from "@/lib/auth/permissions";
 import { readScope } from "@/lib/scope";
 import { getOpportunity } from "@/lib/data/opportunities";
@@ -61,7 +61,7 @@ export default async function OpportunityPage({ params }: PageProps<"/opportunit
     { workspaceId: opportunity.workspaceId },
   );
 
-  const editContext = await getEditContext(actor, { workspaceIds: [opportunity.workspaceId], userId: actor.identity.id });
+  const editContext = await getEditContext(actor, { workspaceIds: [opportunity.workspaceId], userId: actor.identity.id, restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [opportunity.workspaceId]) });
 
   const deadline = describeDateOnlyDeadline(opportunity.deadlineAt);
   const life = describeOpportunityLifecycle(opportunity);

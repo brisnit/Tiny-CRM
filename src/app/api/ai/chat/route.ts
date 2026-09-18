@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { getActor, resolveReadScope } from "@/lib/auth/access";
+import { getActor, resolveReadScope, restrictedIdsFor } from "@/lib/auth/access";
 import { can } from "@/lib/auth/permissions";
 import { askTinyAi, ensureThread } from "@/lib/ai/crm-agent";
 import { requireFlag } from "@/lib/flags";
@@ -85,6 +85,7 @@ export async function POST(request: Request) {
       const scope = {
         workspaceIds: readable,
         userId: actor.identity.id,
+    restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, readable),
         workspaceNames: new Map(memberships.map((m) => [m.id, m.name])),
       };
 

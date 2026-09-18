@@ -18,7 +18,7 @@ import { AskAiButton } from "@/components/app/ask-ai-button";
 import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
 import { RecordHeaderActions } from "@/components/app/record-edit";
-import { requireActor, resolveReadScope } from "@/lib/auth/access";
+import { requireActor, resolveReadScope, restrictedIdsFor } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getCompany } from "@/lib/data/companies";
 import { getEditContext } from "@/lib/data/shell";
@@ -54,7 +54,7 @@ export default async function CompanyPage({ params }: PageProps<"/companies/[id]
     { workspaceId: company.workspaceId },
   );
 
-  const editContext = await getEditContext(actor, { workspaceIds: [company.workspaceId], userId: actor.identity.id });
+  const editContext = await getEditContext(actor, { workspaceIds: [company.workspaceId], userId: actor.identity.id, restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [company.workspaceId]) });
 
   return (
     <PageShell wide>

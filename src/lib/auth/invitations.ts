@@ -5,7 +5,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { rootDb } from "@/lib/db";
 import { isPostgres } from "@/lib/env";
 import { log } from "@/lib/logger";
-import { withTenantContext } from "@/lib/tenant-db";
+import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
 import type { Prisma } from "@/generated/prisma/client";
 
 /**
@@ -111,7 +111,7 @@ export async function issueInvitation(input: IssueInput): Promise<IssuedInvitati
   const expiresAt = new Date(Date.now() + INVITATION_LIFETIME_MS);
 
   const created = await withTenantContext(
-    { workspaceIds: [input.workspaceId], userId: input.invitedById },
+    { workspaceIds: [input.workspaceId], userId: input.invitedById, restrictedWorkspaceIds: NO_RECORD_READS },
     async (tx) => {
       // Supersede first, in the same transaction. Two people inviting the same
       // address at once therefore leave exactly one live invitation.
@@ -277,7 +277,7 @@ export async function acceptInvitationById(
   // `invitation_addressed_to_me` needs `app.user_id` and nothing else, so an
   // empty workspace context is exactly right here: it proves who is asking
   // without claiming membership of anything.
-  const row = await withTenantContext({ workspaceIds: [], userId: user.id }, (tx) =>
+  const row = await withTenantContext({ workspaceIds: [], userId: user.id, restrictedWorkspaceIds: NO_RECORD_READS }, (tx) =>
     tx.workspaceInvitation.findUnique({
       where: { id: invitationId },
       select: {
@@ -337,7 +337,7 @@ async function grantMembership(
   }
 
   return withTenantContext(
-    { workspaceIds: [invitation.workspaceId], userId: user.id },
+    { workspaceIds: [invitation.workspaceId], userId: user.id, restrictedWorkspaceIds: NO_RECORD_READS },
     async (tx) => {
       const existing = await tx.workspaceMember.findFirst({
         where: { workspaceId: invitation.workspaceId, userId: user.id },
@@ -433,7 +433,7 @@ export async function pendingInvitationsFor(user: { id: string; email: string })
   // and by nothing at all on SQLite. Taking the id and the address together
   // makes the mismatch unrepresentable, and the policy stays as the second
   // layer rather than the only one.
-  const rows = await withTenantContext({ workspaceIds: [], userId: user.id }, (tx) =>
+  const rows = await withTenantContext({ workspaceIds: [], userId: user.id, restrictedWorkspaceIds: NO_RECORD_READS }, (tx) =>
     tx.workspaceInvitation.findMany({
     where: {
       email: normaliseEmail(user.email),

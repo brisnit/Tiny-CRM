@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { db, currentTenantClient } from "@/lib/db";
-import { withTenantContext } from "@/lib/tenant-db";
+import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
 import { currentContext, log, redact } from "@/lib/logger";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -119,9 +119,15 @@ export async function recordAudit(
     if (tx || currentTenantClient()) {
       await write();
     } else if (entry.workspaceId) {
-      await withTenantContext({ workspaceIds: [entry.workspaceId], userId: entry.actorId ?? null }, write);
+      await withTenantContext(
+        { workspaceIds: [entry.workspaceId], userId: entry.actorId ?? null, restrictedWorkspaceIds: NO_RECORD_READS },
+        write,
+      );
     } else {
-      await withTenantContext({ workspaceIds: [], userId: entry.actorId ?? null }, write);
+      await withTenantContext(
+        { workspaceIds: [], userId: entry.actorId ?? null, restrictedWorkspaceIds: NO_RECORD_READS },
+        write,
+      );
     }
   } catch (error) {
     // Best-effort by design, and that judgement is now explicit rather than

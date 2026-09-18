@@ -17,7 +17,7 @@ import { AskAiButton } from "@/components/app/ask-ai-button";
 import { RelatedList } from "@/components/app/related-list";
 import { TaskRow } from "@/components/app/task-row";
 import { RecordHeaderActions } from "@/components/app/record-edit";
-import { requireActor, resolveReadScope } from "@/lib/auth/access";
+import { requireActor, resolveReadScope, restrictedIdsFor } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { getContact } from "@/lib/data/contacts";
 import { getEditContext } from "@/lib/data/shell";
@@ -51,7 +51,7 @@ export default async function ContactPage({ params }: PageProps<"/contacts/[id]"
     { workspaceId: contact.workspaceId },
   );
 
-  const editContext = await getEditContext(actor, { workspaceIds: [contact.workspaceId], userId: actor.identity.id });
+  const editContext = await getEditContext(actor, { workspaceIds: [contact.workspaceId], userId: actor.identity.id, restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [contact.workspaceId]) });
 
   const openDeals = contact.deals.filter((d) => d.deal.stage.kind === "open");
   const since = daysSince(contact.lastContactedAt);

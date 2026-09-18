@@ -7,6 +7,7 @@ import { db, rootDb } from "@/lib/db";
 import { log, newRequestId, runWithContext } from "@/lib/logger";
 import { raiseAlert } from "@/lib/security/alerts";
 import type { DomainEventName } from "@/lib/events";
+import { NO_RECORD_READS } from "@/lib/tenant-db";
 
 /**
  * The job runner.
@@ -173,7 +174,7 @@ async function runOne(job: ClaimedJob): Promise<"processed" | "failed" | "dead">
   // has already committed, and reusing that closed transaction fails outright.
   // A job is its own unit of work and always gets its own.
   return withTenantContext(
-    { workspaceIds: [job.workspaceId], userId: job.actorId },
+    { workspaceIds: [job.workspaceId], userId: job.actorId , restrictedWorkspaceIds: NO_RECORD_READS},
     () => runOneInContext(job, requestId, started),
     { isolated: true },
   );
@@ -204,7 +205,7 @@ async function runOneInContext(
       // workspace, so a background job is subject to the same isolation as a
       // request — including if the handler forgets to filter.
       await withTenantContext(
-        { workspaceIds: [job.workspaceId], userId: job.actorId },
+        { workspaceIds: [job.workspaceId], userId: job.actorId , restrictedWorkspaceIds: NO_RECORD_READS},
         async () =>
           handler({
             id: job.id,

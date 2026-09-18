@@ -3,7 +3,7 @@ import "server-only";
 import { db, currentTenantClient, runDetached } from "@/lib/db";
 import { env } from "@/lib/env";
 import { log, redact } from "@/lib/logger";
-import { withTenantContext } from "@/lib/tenant-db";
+import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
 
 /**
  * Security alerting.
@@ -170,6 +170,8 @@ export async function raiseAlert(input: AlertInput): Promise<void> {
           {
             workspaceIds: input.workspaceId ? [input.workspaceId] : [],
             userId: input.userId ?? null,
+            // Workspace machinery: nothing here reads a record.
+            restrictedWorkspaceIds: NO_RECORD_READS,
           },
           fn,
         );
@@ -245,7 +247,7 @@ function deliveryScoped<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   return withTenantContext(
-    { workspaceIds: scope.workspaceId ? [scope.workspaceId] : [], userId: scope.userId },
+    { workspaceIds: scope.workspaceId ? [scope.workspaceId] : [], userId: scope.userId , restrictedWorkspaceIds: NO_RECORD_READS},
     fn,
   );
 }

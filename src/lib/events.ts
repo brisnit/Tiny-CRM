@@ -1,7 +1,7 @@
 import "server-only";
 
 import { db, currentTenantClient, runDetached } from "@/lib/db";
-import { withTenantContext } from "@/lib/tenant-db";
+import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
 import { log } from "@/lib/logger";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -83,7 +83,9 @@ export async function emitEvent(
   // never be the thing that fails for want of a context it could have derived.
   if (tx || currentTenantClient()) return write();
   return withTenantContext(
-    { workspaceIds: [input.workspaceId], userId: input.actorId ?? null },
+    // DomainEvent is outside record scope; this context exists for the
+    // workspace policy alone.
+    { workspaceIds: [input.workspaceId], userId: input.actorId ?? null, restrictedWorkspaceIds: NO_RECORD_READS },
     write,
   );
 }

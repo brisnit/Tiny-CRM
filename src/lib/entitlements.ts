@@ -79,7 +79,15 @@ export async function getPlanUsage(actor: Actor | WorkspaceActor): Promise<Recor
   // in, hence `isolated`. Without a context at all these counts came back zero
   // under RLS and the limits stopped being enforced entirely, which is the
   // wrong direction for a check whose job is to say no.
-  return withTenantContext({ workspaceIds, userId: actor.identity.id }, async () => {
+  // The one context that reads records and is still unrestricted, deliberately.
+  // Plan usage is a property of the workspace, not a view of it: counting only
+  // what a restricted member can see would under-report and quietly stop
+  // enforcing the limit — a check whose job is to say no would start saying
+  // yes. Deliberately NOT NO_RECORD_READS, which claims the opposite; these
+  // rows are counted, never returned.
+  return withTenantContext(
+    { workspaceIds, userId: actor.identity.id, restrictedWorkspaceIds: [] },
+    async () => {
   const [contacts, companies, deals, projects, opportunities, tasks, automations, savedViews, customFields, ai] =
     await Promise.all([
       db.contact.count({ where: { ...where, archivedAt: null } }),
