@@ -13,8 +13,7 @@ import { recordAudit, type AuditEntry } from "@/lib/audit";
 import { emitEvent } from "@/lib/events";
 import {
   requireActor, requireRecordAccess, requireWorkspaceAccess,
-  type Actor, type ScopedModel, type WorkspaceActor,
-} from "@/lib/auth/access";
+  type Actor, type ScopedModel, type WorkspaceActor, restrictedIdsFor } from "@/lib/auth/access";
 import type { Permission } from "@/lib/auth/permissions";
 import { PlanLimitError } from "@/lib/plans";
 import type { Prisma } from "@/generated/prisma/client";
@@ -90,7 +89,15 @@ export async function action<T>(
     // exactly what the application already authorised — a second layer over the
     // same decision, not a different one.
     return withTenantContext(
-      { workspaceIds: actor.memberships.map((m) => m.id), userId: actor.identity.id },
+      {
+        workspaceIds: actor.memberships.map((m) => m.id),
+        userId: actor.identity.id,
+        // From the actor's own memberships, never from the request.
+        restrictedWorkspaceIds: restrictedIdsFor(
+          actor.memberships,
+          actor.memberships.map((m) => m.id),
+        ),
+      },
       () => handler(actor),
     );
   });
@@ -115,7 +122,11 @@ export async function workspaceAction<T>(
     }
     // Exactly one workspace — membership and permission were proven above.
     return withTenantContext(
-      { workspaceIds: [actor.workspaceId], userId: actor.identity.id },
+      {
+        workspaceIds: [actor.workspaceId],
+        userId: actor.identity.id,
+        restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [actor.workspaceId]),
+      },
       () => handler(actor),
     );
   });
@@ -146,7 +157,11 @@ export async function recordAction<T>(
       await enforceRateLimit(options.rateLimit, { user: actor.identity.id, workspace: workspaceId });
     }
     return withTenantContext(
-      { workspaceIds: [workspaceId], userId: actor.identity.id },
+      {
+        workspaceIds: [workspaceId],
+        userId: actor.identity.id,
+        restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [workspaceId]),
+      },
       () => handler({ actor, workspaceId, recordId }),
     );
   });

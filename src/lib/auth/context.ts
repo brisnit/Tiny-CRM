@@ -9,7 +9,7 @@ import { isProduction, isTest } from "@/lib/env";
 import { enrichContext } from "@/lib/logger";
 import { unauthorized } from "@/lib/errors";
 import type { Role } from "@/lib/auth/permissions";
-import { withTenantContext } from "@/lib/tenant-db";
+import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
 
 /**
  * The authentication boundary.
@@ -168,7 +168,11 @@ export const getMemberships = cache(async (userId: string): Promise<WorkspaceMem
   // exactly what prisma/postgres/005_identity_policies.sql permits: a user may
   // always read their own membership rows and the workspaces those rows name.
   // Nothing else is visible from here.
-  const rows = await withTenantContext({ workspaceIds: [], userId }, async () =>
+  // No workspaces in context and none to restrict: this is the lookup that
+  // *derives* memberships, so it cannot consult them without circling.
+  const rows = await withTenantContext(
+    { workspaceIds: [], userId, restrictedWorkspaceIds: NO_RECORD_READS },
+    async () =>
     db.workspaceMember.findMany({
       where: { userId, workspace: { archivedAt: null } },
       select: {

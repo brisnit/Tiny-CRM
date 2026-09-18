@@ -128,12 +128,12 @@ export type ReadScope = {
   workspaceIds: string[];
   userId: string;
   /**
-   * The subset of `workspaceIds` in which this person is restricted to granted
-   * records. Empty for everyone today, and read by nothing — it travels with
-   * the scope so that enforcing it later is a change to policies rather than a
-   * change to every read in the application.
+   * The subset of `workspaceIds` in which this person is confined to records
+   * they were granted. Required, not optional: a scope that forgot to say
+   * would read as unrestricted, which is the failure this type exists to make
+   * impossible.
    */
-  restrictedWorkspaceIds?: string[];
+  restrictedWorkspaceIds: string[];
 };
 
 /**
@@ -151,8 +151,7 @@ export async function resolveReadScope(
   const ids = actor.memberships.map((m) => m.id);
   const userId = actor.identity.id;
 
-  const restrictedIn = (within: string[]) =>
-    actor.memberships.filter((m) => m.scopeMode === "restricted" && within.includes(m.id)).map((m) => m.id);
+  const restrictedIn = (within: string[]) => restrictedIdsFor(actor.memberships, within);
 
   if (!scope || scope === "all" || !ids.includes(scope)) {
     return {
@@ -187,6 +186,23 @@ export async function resolveReadScope(
  * quietly becomes the rule — if someone is meant to start new pursuits, they
  * are not restricted, and the honest way to say so is their scope.
  */
+/**
+ * Which of these workspaces confine this person to granted records.
+ *
+ * The single derivation. It reads the actor's own memberships — never a
+ * request — so a caller cannot widen their scope by asking, and every context
+ * builder in the application gets its answer from here rather than deciding
+ * for itself.
+ */
+export function restrictedIdsFor(
+  memberships: readonly { id: string; scopeMode: string }[],
+  within: readonly string[],
+): string[] {
+  return memberships
+    .filter((m) => m.scopeMode === "restricted" && within.includes(m.id))
+    .map((m) => m.id);
+}
+
 export function mayCreateAnchor(membership: { role: string; scopeMode: string }): boolean {
   return can(membership.role, "anchor:create") && membership.scopeMode === "workspace";
 }
@@ -241,7 +257,11 @@ export async function requireRecordAccess<T extends ScopedModel>(
   // context this read returned nothing for every record, and every member
   // operation failed with "not found".
   const record = await withTenantContext(
-    { workspaceIds: allowed, userId: actor.identity.id },
+    {
+      workspaceIds: allowed,
+      userId: actor.identity.id,
+      restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, allowed),
+    },
     async () =>
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (db as any)[model].findFirst({
