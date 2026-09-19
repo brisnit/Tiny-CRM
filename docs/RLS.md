@@ -354,6 +354,7 @@ psql "$DATABASE_URL" -f prisma/postgres/003_deferrable_constraints.sql
       psql "$DATABASE_URL" -f prisma/postgres/008_person_scoped_ai_output.sql
       psql "$DATABASE_URL" -f prisma/postgres/009_record_grants.sql
       psql "$DATABASE_URL" -f prisma/postgres/010_record_scope.sql
+      psql "$DATABASE_URL" -f prisma/postgres/011_contact_company_scope.sql
 
 # The migration creates tinycrm_app with NOLOGIN and no password on purpose:
 # a credential in a migration file is a credential in version control.
