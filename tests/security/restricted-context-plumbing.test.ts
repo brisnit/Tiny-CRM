@@ -1,7 +1,7 @@
 import { test, describe, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { createTenant, cleanupTenants, db as observer, type Tenant } from "../helpers/fixtures";
+import { createTenant, cleanupTenants, db as observer, type Tenant, membershipIdFor } from "../helpers/fixtures";
 import { runAsTestIdentity } from "../../src/lib/auth/context";
 import { resetRateLimit } from "../../src/lib/rate-limit";
 import { isPostgres } from "../../src/lib/env";
@@ -71,6 +71,7 @@ before(async () => {
     data: {
       workspaceId: A.workspaceId,
       userId: A.memberId,
+      membershipId: await membershipIdFor(A.workspaceId, A.memberId),
       anchorType: "opportunity",
       anchorId: grantedOpportunity,
       grantedById: A.ownerId,

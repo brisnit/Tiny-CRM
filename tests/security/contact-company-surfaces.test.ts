@@ -1,7 +1,7 @@
 import { test, describe, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { createTenant, cleanupTenants, db as observer, type Tenant } from "../helpers/fixtures";
+import { createTenant, cleanupTenants, db as observer, type Tenant, membershipIdFor } from "../helpers/fixtures";
 import { runAsTestIdentity } from "../../src/lib/auth/context";
 import { resetRateLimit } from "../../src/lib/rate-limit";
 import { isPostgres } from "../../src/lib/env";
@@ -114,8 +114,8 @@ before(async () => {
   });
   await observer.recordGrant.createMany({
     data: [
-      { workspaceId: ws, userId: A.memberId, anchorType: "opportunity", anchorId: id.grantedOpp, grantedById: A.ownerId },
-      { workspaceId: ws, userId: A.viewerId, anchorType: "opportunity", anchorId: id.grantedOpp, grantedById: A.ownerId },
+      { workspaceId: ws, userId: A.memberId, membershipId: await membershipIdFor(ws, A.memberId), anchorType: "opportunity", anchorId: id.grantedOpp, grantedById: A.ownerId },
+      { workspaceId: ws, userId: A.viewerId, membershipId: await membershipIdFor(ws, A.viewerId), anchorType: "opportunity", anchorId: id.grantedOpp, grantedById: A.ownerId },
     ],
   });
 });

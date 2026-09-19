@@ -262,6 +262,23 @@ export async function cleanupTenants(tenants: Tenant[]) {
   }
 }
 
+/**
+ * The membership row id for one person in one workspace.
+ *
+ * A grant names the membership as well as the person, so a fixture building one
+ * by hand has to resolve it — the composite foreign key refuses a row whose
+ * three identity columns do not describe the same membership, which is the
+ * whole reason that column exists.
+ */
+export async function membershipIdFor(workspaceId: string, userId: string): Promise<string> {
+  const row = await db.workspaceMember.findFirst({
+    where: { workspaceId, userId },
+    select: { id: true },
+  });
+  if (!row) throw new Error(`no membership for user ${userId} in workspace ${workspaceId}`);
+  return row.id;
+}
+
 /** Asserts a server action refused, and reports the category it refused with. */
 export function expectRefused(
   result: { ok: boolean; error?: string; category?: string },

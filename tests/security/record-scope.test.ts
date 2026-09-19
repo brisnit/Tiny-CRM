@@ -1,7 +1,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-import { createTenant, cleanupTenants, db as observer, type Tenant } from "../helpers/fixtures";
+import { createTenant, cleanupTenants, db as observer, type Tenant, membershipIdFor } from "../helpers/fixtures";
 import { db } from "../../src/lib/db";
 import { withTenantContext } from "../../src/lib/tenant-db";
 import { runAsTestIdentity } from "../../src/lib/auth/context";
@@ -267,13 +267,14 @@ before(async () => {
     where: { workspaceId: ws, userId: A.memberId },
     data: { scopeMode: "restricted" },
   });
+  const memberMembership = await membershipIdFor(ws, A.memberId);
   await observer.recordGrant.createMany({
     data: [
-      { workspaceId: ws, userId: A.memberId, anchorType: "opportunity", anchorId: id.grantedOpp, grantedById: A.ownerId },
-      { workspaceId: ws, userId: A.memberId, anchorType: "project", anchorId: id.grantedProject, grantedById: A.ownerId },
+      { workspaceId: ws, userId: A.memberId, membershipId: memberMembership, anchorType: "opportunity", anchorId: id.grantedOpp, grantedById: A.ownerId },
+      { workspaceId: ws, userId: A.memberId, membershipId: memberMembership, anchorType: "project", anchorId: id.grantedProject, grantedById: A.ownerId },
       // A grant in THIS workspace naming another workspace's opportunity. It
       // must unlock nothing: a grant is not a capability that travels.
-      { workspaceId: ws, userId: A.memberId, anchorType: "opportunity", anchorId: id.foreignOpportunity, grantedById: A.ownerId },
+      { workspaceId: ws, userId: A.memberId, membershipId: memberMembership, anchorType: "opportunity", anchorId: id.foreignOpportunity, grantedById: A.ownerId },
     ],
   });
 });
@@ -480,7 +481,10 @@ describe("revocation takes effect immediately", () => {
 
     const grant = await observer.recordGrant.findFirst({
       where: { workspaceId: A.workspaceId, userId: A.memberId, anchorType: "opportunity", anchorId: id.grantedOpp },
-      select: { id: true, workspaceId: true, userId: true, anchorType: true, anchorId: true, grantedById: true },
+      select: {
+        id: true, workspaceId: true, userId: true, membershipId: true,
+        anchorType: true, anchorId: true, grantedById: true,
+      },
     });
     assert.ok(grant, "the grant is missing");
     await observer.recordGrant.delete({ where: { id: grant.id } });
@@ -493,6 +497,7 @@ describe("revocation takes effect immediately", () => {
         data: {
           workspaceId: grant.workspaceId,
           userId: grant.userId,
+          membershipId: grant.membershipId,
           anchorType: grant.anchorType,
           anchorId: grant.anchorId,
           grantedById: grant.grantedById,

@@ -336,6 +336,13 @@ export async function deleteOpportunity(
         });
         assertConfirmation(confirmation, opportunity.name);
 
+        // Nobody keeps access to a record that no longer exists. The grant's
+        // anchor is a polymorphic id with no foreign key to follow — that is what
+        // lets one column name either kind — so the cleanup is explicit here, in
+        // the same unit of work as the deletion that causes it.
+        await db.recordGrant.deleteMany({
+          where: { workspaceId, anchorType: "opportunity", anchorId: recordId },
+        });
         await db.opportunity.delete({ where: { id: recordId } });
 
         await audit(actor, {

@@ -8,7 +8,10 @@ import {
   revalidatePathSafely, revalidateRecord, transaction, workspaceAction,
   type ActionResult,
 } from "@/lib/actions/base";
-import { assertCanAssignRole, requireRole } from "@/lib/auth/access";
+import { assertCanAssignRole, assertUnrestrictedActor, requireRole } from "@/lib/auth/access";
+import { resolveAnchors } from "@/lib/auth/anchors";
+import { lockMembership } from "@/lib/auth/membership";
+import { dedupeScope, scopeListSchema, scopeModeError, scopeModeSchema } from "@/lib/validation/scope";
 import { ROLES } from "@/lib/auth/permissions";
 import { assertWithinLimit } from "@/lib/entitlements";
 import { assertConfirmation } from "@/lib/destructive";
@@ -382,6 +385,132 @@ const memberRoleSchema = z.object({
   role: z.enum(ROLES),
 });
 
+const memberScopeSchema = z
+  .object({
+    workspaceId: zId,
+    userId: zId,
+    scopeMode: scopeModeSchema,
+    anchors: scopeListSchema.default([]),
+  })
+  .superRefine((value, ctx) => {
+    const problem = scopeModeError(value.scopeMode, value.anchors);
+    if (problem) ctx.addIssue({ code: "custom", message: problem, path: ["anchors"] });
+  });
+
+/**
+ * Sets what one member can reach, whole.
+ *
+ * Every transition goes through here and every one is a replacement, because
+ * the alternative — an action that sometimes adds and sometimes replaces
+ * depending on what it finds — is the kind of ambiguity that produces an access
+ * level nobody chose. "Their access is now exactly this" is the only thing this
+ * says. Adding or removing one record is `grantRecordAccess` /
+ * `revokeRecordAccess`, which are deliberately separate verbs.
+ *
+ * The three transitions, and what each does to the grant table:
+ *
+ *   workspace  -> restricted   replace any rows with exactly the anchors given
+ *   restricted -> restricted   replace with exactly the anchors given
+ *   restricted -> workspace    delete every row
+ *
+ * The last one matters most. A dormant grant set that survives a return to full
+ * access is a set that silently reapplies the next time somebody is restricted
+ * — the same shape of bug as grants outliving a membership. Access that is not
+ * in force does not exist.
+ *
+ * Two rules are not about scope at all and are enforced here anyway:
+ *
+ *   - **Nobody changes their own scope.** A restricted admin holds
+ *     `members:manage`; without this they could simply lift their own
+ *     restriction, and the boundary would be advisory. Stated as "not
+ *     yourself" rather than as a role rule, because it is true for every role.
+ *   - **Owners are never restricted.** An owner can delete the workspace and
+ *     pay for it; confining them to three opportunities describes nothing real.
+ */
+export async function setMemberScope(
+  input: z.input<typeof memberScopeSchema>,
+): Promise<ActionResult<{ userId: string; scopeMode: string; anchors: number }>> {
+  return guard(() =>
+    workspaceAction(
+      { workspaceId: readWorkspaceId(input), permission: "members:manage", rateLimit: "mutation" },
+      async (actor) => {
+        const data = memberScopeSchema.parse(input);
+        const workspaceId = actor.workspaceId;
+        assertUnrestrictedActor(actor, workspaceId);
+
+        if (data.userId === actor.identity.id) {
+          throw new AppError("forbidden", "You cannot change your own level of access.");
+        }
+
+        // Everything below happens after this lock, so two administrators
+        // editing the same person queue rather than interleave.
+        await lockMembership(db, workspaceId, data.userId);
+
+        const target = await db.workspaceMember.findFirst({
+          where: { workspaceId, userId: data.userId },
+          select: { id: true, role: true, scopeMode: true },
+        });
+        if (!target) throw new AppError("not_found", "That person is not in this workspace.");
+
+        if (data.scopeMode === "restricted" && target.role === "owner") {
+          throw new AppError(
+            "conflict",
+            "An owner cannot be limited to particular records.",
+          );
+        }
+
+        const anchors = dedupeScope(data.anchors);
+        if (data.scopeMode === "restricted") {
+          const resolved = await resolveAnchors(db, workspaceId, anchors);
+          if (!resolved.ok) {
+            throw new AppError("not_found", "One of those records is no longer available.");
+          }
+        }
+
+        // Replacement, in one unit of work with the scope change itself. The
+        // member is never visible holding the old grants under the new mode, or
+        // the new grants under the old one.
+        await db.recordGrant.deleteMany({ where: { workspaceId, userId: data.userId } });
+        if (anchors.length > 0) {
+          await db.recordGrant.createMany({
+            data: anchors.map((entry) => ({
+              workspaceId,
+              userId: data.userId,
+              membershipId: target.id,
+              anchorType: entry.entityType,
+              anchorId: entry.entityId,
+              grantedById: actor.identity.id,
+            })),
+          });
+        }
+        await db.workspaceMember.updateMany({
+          where: { workspaceId, userId: data.userId },
+          data: { scopeMode: data.scopeMode },
+        });
+
+        await audit(actor, {
+          workspaceId,
+          action: "member.scope_changed",
+          entityType: "user",
+          entityId: data.userId,
+          summary:
+            data.scopeMode === "restricted"
+              ? `Limited access to ${anchors.length} record(s)`
+              : "Restored access to the entire workspace",
+          metadata: {
+            from: target.scopeMode,
+            to: data.scopeMode,
+            anchors: anchors.map((entry) => `${entry.entityType}:${entry.entityId}`),
+          },
+        });
+
+        revalidateLayout();
+        return { userId: data.userId, scopeMode: data.scopeMode, anchors: anchors.length };
+      },
+    ),
+  );
+}
+
 /**
  * Changes a member's role.
  *
@@ -467,6 +596,14 @@ export async function removeMember(
           }
         }
 
+        // Their grants go with them. The foreign key would cascade this anyway
+        // — that is the backstop, added precisely because an application can
+        // forget — but saying it here keeps the intent readable and keeps the
+        // behaviour identical on SQLite, where the cascade is the same but the
+        // reasoning is easier to lose.
+        await db.recordGrant.deleteMany({
+          where: { workspaceId: scopedWorkspaceId, userId: targetId },
+        });
         await db.workspaceMember.deleteMany({
           where: { workspaceId: scopedWorkspaceId, userId: targetId },
         });

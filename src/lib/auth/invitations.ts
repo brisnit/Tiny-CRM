@@ -6,6 +6,8 @@ import { rootDb } from "@/lib/db";
 import { isPostgres } from "@/lib/env";
 import { log } from "@/lib/logger";
 import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
+import { resolveAnchors, describeAnchors } from "@/lib/auth/anchors";
+import { parseStoredScope, scopeModeError, scopeModeSchema } from "@/lib/validation/scope";
 import type { Prisma } from "@/generated/prisma/client";
 
 /**
@@ -153,6 +155,10 @@ export type InvitationView = {
   email: string;
   role: string;
   scopeMode: string;
+  /// The stored payload, unparsed. Callers parse it themselves rather than
+  /// receiving a shape that has already been decided somewhere else.
+  scope: string;
+  invitedById: string | null;
   invitedByName: string | null;
   expiresAt: Date;
 };
@@ -204,6 +210,8 @@ export async function lookupInvitation(token: string): Promise<InvitationLookup>
         email: true,
         role: true,
         scopeMode: true,
+        scope: true,
+        invitedById: true,
         expiresAt: true,
         acceptedAt: true,
         revokedAt: true,
@@ -227,13 +235,23 @@ export async function lookupInvitation(token: string): Promise<InvitationLookup>
       email: row.email,
       role: row.role,
       scopeMode: row.scopeMode,
+      scope: row.scope,
+      invitedById: row.invitedById,
       invitedByName: row.invitedBy?.name ?? null,
       expiresAt: row.expiresAt,
     },
   };
 }
 
-export type AcceptFailure = InvitationFailure | "email_mismatch" | "already_member";
+export type AcceptFailure =
+  | InvitationFailure
+  | "email_mismatch"
+  | "already_member"
+  /// The invitation is genuine but cannot be honoured as written: its scope is
+  /// unreadable, or names work that is gone, archived, of another kind, or in
+  /// another workspace. Distinct from the others because it is nobody's fault
+  /// and the link is not spent — the invitation stays live for a fixed one.
+  | "unmaterialisable";
 
 export type AcceptResult =
   | { ok: true; workspaceId: string; workspaceName: string; role: string }
@@ -286,6 +304,8 @@ export async function acceptInvitationById(
         email: true,
         role: true,
         scopeMode: true,
+        scope: true,
+        invitedById: true,
         expiresAt: true,
         acceptedAt: true,
         revokedAt: true,
@@ -308,6 +328,8 @@ export async function acceptInvitationById(
       email: row.email,
       role: row.role,
       scopeMode: row.scopeMode,
+      scope: row.scope,
+      invitedById: row.invitedById,
       invitedByName: row.invitedBy?.name ?? null,
       expiresAt: row.expiresAt,
     },
@@ -336,9 +358,58 @@ async function grantMembership(
     return { ok: false, reason: "email_mismatch" };
   }
 
-  return withTenantContext(
-    { workspaceIds: [invitation.workspaceId], userId: user.id, restrictedWorkspaceIds: NO_RECORD_READS },
-    async (tx) => {
+  // Shape before substance: whether the payload is a scope at all, and whether
+  // it agrees with the mode it travels with, can be decided without touching
+  // the database. A payload that fails here grants nothing — an invitation we
+  // cannot read is not a smaller invitation.
+  const mode = scopeModeSchema.safeParse(invitation.scopeMode);
+  if (!mode.success) {
+    log.warn("invitation rejected: unknown scope mode", {
+      invitationId: invitation.id, scopeMode: invitation.scopeMode,
+    });
+    return { ok: false, reason: "unmaterialisable" };
+  }
+  const requested = parseStoredScope(invitation.scope);
+  if (requested === null) {
+    log.warn("invitation rejected: scope payload could not be read", {
+      invitationId: invitation.id,
+    });
+    return { ok: false, reason: "unmaterialisable" };
+  }
+  const mismatch = scopeModeError(mode.data, requested);
+  if (mismatch) {
+    log.warn("invitation rejected: scope disagrees with scope mode", {
+      invitationId: invitation.id, scopeMode: mode.data, anchors: requested.length,
+    });
+    return { ok: false, reason: "unmaterialisable" };
+  }
+
+  // One unit of work on both engines.
+  //
+  // On PostgreSQL `withTenantContext` opens an interactive transaction and
+  // establishes the context the policies read. On SQLite it is a pass-through —
+  // there are no policies to serve — which would leave the membership written
+  // and the grants not, if anything failed between them. The invariant is a
+  // security property, not a PostgreSQL feature, so SQLite gets a real
+  // transaction of its own. Nothing is ambient on this path: acceptance is not
+  // a workspaceAction, so there is no outer transaction to deadlock against.
+  const materialise = async (tx: Prisma.TransactionClient) => {
+      // Anchors are revalidated here, against the live tables, inside the same
+      // transaction that will write the grants. The ids arrived in an
+      // invitation, which is evidence of what was intended and no evidence at
+      // all that the records still exist, still live in this workspace, or are
+      // still of the kind claimed. Anything unresolvable fails the whole
+      // acceptance: see the throw below.
+      const resolved = await resolveAnchors(tx, invitation.workspaceId, requested);
+      if (!resolved.ok) {
+        log.warn("invitation rejected: anchors could not be resolved", {
+          invitationId: invitation.id,
+          workspaceId: invitation.workspaceId,
+          unresolvable: describeAnchors(resolved.unresolvable),
+        });
+        throw new Unmaterialisable();
+      }
+
       const existing = await tx.workspaceMember.findFirst({
         where: { workspaceId: invitation.workspaceId, userId: user.id },
         select: { id: true },
@@ -350,25 +421,39 @@ async function grantMembership(
       // invitation already marked accepted is not live. Claiming first made the
       // database refuse the one write the flow exists to perform, on PostgreSQL
       // only, which is exactly the kind of thing SQLite cannot show you.
-      if (!existing) {
-        await tx.workspaceMember.create({
-          data: {
+      const membership = existing
+        ? existing
+        : await tx.workspaceMember.create({
+            data: {
+              workspaceId: invitation.workspaceId,
+              userId: user.id,
+              role: invitation.role,
+              // Carried from the invitation, not defaulted here. An invitation
+              // that changed meaning between being issued and being accepted is
+              // a security bug, not an inconvenience.
+              scopeMode: mode.data,
+            },
+            select: { id: true },
+          });
+
+      // The grants, in the same transaction as the membership that owns them.
+      //
+      // This is the invariant the whole step exists for: a restricted
+      // membership must never be visible in a partially-materialized state.
+      // Nobody outside this transaction sees the member before their access
+      // does, or one grant of three. Every failure above and below throws, and
+      // a throw takes the membership with it.
+      if (mode.data === "restricted") {
+        await tx.recordGrant.createMany({
+          data: resolved.entries.map((entry) => ({
             workspaceId: invitation.workspaceId,
             userId: user.id,
-            role: invitation.role,
-            // Carried from the invitation, not defaulted here. The schema has
-            // held scopeMode on the invitation since the first migration for
-            // exactly this reason: an invitation that changed meaning between
-            // being issued and being accepted is a security bug, not an
-            // inconvenience. Nothing can issue a restricted invitation today,
-            // so today this always writes "workspace".
-            //
-            // The anchors in invitation.scope become grants when record-level
-            // access is enforced. Until then a restricted invitation would
-            // produce a member who can reach nothing, which is the safe
-            // direction to be wrong in.
-            scopeMode: invitation.scopeMode,
-          },
+            membershipId: membership.id,
+            anchorType: entry.entityType,
+            anchorId: entry.entityId,
+            // Whoever sent the invitation is who gave this access.
+            grantedById: invitation.invitedById ?? null,
+          })),
         });
       }
 
@@ -387,20 +472,51 @@ async function grantMembership(
         workspaceName: invitation.workspaceName,
         role: invitation.role,
       };
-    },
-    // Its own transaction, deliberately. The caller is authenticated but may be
-    // a member of nothing, so an ambient context opened from their memberships
-    // contains no workspace at all — and `withTenantContext` reuses an ambient
-    // transaction rather than re-issuing SET LOCAL inside it. Without this the
-    // membership INSERT would run with an empty `app.workspace_ids` and RLS
-    // would refuse it.
-    { isolated: true },
-  ).catch((error: unknown) => {
+  };
+
+  const attempt = isPostgres
+    ? withTenantContext(
+        {
+          workspaceIds: [invitation.workspaceId],
+          userId: user.id,
+          restrictedWorkspaceIds: NO_RECORD_READS,
+        },
+        materialise,
+        // Its own transaction, deliberately. The caller is authenticated but may
+        // be a member of nothing, so an ambient context opened from their
+        // memberships contains no workspace at all — and `withTenantContext`
+        // reuses an ambient transaction rather than re-issuing SET LOCAL inside
+        // it. Without this the membership INSERT would run with an empty
+        // `app.workspace_ids` and RLS would refuse it.
+        { isolated: true },
+      )
+    : rootDb.$transaction((tx) => materialise(tx as Prisma.TransactionClient));
+
+  return attempt.catch((error: unknown) => {
     if (error instanceof AlreadyAccepted) {
       return { ok: false as const, reason: "already_accepted" as const };
     }
+    if (error instanceof Unmaterialisable) {
+      return { ok: false as const, reason: "unmaterialisable" as const };
+    }
     throw error;
   });
+}
+
+/**
+ * Rolls the transaction back when an invitation cannot be honoured as written.
+ *
+ * Thrown from inside the acceptance transaction so the membership and any
+ * grants written before it are discarded together. The invitation is
+ * deliberately left unclaimed: the person did nothing wrong, and burning their
+ * link would mean an administrator has to reissue one to fix a record that may
+ * simply have been archived.
+ */
+class Unmaterialisable extends Error {
+  constructor() {
+    super("invitation scope cannot be materialised");
+    this.name = "Unmaterialisable";
+  }
 }
 
 /** Rolls the transaction back when a concurrent redemption won the race. */

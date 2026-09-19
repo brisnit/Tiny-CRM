@@ -207,6 +207,25 @@ export function mayCreateAnchor(membership: { role: string; scopeMode: string })
   return can(membership.role, "anchor:create") && membership.scopeMode === "workspace";
 }
 
+/**
+ * Throws if this actor is confined to granted records in this workspace.
+ *
+ * Role and scope are orthogonal, so a restricted admin is a coherent state —
+ * and an admin holds `members:manage`. Without this, the person confined to
+ * three opportunities could hand themselves a fourth, or invite a colleague to
+ * work they were never given. Administering access is a full-workspace act.
+ *
+ * The message says nothing about why, because the two reasons a caller might
+ * hit it — not enough role, wrong scope — should read the same from outside.
+ */
+export function assertUnrestrictedActor(
+  actor: { memberships: readonly { id: string; scopeMode: string }[] },
+  workspaceId: string,
+): void {
+  if (restrictedIdsFor(actor.memberships, [workspaceId]).length === 0) return;
+  throw forbidden("Your access does not allow changing who can see what.");
+}
+
 /** Throws unless this actor may start a new anchor. */
 export function requireAnchorCreate(actor: WorkspaceActor): void {
   if (mayCreateAnchor(actor)) return;
