@@ -294,7 +294,7 @@ describe("a contact is visible only through a connection to granted work", () =>
     const ids = contacts.map((c) => c.id).sort();
     assert.deepEqual(
       ids,
-      [id.contactOnGrantedOpp, id.contactOnGrantedProject].sort(),
+      [id.contactOnGrantedOpp, id.contactOnGrantedProject, id.contactForWrites].sort(),
       "the contacts list is not exactly the people connected to granted work",
     );
   });
@@ -324,7 +324,7 @@ describe("a contact is visible only through a connection to granted work", () =>
   test("the count beside the list does not betray the rest", pgOnly ?? {}, async () => {
     const { listContacts } = await import("../../src/lib/data/contacts");
     const { total } = await listContacts(restrictedScope(), {});
-    assert.equal(total, 2, `the contacts total is ${total}, which counts people the member cannot see`);
+    assert.equal(total, 3, `the contacts total is ${total}, which counts people the member cannot see`);
   });
 });
 
@@ -345,19 +345,26 @@ describe("a visible contact discloses nothing beyond itself", () => {
     assert.equal(seen.owner ?? null, null, "the owning colleague was disclosed");
   });
 
-  test("their other work is not listed through them", pgOnly ?? {}, async () => {
+  test("their other work is not listed through them — already closed by Step 3A", pgOnly ?? {}, async () => {
+    // Investigated rather than assumed. The fixture gives this contact a deal
+    // and a link into a project the member was never granted, and the owner
+    // receives both — so there is genuinely something here to disclose.
+    //
+    // A restricted member receives neither, and not because of anything in
+    // this step: Deal is denied to restricted members outright, DealContact
+    // inherits that through its parent, and ProjectContact is anchor-gated by
+    // 010. This is therefore a regression assertion, not a red test. It fails
+    // the day either of those two rules is weakened.
     const { getContact } = await import("../../src/lib/data/contacts");
+
+    const forOwner = (await getContact(ownerScope(), id.contactOnGrantedOpp)) as Record<string, unknown> | null;
+    assert.equal((forOwner?.deals as unknown[])?.length, 1, "the fixture has no deal to disclose");
+    assert.equal((forOwner?.projects as unknown[])?.length, 1, "the fixture has no cross-anchor project to disclose");
+
     const seen = (await getContact(restrictedScope(), id.contactOnGrantedOpp)) as Record<string, unknown> | null;
-    // The fixture gives this contact a deal and a link into an ungranted
-    // project, so an empty result here is a denial rather than an absence.
-    const deals = (seen?.deals ?? []) as unknown[];
-    const projects = (seen?.projects ?? []) as unknown[];
-    assert.deepEqual(deals, [], "a contact's deals were listed to a restricted member");
-    assert.equal(
-      projects.length,
-      0,
-      "a contact's projects were listed, including work the member was never given",
-    );
+    assert.ok(seen, "the connected contact should still be readable");
+    assert.deepEqual(seen.deals, [], "a contact's deals were listed to a restricted member");
+    assert.deepEqual(seen.projects, [], "a contact's other work was listed to a restricted member");
   });
 });
 
@@ -366,7 +373,15 @@ describe("a visible contact discloses nothing beyond itself", () => {
 // ---------------------------------------------------------------------------
 
 describe("a company is visible only through visible work, and only as identity", () => {
-  const SAFE = ["id", "name", "domain", "website", "industry", "logoUrl", "location", "size"];
+  // The approved eight, plus workspaceId — the tenant key the reader already
+  // knows, carried for server components and named separately in
+  // src/lib/data/restricted.ts rather than folded into the identity list.
+  const SAFE = [
+    "id", "name", "domain", "website", "industry", "logoUrl", "location", "size",
+    "workspaceId",
+    // A discriminant so callers must branch, not data about the company.
+    "identityOnly",
+  ];
 
   test("the company behind granted work is readable", pgOnly ?? {}, async () => {
     const { getCompany } = await import("../../src/lib/data/companies");
@@ -422,17 +437,23 @@ describe("a company is visible only through visible work, and only as identity",
     assert.equal(total, 1, `the companies total is ${total}`);
   });
 
-  test("no pipeline value is attributed to a visible company", pgOnly ?? {}, async () => {
-    // The list attaches open pipeline value per company, computed from deals —
-    // which restricted members may not see at all.
+  test("no pipeline value is attributed to a visible company — already closed by Step 3A", pgOnly ?? {}, async () => {
+    // Same investigation, same answer. The company carries an open deal worth
+    // $48,000 and the owner's list reports it; a restricted member's does not,
+    // because the groupBy behind that number reads Deal, which they may not
+    // see at all. A regression assertion for the Deal denial, reached through
+    // an aggregate rather than a row.
     const { listCompanies } = await import("../../src/lib/data/companies");
+
+    const forOwner = await listCompanies(ownerScope(), {});
+    const ownerRow = forOwner.companies.find((c) => c.id === id.companyOnGrantedOpp) as Record<string, unknown> | undefined;
+    const ownerPipeline = (ownerRow?.pipeline ?? null) as { value?: number; count?: number } | null;
+    assert.equal(ownerPipeline?.value, 4_800_000, "the fixture has no pipeline value to disclose");
+
     const { companies } = await listCompanies(restrictedScope(), {});
-    // By id, not by position: the list is ordered by name, and while this is
-    // red it contains companies the member should not see at all — checking
-    // companies[0] tested the wrong row and passed for the wrong reason.
     const row = companies.find((c) => c.id === id.companyOnGrantedOpp) as Record<string, unknown> | undefined;
     assert.ok(row, "the visible company is missing from the list");
-    const pipeline = (row?.pipeline ?? null) as { value?: number; count?: number } | null;
+    const pipeline = (row.pipeline ?? null) as { value?: number; count?: number } | null;
     assert.ok(
       !pipeline || ((pipeline.value ?? 0) === 0 && (pipeline.count ?? 0) === 0),
       `deal pipeline was attributed to a company for a restricted member: ${JSON.stringify(pipeline)}`,
@@ -445,7 +466,13 @@ describe("a company is visible only through visible work, and only as identity",
 // ---------------------------------------------------------------------------
 
 describe("a visible child does not hand over the people it names", () => {
-  test("a task inside granted work strips the contact and company it cannot reach", pgOnly ?? {}, async () => {
+  test("a visible child does not carry the people it names", pgOnly ?? {}, async () => {
+    // Investigated rather than assumed. RLS nulls the joined contact and
+    // company on an otherwise-visible task, which is the disclosure that
+    // mattered. It cannot null the raw contactId/companyId columns — they sit
+    // on a row the member may read — so the question is whether any
+    // application path returns them. None does, and the next test keeps it
+    // that way.
     const { db } = await import("../../src/lib/db");
     const { withTenantContext } = await import("../../src/lib/tenant-db");
 
@@ -454,8 +481,6 @@ describe("a visible child does not hand over the people it names", () => {
         where: { id: id.taskNamingInvisible },
         select: {
           id: true,
-          contactId: true,
-          companyId: true,
           contact: { select: { id: true, fullName: true } },
           company: { select: { id: true, name: true } },
         },
@@ -465,8 +490,43 @@ describe("a visible child does not hand over the people it names", () => {
     assert.ok(task, "the task inside the granted anchor should still be readable");
     assert.equal(task.contact, null, "the task disclosed a contact the member cannot reach");
     assert.equal(task.company, null, "the task disclosed a company the member cannot reach");
-    assert.equal(task.contactId, null, "the task disclosed an unreachable contact's id");
-    assert.equal(task.companyId, null, "the task disclosed an unreachable company's id");
+  });
+
+  test("no read path returns a child's raw contact or company id", pgOnly ?? {}, async () => {
+    // The other half of B-3, as a source assertion because that is where the
+    // rule actually lives: a child reference must never become a visibility
+    // edge, and the only way it could is a query selecting the scalar and
+    // handing it to a page.
+    const { readdirSync, readFileSync, statSync } = await import("node:fs");
+    const { join } = await import("node:path");
+
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        if (statSync(full).isDirectory()) {
+          if (entry !== "generated") walk(full);
+        } else if (/\.tsx?$/.test(entry)) {
+          const source = readFileSync(full, "utf8");
+          // contacts.ts scores relationships from DealContact rows keyed to
+          // contact ids the caller already holds; that is not a disclosure.
+          if (full.endsWith("src/lib/data/contacts.ts")) continue;
+          if (/\b(contactId|companyId):\s*true/.test(source)) offenders.push(full);
+        }
+      }
+    };
+    // Read and render surfaces only. Server actions select these ids for their
+    // own bookkeeping — logging an activity against the company a contact was
+    // just filed under — and never hand them to a page.
+    walk("src/lib/data");
+    walk("src/app");
+
+    assert.deepEqual(
+      offenders,
+      [],
+      `these read paths select a raw contact or company id, which can name a record the reader cannot see:\n` +
+        offenders.map((f) => `  ${f}`).join("\n"),
+    );
   });
 });
 
@@ -481,7 +541,7 @@ describe("the ways in that are not the record itself", () => {
     const contactIds = hits.filter((h) => h.type === "contact").map((h) => h.id).sort();
     assert.deepEqual(
       contactIds,
-      [id.contactOnGrantedOpp, id.contactOnGrantedProject].sort(),
+      [id.contactOnGrantedOpp, id.contactOnGrantedProject, id.contactForWrites].sort(),
       "search returned contacts the member cannot reach",
     );
 
@@ -506,7 +566,7 @@ describe("the ways in that are not the record itself", () => {
 
     assert.deepEqual(
       contacts.map((c) => c.id).sort(),
-      [id.contactOnGrantedOpp, id.contactOnGrantedProject].sort(),
+      [id.contactOnGrantedOpp, id.contactOnGrantedProject, id.contactForWrites].sort(),
       "the contact picker offered people the member cannot reach",
     );
     assert.deepEqual(
