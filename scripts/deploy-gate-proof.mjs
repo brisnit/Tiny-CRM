@@ -137,7 +137,7 @@ try {
   for (const file of ["001_search_indexes", "002_row_level_security", "003_deferrable_constraints",
     "004_workspace_bootstrap", "005_identity_policies", "006_job_claim", "007_account_scoped_ai_threads",
   "008_person_scoped_ai_output", "009_record_grants", "010_record_scope", "011_contact_company_scope",
-  "012_grant_integrity"]) {
+  "012_grant_integrity", "013_membership_write_integrity"]) {
     const applied = run("node", ["scripts/apply-sql.mjs", `prisma/postgres/${file}.sql`], {
       ...process.env, DATABASE_URL: ownerCurrent,
     });

@@ -210,6 +210,7 @@ async function main() {
     "010_record_scope.sql",
     "011_contact_company_scope.sql",
     "012_grant_integrity.sql",
+    "013_membership_write_integrity.sql",
   ]) {
     const out = run("node", ["scripts/apply-sql.mjs", `prisma/postgres/${file}`], {
       DATABASE_URL: ownerUrl,

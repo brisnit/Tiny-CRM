@@ -77,6 +77,7 @@ node scripts/apply-sql.mjs prisma/postgres/009_record_grants.sql
 node scripts/apply-sql.mjs prisma/postgres/010_record_scope.sql
 node scripts/apply-sql.mjs prisma/postgres/011_contact_company_scope.sql
 node scripts/apply-sql.mjs prisma/postgres/012_grant_integrity.sql
+node scripts/apply-sql.mjs prisma/postgres/013_membership_write_integrity.sql
 ```
 
 `003` is not optional. `Company.primaryContactId` and `Contact.companyId` form a
