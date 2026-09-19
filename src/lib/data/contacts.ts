@@ -5,6 +5,7 @@ import { contains, db, isSearchable } from "@/lib/db";
 import { scoreRelationship } from "@/lib/scoring";
 import { tagsForEntities } from "@/lib/actions/tags";
 import { withTenantContext } from "@/lib/tenant-db";
+import { contactWithoutPrivateFields, isRestrictedReader } from "@/lib/data/restricted";
 
 export type ContactFilters = {
   q?: string;
@@ -279,7 +280,11 @@ export async function getContact(read: ReadScope, id: string) {
     );
     const tags = await tagsForEntities("contact", [id]);
 
-    return { ...contact, relationship: scored!.relationship, tags: tags.get(id) ?? [] };
+    const full = { ...contact, relationship: scored!.relationship, tags: tags.get(id) ?? [] };
+    // Visible because they are attached to work this member holds — which says
+    // nothing about how we rate them, where they came from, what a colleague
+    // wrote about them, or which of us owns the relationship.
+    return isRestrictedReader(read) ? contactWithoutPrivateFields(full) : full;
   });
 }
 

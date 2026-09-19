@@ -89,6 +89,7 @@ try {
   node(["scripts/apply-sql.mjs", "prisma/postgres/008_person_scoped_ai_output.sql"], { env });
   node(["scripts/apply-sql.mjs", "prisma/postgres/009_record_grants.sql"], { env });
   node(["scripts/apply-sql.mjs", "prisma/postgres/010_record_scope.sql"], { env });
+  node(["scripts/apply-sql.mjs", "prisma/postgres/011_contact_company_scope.sql"], { env });
 
   // The RLS tests need a connection as the restricted role. When this script
   // manages the cluster it can provision one; against an external server the

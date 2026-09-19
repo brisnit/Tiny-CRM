@@ -118,7 +118,7 @@ async function CompaniesTable({
                       <span className="text-[13px] text-muted">{company.industry ?? "—"}</span>
                     </TD>
                     <TD className="hidden md:table-cell">
-                      {company.type ? (
+                      {!("identityOnly" in company) && company.type ? (
                         <Badge tone={COMPANY_TYPE.tone(company.type)}>{COMPANY_TYPE.label(company.type)}</Badge>
                       ) : (
                         <span className="text-[13px] text-faint">—</span>
@@ -126,17 +126,17 @@ async function CompaniesTable({
                     </TD>
                     <TD align="right">
                       <span className="text-[13px] font-medium tabular text-body">
-                        {company.pipeline.value > 0 ? formatCompact(company.pipeline.value) : "—"}
+                        {!("identityOnly" in company) && company.pipeline.value > 0 ? formatCompact(company.pipeline.value) : "—"}
                       </span>
                     </TD>
                     <TD align="right" className="hidden sm:table-cell">
-                      <span className="text-[13px] text-muted tabular">{company._count.contacts || "—"}</span>
+                      <span className="text-[13px] text-muted tabular">{!("identityOnly" in company) && company._count.contacts ? company._count.contacts : "—"}</span>
                     </TD>
                     <TD align="right" className="hidden lg:table-cell">
-                      <span className="text-[13px] text-muted tabular">{company._count.projects || "—"}</span>
+                      <span className="text-[13px] text-muted tabular">{!("identityOnly" in company) && company._count.projects ? company._count.projects : "—"}</span>
                     </TD>
                     <TD className="hidden xl:table-cell">
-                      <span className="text-[12.5px] text-muted">{timeAgo(company.lastActivityAt)}</span>
+                      <span className="text-[12.5px] text-muted">{"identityOnly" in company ? "—" : timeAgo(company.lastActivityAt)}</span>
                     </TD>
                   </TR>
                 ))}

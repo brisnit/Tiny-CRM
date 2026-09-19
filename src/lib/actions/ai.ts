@@ -16,6 +16,7 @@ import { setTags } from "@/lib/actions/tags";
 import { LIMITS } from "@/lib/validation/limits";
 import { zId, zOptionalId, zOptionalInt, zScope, zShortText } from "@/lib/validation/common";
 import type { ContextScope } from "@/lib/ai/context";
+import { refuseForRestricted } from "@/lib/data/restricted";
 
 /**
  * Tiny AI's write surface.
@@ -110,6 +111,12 @@ export async function analyzeText(text: string, scopeParam?: string | null) {
     action(
       async () => {
         const input = z.string().trim().min(1, "Paste something first").max(LIMITS.maxAiQuestion).parse(text);
+        const { scope: analyseScope } = await scopeFor(scopeParam);
+        // classifyText answers "does a contact or company by this name exist?"
+        // for arbitrary pasted text. That is an existence oracle by design, and
+        // scoping it would silently turn "link to the existing record" into
+        // "create a duplicate".
+        refuseForRestricted(analyseScope, "Capture from pasted text");
         const { actor, scope } = await scopeFor(scopeParam);
         return classifyText(actor, scope.workspaceIds, input);
       },
@@ -323,6 +330,12 @@ export async function getCleanupSuggestions(scopeParam?: string | null) {
     action(
       async () => {
         const { scope } = await scopeFor(scopeParam);
+        // Duplicate detection exists to enumerate: it lists every repeated
+        // email, every repeated company name, every contact attached to
+        // nothing. Narrowing its queries would not make it correct for a
+        // restricted member, it would make it quietly wrong — a duplicate
+        // report that under-reports. Refused until it is redesigned.
+        refuseForRestricted(scope, "Data cleanup");
         return findRecommendations(scope);
       },
       { rateLimit: "ai" },

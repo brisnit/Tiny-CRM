@@ -136,7 +136,7 @@ try {
   if (migrate.status !== 0) throw new Error(`prisma migrate deploy failed:\n${redact(migrate.output)}`);
   for (const file of ["001_search_indexes", "002_row_level_security", "003_deferrable_constraints",
     "004_workspace_bootstrap", "005_identity_policies", "006_job_claim", "007_account_scoped_ai_threads",
-  "008_person_scoped_ai_output", "009_record_grants", "010_record_scope"]) {
+  "008_person_scoped_ai_output", "009_record_grants", "010_record_scope", "011_contact_company_scope"]) {
     const applied = run("node", ["scripts/apply-sql.mjs", `prisma/postgres/${file}.sql`], {
       ...process.env, DATABASE_URL: ownerCurrent,
     });
