@@ -12,6 +12,8 @@ import { fromCents } from "@/lib/money";
 import { formatDate, formatDateOnly } from "@/lib/dates";
 import { LIMITS } from "@/lib/validation/limits";
 import { zId } from "@/lib/validation/common";
+import { refuseForRestricted } from "@/lib/data/restricted";
+import { restrictedIdsFor } from "@/lib/auth/access";
 
 /**
  * Bulk data movement.
@@ -48,6 +50,14 @@ export async function exportCsv(
     workspaceAction(
       { workspaceId, permission: "record:export", rateLimit: "export" },
       async (actor) => {
+        // A CSV of everything is the widest read there is. Scoping the rows
+        // would still hand over a file whose shape says how much was withheld,
+        // and export is not a capability a confined member needs.
+        refuseForRestricted(
+          { workspaceIds: [actor.workspaceId], userId: actor.identity.id,
+            restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [actor.workspaceId]) },
+          "Export",
+        );
         const kind = z.enum(EXPORT_ENTITIES).parse(entity);
         const where = { workspaceId: actor.workspaceId };
 

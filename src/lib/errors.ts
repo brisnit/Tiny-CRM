@@ -71,6 +71,18 @@ export const rateLimited = (m: string, retryAfterSeconds: number) =>
 export const noSuchRecord = () => new AppError("not_found", "That record does not exist.");
 
 /** Normalises anything thrown into a safe, categorised error. */
+/**
+ * Unique constraints whose violation describes another record, not the caller's
+ * own input.
+ *
+ * `Company.primaryContactId` is unique, so naming a contact who is already some
+ * other company's primary fails — and under record-level access that other
+ * company may be one the caller cannot see. Reporting the field turns a
+ * validation message into a three-way oracle: not in this workspace / free /
+ * taken by a company you are not allowed to know about.
+ */
+const RELATIONSHIP_CONSTRAINTS = ["primaryContactId"];
+
 export function toAppError(error: unknown): AppError {
   if (error instanceof AppError) return error;
 
@@ -91,6 +103,15 @@ export function toAppError(error: unknown): AppError {
   const prisma = error as { code?: string; meta?: { target?: string[] } };
   if (prisma?.code === "P2002") {
     const target = prisma.meta?.target?.join(", ");
+    // Most unique constraints are about the caller's own input — an email
+    // they typed, a slug they chose — and naming the field helps them fix
+    // it. A few are about a relationship to another record, where the
+    // violation means "some other row already claims this": a fact about a
+    // record the caller may not be allowed to know exists. Those answer
+    // without naming anything.
+    if (target && RELATIONSHIP_CONSTRAINTS.some((field) => target.includes(field))) {
+      return conflict("That record cannot be used here.");
+    }
     return conflict(
       target ? `That ${target} is already in use.` : "That value is already in use.",
       { field: prisma.meta?.target?.[0] },

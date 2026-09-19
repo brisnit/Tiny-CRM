@@ -19,6 +19,7 @@ import { LIMITS } from "@/lib/validation/limits";
 import {
   zId, zOptionalId, zOptionalText, zOptionalUrl, zShortText, zTags, zVersion,
 } from "@/lib/validation/common";
+import { AppError } from "@/lib/errors";
 
 const companySchema = z.object({
   workspaceId: zId,
@@ -157,13 +158,28 @@ export async function updateCompany(
 
         const patch = pickDefined(data, EDITABLE);
 
-        const result = await db.company.updateMany({
-          where: {
-            id: recordId, workspaceId,
-            ...(data.version !== undefined ? { version: data.version } : {}),
-          },
-          data: { ...patch, version: { increment: 1 } },
-        });
+        // Company.primaryContactId is unique. A contact already claimed by
+        // another company violates it — and that company may be one this caller
+        // cannot see, so the constraint is the only thing that knows. Checking
+        // first is impossible for exactly that reason: the pre-check would be
+        // blind to the row it is looking for. So the violation is caught and
+        // answered without describing what collided.
+        let result: { count: number };
+        try {
+          result = await db.company.updateMany({
+            where: {
+              id: recordId, workspaceId,
+              ...(data.version !== undefined ? { version: data.version } : {}),
+            },
+            data: { ...patch, version: { increment: 1 } },
+          });
+        } catch (error) {
+          const code = (error as { code?: string } | null)?.code;
+          if (code === "P2002" && data.primaryContactId) {
+            throw new AppError("validation", "That contact cannot be the primary contact here.");
+          }
+          throw error;
+        }
         assertVersion(result.count, data.version, "company");
 
         if (data.tags) await setTags(workspaceId, "company", recordId, data.tags);

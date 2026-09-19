@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { getActor, resolveReadScope } from "@/lib/auth/access";
+import { can } from "@/lib/auth/permissions";
 import { toAppError } from "@/lib/errors";
 import { log, newRequestId, runWithContext } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rate-limit";
@@ -44,10 +45,21 @@ export async function GET(request: Request) {
 
       const scope = zScope.parse(params.workspaceId ?? "all");
       const read = await resolveReadScope(scope);
-      if (read.workspaceIds.length === 0) return NextResponse.json({ options: [], requestId });
+
+      // This endpoint feeds every record picker in the product, and until now it
+      // asked only whether you were signed in. RLS decides which rows come
+      // back; the permission decides whether you may ask at all. Narrowed per
+      // workspace, so someone who is a viewer in one and a member in another
+      // gets the right answer in each.
+      const readable = read.workspaceIds.filter((id) => {
+        const membership = actor.memberships.find((m) => m.id === id);
+        return membership ? can(membership.role, "record:view") : false;
+      });
+      if (readable.length === 0) return NextResponse.json({ options: [], requestId });
+      const scoped = { ...read, workspaceIds: readable };
 
       const q = params.q.trim();
-      const where = { workspaceId: { in: read.workspaceIds } };
+      const where = { workspaceId: { in: readable } };
       const take = 20;
 
       const respond = (options: unknown[]) =>
@@ -59,7 +71,7 @@ export async function GET(request: Request) {
       // Every branch below reads a workspace-scoped model, so the whole switch
       // runs in the scope resolveReadScope returned. That set is derived from
       // the actor's memberships; the ?workspaceId parameter can only narrow it.
-      return scopedRead(read, async () => {
+      return scopedRead(scoped, async () => {
       switch (params.type) {
         case "contact": {
           const rows = await db.contact.findMany({
