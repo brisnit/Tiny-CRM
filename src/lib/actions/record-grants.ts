@@ -8,6 +8,8 @@ import {
 } from "@/lib/actions/base";
 import { AppError } from "@/lib/errors";
 import { zId } from "@/lib/validation/common";
+import { assertUnrestrictedActor } from "@/lib/auth/access";
+import { resolveAnchors } from "@/lib/auth/anchors";
 
 /**
  * Giving and taking away access to one piece of work.
@@ -22,10 +24,16 @@ import { zId } from "@/lib/validation/common";
  * `members:manage` — Owner and Admin. A manager can run the work without
  * deciding who else may see it.
  *
- * There is no UI for this yet, and deliberately no way to set a membership to
- * `restricted`: a grant given to a full-workspace member changes nothing, and
- * until the screen that explains all this exists, the honest state is that
- * nobody is restricted.
+ * These are the incremental verbs — add one record, remove one record. Setting
+ * somebody's whole grant set at once, and moving them between scopes, is
+ * `setMemberScope` in settings.ts. Keeping them apart is deliberate: "give them
+ * this too" and "their access is now exactly this" are different intentions,
+ * and a single call that guesses which one you meant would eventually guess
+ * wrong.
+ *
+ * Both refuse a restricted caller, and both refuse a target who is not
+ * restricted — a grant that changes nothing is not a grant, it is a row waiting
+ * to mean something later.
  */
 
 const ANCHORS = ["opportunity", "project"] as const;
@@ -48,22 +56,39 @@ export async function grantRecordAccess(
       async (actor) => {
         const data = grantSchema.parse(input);
         const workspaceId = actor.workspaceId;
+        assertUnrestrictedActor(actor, workspaceId);
 
-        // The recipient must be someone here. Granting access to a stranger
-        // would be a way to add a member without going through invitations.
+        // The recipient must be someone here, and must actually be restricted.
+        // A grant to a full-workspace member changes nothing they can reach; it
+        // is a row that means "no" while looking like "yes", and it is exactly
+        // the dormant state that made grants outlive the access they described.
         const membership = await db.workspaceMember.findFirst({
           where: { workspaceId, userId: data.userId },
-          select: { id: true },
+          select: { id: true, scopeMode: true },
         });
         if (!membership) throw new AppError("not_found", "That person is not in this workspace.");
+        if (membership.scopeMode !== "restricted") {
+          throw new AppError(
+            "validation",
+            "That person already has access to the whole workspace. " +
+              "Change their access to limited first.",
+          );
+        }
 
         // The anchor is read through the caller's own context, so an anchor
         // they cannot see is indistinguishable from one that does not exist —
-        // and cannot be granted to anybody.
+        // and cannot be granted to anybody. Archived anchors are refused: the
+        // record is in the trash, and access to it is access to something
+        // somebody decided was over.
+        const resolved = await resolveAnchors(db, workspaceId, [
+          { entityType: data.anchorType, entityId: data.anchorId },
+        ]);
+        if (!resolved.ok) throw new AppError("not_found", "That record no longer exists.");
+
         const anchor =
           data.anchorType === "opportunity"
-            ? await db.opportunity.findFirst({ where: { id: data.anchorId, workspaceId }, select: { id: true, name: true } })
-            : await db.project.findFirst({ where: { id: data.anchorId, workspaceId }, select: { id: true, name: true } });
+            ? await db.opportunity.findFirst({ where: { id: data.anchorId, workspaceId }, select: { name: true } })
+            : await db.project.findFirst({ where: { id: data.anchorId, workspaceId }, select: { name: true } });
         if (!anchor) throw new AppError("not_found", "That record no longer exists.");
 
         const grant = await db.recordGrant.upsert({
@@ -78,6 +103,10 @@ export async function grantRecordAccess(
           create: {
             workspaceId,
             userId: data.userId,
+            // The membership, not just the person. Deleting it takes this row
+            // with it, and the composite foreign key refuses a row whose three
+            // identity columns do not describe the same membership.
+            membershipId: membership.id,
             anchorType: data.anchorType,
             anchorId: data.anchorId,
             grantedById: actor.identity.id,
@@ -111,6 +140,7 @@ export async function revokeRecordAccess(
       async (actor) => {
         const data = grantSchema.parse(input);
         const workspaceId = actor.workspaceId;
+        assertUnrestrictedActor(actor, workspaceId);
 
         // Deleting the row is the revocation: the policies read this table on
         // every statement, so access ends at the next one rather than at the

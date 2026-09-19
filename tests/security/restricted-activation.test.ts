@@ -213,15 +213,11 @@ after(async () => {
 // ---------------------------------------------------------------------------
 
 describe("issuing a restricted invitation", () => {
-  test("the server action cannot express restricted scope at all", async () => {
-    // Characterization, and the activation gap stated plainly: the schema the
-    // action validates has no scope fields, so a caller cannot ask for one and
-    // an administrator has no way to invite somebody to particular work.
+  test("an administrator can invite somebody to particular work", pgOnly ?? {}, async () => {
     const { inviteTeamMember } = await import("../../src/lib/actions/team");
     const email = `gap-${Date.now().toString(36)}@activation.invalid`;
     const result = await runAsTestIdentity(A.ownerId, () =>
-      // Extra keys are what a caller would send if the field existed.
-      (inviteTeamMember as unknown as (i: Record<string, unknown>) => Promise<{ ok: boolean }>)({
+      inviteTeamMember({
         workspaceId: A.workspaceId,
         email,
         role: "member",
@@ -230,7 +226,7 @@ describe("issuing a restricted invitation", () => {
       }),
     );
 
-    assert.equal(result.ok, true, "the invitation was refused for an unrelated reason");
+    assert.equal(result.ok, true, `the invitation was refused: ${JSON.stringify(result)}`);
     const row = await observer.workspaceInvitation.findFirst({
       where: { workspaceId: A.workspaceId, email },
       select: { scopeMode: true, scope: true },
@@ -590,25 +586,170 @@ describe("a restricted member's reach, once activated", () => {
 // ---------------------------------------------------------------------------
 
 describe("moving a membership between scopes", () => {
-  test("no server action can set a membership to restricted", async () => {
-    // The activation gap, stated as a test. Every other decision in this file
-    // depends on there being a supported way to make this transition; today
-    // the only way is a direct database write.
-    const settings = await import("../../src/lib/actions/settings");
-    const team = await import("../../src/lib/actions/team");
-    const grants = await import("../../src/lib/actions/record-grants");
-    const exported = [
-      ...Object.keys(settings),
-      ...Object.keys(team),
-      ...Object.keys(grants),
-    ];
-    const scopeSetters = exported.filter((name) => /scope/i.test(name));
-    assert.notDeepEqual(
-      scopeSetters,
-      [],
-      "no exported server action mentions scope — a membership can only be restricted by " +
-        `writing to the database by hand. Exports seen: ${exported.join(", ")}`,
+  test("workspace to restricted replaces the grant set with exactly what was named",
+    pgOnly ?? {},
+    async () => {
+      const user = await makeUser("to-restricted");
+      const membership = await observer.workspaceMember.create({
+        data: { workspaceId: A.workspaceId, userId: user.id, role: "member", scopeMode: "workspace" },
+        select: { id: true },
+      });
+      // A grant left over from some earlier life. Replacement must not keep it.
+      await observer.recordGrant.create({
+        data: {
+          workspaceId: A.workspaceId, userId: user.id, membershipId: membership.id,
+          anchorType: "opportunity", anchorId: id.withheldOpp,
+        },
+      });
+
+      const { setMemberScope } = await import("../../src/lib/actions/settings");
+      await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+      const result = await runAsTestIdentity(A.ownerId, () =>
+        setMemberScope({
+          workspaceId: A.workspaceId,
+          userId: user.id,
+          scopeMode: "restricted",
+          anchors: [{ entityType: "opportunity", entityId: id.offeredOpp }],
+        }),
+      );
+      assert.equal(result.ok, true, `transition failed: ${JSON.stringify(result)}`);
+
+      assert.deepEqual(
+        await grantsFor(user.id),
+        [`opportunity:${id.offeredOpp}`],
+        "the prior grant survived a replacement",
+      );
+      const row = await observer.workspaceMember.findFirst({
+        where: { id: membership.id }, select: { scopeMode: true },
+      });
+      assert.equal(row?.scopeMode, "restricted", "the scope mode did not change");
+    });
+
+  test("restricted to workspace deletes every grant", pgOnly ?? {}, async () => {
+    const user = await makeUser("to-workspace");
+    const membership = await observer.workspaceMember.create({
+      data: { workspaceId: A.workspaceId, userId: user.id, role: "member", scopeMode: "restricted" },
+      select: { id: true },
+    });
+    await observer.recordGrant.create({
+      data: {
+        workspaceId: A.workspaceId, userId: user.id, membershipId: membership.id,
+        anchorType: "opportunity", anchorId: id.offeredOpp,
+      },
+    });
+    assert.equal((await grantsFor(user.id)).length, 1, "the fixture granted nothing");
+
+    const { setMemberScope } = await import("../../src/lib/actions/settings");
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+    const result = await runAsTestIdentity(A.ownerId, () =>
+      setMemberScope({ workspaceId: A.workspaceId, userId: user.id, scopeMode: "workspace", anchors: [] }),
     );
+    assert.equal(result.ok, true, `transition failed: ${JSON.stringify(result)}`);
+
+    assert.deepEqual(
+      await grantsFor(user.id),
+      [],
+      "grants survived a return to full access, ready to reapply the next time somebody " +
+        "is restricted",
+    );
+  });
+
+  test("restricted to restricted replaces rather than adds", pgOnly ?? {}, async () => {
+    const user = await makeUser("replace");
+    const membership = await observer.workspaceMember.create({
+      data: { workspaceId: A.workspaceId, userId: user.id, role: "member", scopeMode: "restricted" },
+      select: { id: true },
+    });
+    await observer.recordGrant.create({
+      data: {
+        workspaceId: A.workspaceId, userId: user.id, membershipId: membership.id,
+        anchorType: "opportunity", anchorId: id.offeredOpp,
+      },
+    });
+
+    const { setMemberScope } = await import("../../src/lib/actions/settings");
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+    const result = await runAsTestIdentity(A.ownerId, () =>
+      setMemberScope({
+        workspaceId: A.workspaceId,
+        userId: user.id,
+        scopeMode: "restricted",
+        anchors: [{ entityType: "project", entityId: id.offeredProject }],
+      }),
+    );
+    assert.equal(result.ok, true, `transition failed: ${JSON.stringify(result)}`);
+    assert.deepEqual(
+      await grantsFor(user.id),
+      [`project:${id.offeredProject}`],
+      "the replacement added to the grant set instead of replacing it",
+    );
+  });
+
+  test("a restricted invitation with no anchors is refused at issue", pgOnly ?? {}, async () => {
+    const { inviteTeamMember } = await import("../../src/lib/actions/team");
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+    const result = await runAsTestIdentity(A.ownerId, () =>
+      inviteTeamMember({
+        workspaceId: A.workspaceId,
+        email: `empty-${Date.now().toString(36)}@activation.invalid`,
+        role: "member",
+        scopeMode: "restricted",
+        scope: [],
+      }),
+    );
+    assert.equal(result.ok, false, "an invitation to nothing in particular was issued");
+  });
+
+  test("a scope change cannot name another workspace's record", pgOnly ?? {}, async () => {
+    const user = await makeUser("cross-ws-scope");
+    await observer.workspaceMember.create({
+      data: { workspaceId: A.workspaceId, userId: user.id, role: "member", scopeMode: "workspace" },
+    });
+    const { setMemberScope } = await import("../../src/lib/actions/settings");
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+    const result = await runAsTestIdentity(A.ownerId, () =>
+      setMemberScope({
+        workspaceId: A.workspaceId,
+        userId: user.id,
+        scopeMode: "restricted",
+        anchors: [{ entityType: "opportunity", entityId: id.foreignOpp }],
+      }),
+    );
+    assert.equal(result.ok, false, "a scope change named another workspace's record");
+    assert.deepEqual(await grantsFor(user.id), [], "a cross-workspace grant was written");
+  });
+
+  test("an owner can never be restricted", pgOnly ?? {}, async () => {
+    const { setMemberScope } = await import("../../src/lib/actions/settings");
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+    // A second owner, so the target is an owner who is not the actor.
+    const other = await makeUser("second-owner");
+    await observer.workspaceMember.create({
+      data: { workspaceId: A.workspaceId, userId: other.id, role: "owner", scopeMode: "workspace" },
+    });
+    const result = await runAsTestIdentity(A.ownerId, () =>
+      setMemberScope({
+        workspaceId: A.workspaceId,
+        userId: other.id,
+        scopeMode: "restricted",
+        anchors: [{ entityType: "opportunity", entityId: id.offeredOpp }],
+      }),
+    );
+    assert.equal(result.ok, false, "an owner was confined to particular records");
+  });
+
+  test("nobody changes their own scope", pgOnly ?? {}, async () => {
+    const { setMemberScope } = await import("../../src/lib/actions/settings");
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+    const result = await runAsTestIdentity(A.ownerId, () =>
+      setMemberScope({
+        workspaceId: A.workspaceId,
+        userId: A.ownerId,
+        scopeMode: "restricted",
+        anchors: [{ entityType: "opportunity", entityId: id.offeredOpp }],
+      }),
+    );
+    assert.equal(result.ok, false, "somebody changed their own level of access");
   });
 
   test("changing someone's role leaves their scope alone", pgOnly ?? {}, async () => {
@@ -635,20 +776,33 @@ describe("moving a membership between scopes", () => {
 
   test("a restricted administrator cannot lift their own restriction", pgOnly ?? {}, async () => {
     // Role and scope are orthogonal, which means `restricted admin` is a
-    // coherent state — and an admin holds members:manage. Whatever action the
-    // green phase adds must refuse this, or restriction is advisory.
+    // coherent state — and an admin holds members:manage. Two rules stop them
+    // walking out: a restricted actor may not administer access at all, and
+    // nobody changes their own scope. Either alone would do; both are asserted
+    // because they fail in different directions.
     const user = await makeUser("restricted-admin");
     await observer.workspaceMember.create({
       data: { workspaceId: A.workspaceId, userId: user.id, role: "admin", scopeMode: "restricted" },
     });
 
-    const settings = await import("../../src/lib/actions/settings");
-    const setter = (settings as Record<string, unknown>).setMemberScope;
-    assert.ok(
-      typeof setter === "function",
-      "there is no scope-setting action yet, so the rule that a restricted admin cannot " +
-        "free themselves is unwritten and unenforced",
+    const { setMemberScope } = await import("../../src/lib/actions/settings");
+    await resetRateLimit("mutation", { user: user.id, workspace: A.workspaceId, global: user.id });
+    const self = await runAsTestIdentity(user.id, () =>
+      setMemberScope({ workspaceId: A.workspaceId, userId: user.id, scopeMode: "workspace", anchors: [] }),
     );
+    assert.equal(self.ok, false, "a restricted admin lifted their own restriction");
+
+    // And they cannot free somebody else either, which would be the same
+    // escalation with an extra step and a friend.
+    const friend = await makeUser("restricted-friend");
+    await observer.workspaceMember.create({
+      data: { workspaceId: A.workspaceId, userId: friend.id, role: "member", scopeMode: "restricted" },
+    });
+    await resetRateLimit("mutation", { user: user.id, workspace: A.workspaceId, global: user.id });
+    const other = await runAsTestIdentity(user.id, () =>
+      setMemberScope({ workspaceId: A.workspaceId, userId: friend.id, scopeMode: "workspace", anchors: [] }),
+    );
+    assert.equal(other.ok, false, "a restricted admin changed somebody else's scope");
   });
 
   test("a restricted member cannot grant themselves more work", pgOnly ?? {}, async () => {
@@ -680,10 +834,13 @@ describe("moving a membership between scopes", () => {
     // table's only policy is the plain workspace rule, so a restricted member's
     // own context satisfies its WITH CHECK.
     const user = await makeUser("db-self-grant");
-    await observer.workspaceMember.create({
+    const membership = await observer.workspaceMember.create({
       data: { workspaceId: A.workspaceId, userId: user.id, role: "member", scopeMode: "restricted" },
+      select: { id: true },
     });
 
+    // Every identity column is correct and every constraint is satisfied. The
+    // only thing wrong with this row is who is writing it.
     let refused = false;
     try {
       await asRestricted(user.id, () =>
@@ -691,6 +848,7 @@ describe("moving a membership between scopes", () => {
           data: {
             workspaceId: A.workspaceId,
             userId: user.id,
+            membershipId: membership.id,
             anchorType: "opportunity",
             anchorId: id.withheldOpp,
           },
@@ -703,7 +861,8 @@ describe("moving a membership between scopes", () => {
       refused,
       true,
       "a restricted member inserted a grant for themselves naming work they cannot see — " +
-        "the grant table is enforced only by the application, unlike every other boundary here",
+        "the grant table would be enforced by the application alone, unlike every other " +
+        "boundary here",
     );
     await observer.recordGrant.deleteMany({ where: { userId: user.id } });
   });
@@ -796,19 +955,28 @@ describe("what a grant outlives", () => {
       data: { workspaceId: A.workspaceId, name: "Cancelled pursuit" },
       select: { id: true },
     });
-    await observer.workspaceMember.create({
+    const membership = await observer.workspaceMember.create({
       data: { workspaceId: A.workspaceId, userId: user.id, role: "member", scopeMode: "restricted" },
+      select: { id: true },
     });
     await observer.recordGrant.create({
       data: {
         workspaceId: A.workspaceId,
         userId: user.id,
+        membershipId: membership.id,
         anchorType: "opportunity",
         anchorId: doomed.id,
       },
     });
 
-    await observer.opportunity.delete({ where: { id: doomed.id } });
+    // Through the real deletion path, not a raw delete: the cleanup lives in
+    // the action that causes it.
+    const { deleteOpportunity } = await import("../../src/lib/actions/opportunities");
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+    const removed = await runAsTestIdentity(A.ownerId, () =>
+      deleteOpportunity(doomed.id, "Cancelled pursuit"),
+    );
+    assert.equal(removed.ok, true, `deletion failed: ${JSON.stringify(removed)}`);
 
     assert.deepEqual(
       await grantsFor(user.id),
@@ -824,9 +992,22 @@ describe("what a grant outlives", () => {
 // ---------------------------------------------------------------------------
 
 describe("who may give and take access", () => {
+  // A target who is genuinely restricted. Without this every refusal below
+  // could be the "target is not restricted" rule firing instead of the rule
+  // each test is named for — a suite that passes for the wrong reason.
+  let target = { id: "", email: "" };
+
+  before(async () => {
+    if (!isPostgres) return;
+    target = await makeUser("grant-target");
+    await observer.workspaceMember.create({
+      data: { workspaceId: A.workspaceId, userId: target.id, role: "member", scopeMode: "restricted" },
+    });
+  });
+
   const anchorArgs = () => ({
     workspaceId: A.workspaceId,
-    userId: A.memberId,
+    userId: target.id,
     anchorType: "opportunity" as const,
     anchorId: id.offeredOpp,
   });
@@ -870,19 +1051,59 @@ describe("who may give and take access", () => {
 
   test("granting the same anchor twice is idempotent", pgOnly ?? {}, async () => {
     const { grantRecordAccess, revokeRecordAccess } = await import("../../src/lib/actions/record-grants");
-    const args = { ...anchorArgs(), userId: A.memberId };
+    const args = anchorArgs();
     for (let i = 0; i < 2; i++) {
       await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
       const result = await runAsTestIdentity(A.ownerId, () => grantRecordAccess(args));
       assert.equal(result.ok, true, `grant ${i + 1} failed: ${JSON.stringify(result)}`);
     }
     const rows = await observer.recordGrant.findMany({
-      where: { workspaceId: A.workspaceId, userId: A.memberId, anchorId: id.offeredOpp },
+      where: { workspaceId: A.workspaceId, userId: target.id, anchorId: id.offeredOpp },
     });
     assert.equal(rows.length, 1, "granting twice created two rows");
 
     await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
     await runAsTestIdentity(A.ownerId, () => revokeRecordAccess(args));
+  });
+
+  test("a full-workspace member cannot be given a grant", pgOnly ?? {}, async () => {
+    // A grant to somebody who already sees everything means nothing today and
+    // would mean something the moment they were restricted. Refused rather
+    // than stored.
+    const { grantRecordAccess } = await import("../../src/lib/actions/record-grants");
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+    const result = await runAsTestIdentity(A.ownerId, () =>
+      grantRecordAccess({ ...anchorArgs(), userId: A.memberId }),
+    );
+    assert.equal(result.ok, false, "an inert grant was written for a full-workspace member");
+    assert.deepEqual(await grantsFor(A.memberId), [], "a dormant grant row was created");
+  });
+
+  test("an archived anchor cannot receive a new grant", pgOnly ?? {}, async () => {
+    const archived = await observer.opportunity.create({
+      data: { workspaceId: A.workspaceId, name: "Shelved pursuit", archivedAt: new Date() },
+      select: { id: true },
+    });
+    const { grantRecordAccess } = await import("../../src/lib/actions/record-grants");
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+    const result = await runAsTestIdentity(A.ownerId, () =>
+      grantRecordAccess({ ...anchorArgs(), anchorId: archived.id }),
+    );
+    assert.equal(result.ok, false, "access was granted to a record in the trash");
+  });
+
+  test("a restricted administrator cannot grant or revoke at all", pgOnly ?? {}, async () => {
+    const admin = await makeUser("restricted-granter");
+    await observer.workspaceMember.create({
+      data: { workspaceId: A.workspaceId, userId: admin.id, role: "admin", scopeMode: "restricted" },
+    });
+    const { grantRecordAccess, revokeRecordAccess } = await import("../../src/lib/actions/record-grants");
+    await resetRateLimit("mutation", { user: admin.id, workspace: A.workspaceId, global: admin.id });
+    const gave = await runAsTestIdentity(admin.id, () => grantRecordAccess(anchorArgs()));
+    assert.equal(gave.ok, false, "a restricted admin gave somebody access");
+    await resetRateLimit("mutation", { user: admin.id, workspace: A.workspaceId, global: admin.id });
+    const took = await runAsTestIdentity(admin.id, () => revokeRecordAccess(anchorArgs()));
+    assert.equal(took.ok, false, "a restricted admin revoked somebody's access");
   });
 
   test("revoking something never granted is not an error", pgOnly ?? {}, async () => {
@@ -910,22 +1131,41 @@ describe("the grant table is not a directory of work", () => {
     // of the records behind the boundary.
     const holder = await makeUser("other-holder");
     const watcher = await makeUser("watcher");
+    const memberships: Record<string, string> = {};
     for (const u of [holder, watcher]) {
-      await observer.workspaceMember.create({
+      const row = await observer.workspaceMember.create({
         data: { workspaceId: A.workspaceId, userId: u.id, role: "member", scopeMode: "restricted" },
+        select: { id: true },
       });
+      memberships[u.id] = row.id;
     }
     await observer.recordGrant.create({
       data: {
         workspaceId: A.workspaceId,
         userId: holder.id,
+        membershipId: memberships[holder.id],
         anchorType: "opportunity",
         anchorId: id.withheldOpp,
+      },
+    });
+    // The watcher holds one of their own, so an empty result would not be
+    // mistaken for the policy working.
+    await observer.recordGrant.create({
+      data: {
+        workspaceId: A.workspaceId,
+        userId: watcher.id,
+        membershipId: memberships[watcher.id],
+        anchorType: "opportunity",
+        anchorId: id.offeredOpp,
       },
     });
 
     const seen = await asRestricted(watcher.id, () =>
       db.recordGrant.findMany({ select: { userId: true, anchorId: true } }),
+    );
+    assert.ok(
+      seen.some((g) => g.userId === watcher.id),
+      "the reader cannot see their own grant either, so the policy is too tight",
     );
     const foreign = seen.filter((g) => g.userId !== watcher.id);
     assert.deepEqual(
@@ -980,5 +1220,349 @@ describe("S7 person-scoped AI output is untouched", () => {
       [],
       "a restricted member read an AI insight belonging to someone else",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. Membership identity consistency
+// ---------------------------------------------------------------------------
+
+describe("a grant names one membership, one workspace and one person", () => {
+  /**
+   * RecordGrant now carries three identity columns — membershipId, workspaceId
+   * and userId — and the policies read one while the lifecycle reads another.
+   * Two independently writable identities that can disagree is a defect waiting
+   * for the day they do, so they are not independently writable: a single
+   * composite foreign key points all three at the same membership row.
+   *
+   * These tests write through the raw client on purpose. The application would
+   * never assemble such a row; the question is whether the database would
+   * accept one if something did.
+   */
+
+  let alice = { id: "", email: "", membershipId: "" };
+  let bob = { id: "", email: "", membershipId: "" };
+  let foreignMembershipId = "";
+
+  before(async () => {
+    if (!isPostgres) return;
+    const mk = async (label: string) => {
+      const user = await makeUser(label);
+      const row = await observer.workspaceMember.create({
+        data: { workspaceId: A.workspaceId, userId: user.id, role: "member", scopeMode: "restricted" },
+        select: { id: true },
+      });
+      return { ...user, membershipId: row.id };
+    };
+    alice = await mk("alice");
+    bob = await mk("bob");
+    foreignMembershipId = (
+      await observer.workspaceMember.findFirstOrThrow({
+        where: { workspaceId: B.workspaceId, userId: B.ownerId },
+        select: { id: true },
+      })
+    ).id;
+  });
+
+  const refused = async (data: Record<string, unknown>, what: string) => {
+    let threw = false;
+    try {
+      await observer.recordGrant.create({ data: data as never });
+    } catch {
+      threw = true;
+    }
+    if (!threw) {
+      await observer.recordGrant.deleteMany({
+        where: { anchorId: data.anchorId as string, userId: data.userId as string },
+      });
+    }
+    assert.equal(threw, true, what);
+  };
+
+  test("a membership belonging to someone else is refused", pgOnly ?? {}, async () => {
+    await refused(
+      {
+        workspaceId: A.workspaceId,
+        userId: alice.id,
+        membershipId: bob.membershipId,
+        anchorType: "opportunity",
+        anchorId: id.offeredOpp,
+      },
+      "a grant named Alice as the person and Bob's membership as the owner",
+    );
+  });
+
+  test("a membership from another workspace is refused", pgOnly ?? {}, async () => {
+    await refused(
+      {
+        workspaceId: A.workspaceId,
+        userId: alice.id,
+        membershipId: foreignMembershipId,
+        anchorType: "opportunity",
+        anchorId: id.offeredOpp,
+      },
+      "a grant in workspace A named a membership belonging to workspace B",
+    );
+  });
+
+  test("a membership that does not exist is refused", pgOnly ?? {}, async () => {
+    await refused(
+      {
+        workspaceId: A.workspaceId,
+        userId: alice.id,
+        membershipId: "cnosuchmembershipid000000",
+        anchorType: "opportunity",
+        anchorId: id.offeredOpp,
+      },
+      "a grant named a membership that was never created",
+    );
+  });
+
+  test("a workspace that disagrees with the membership is refused", pgOnly ?? {}, async () => {
+    await refused(
+      {
+        workspaceId: B.workspaceId,
+        userId: alice.id,
+        membershipId: alice.membershipId,
+        anchorType: "opportunity",
+        anchorId: id.foreignOpp,
+      },
+      "a grant claimed workspace B while naming a membership in workspace A",
+    );
+  });
+
+  test("the three columns cannot be made to disagree after the fact", pgOnly ?? {}, async () => {
+    // Creation is checked above; this is the same question asked of UPDATE,
+    // which a composite foreign key also governs.
+    const grant = await observer.recordGrant.create({
+      data: {
+        workspaceId: A.workspaceId,
+        userId: alice.id,
+        membershipId: alice.membershipId,
+        anchorType: "opportunity",
+        anchorId: id.offeredOpp,
+      },
+      select: { id: true },
+    });
+    let threw = false;
+    try {
+      await observer.recordGrant.update({
+        where: { id: grant.id },
+        data: { userId: bob.id },
+      });
+    } catch {
+      threw = true;
+    }
+    await observer.recordGrant.deleteMany({ where: { id: grant.id } });
+    assert.equal(threw, true, "a grant was repointed at a different person after creation");
+  });
+
+  test("the application's own grants always agree", pgOnly ?? {}, async () => {
+    // The positive control: every row the product writes satisfies the rule,
+    // so the constraint is not merely unreachable.
+    const { grantRecordAccess } = await import("../../src/lib/actions/record-grants");
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+    const result = await runAsTestIdentity(A.ownerId, () =>
+      grantRecordAccess({
+        workspaceId: A.workspaceId,
+        userId: alice.id,
+        anchorType: "opportunity",
+        anchorId: id.offeredOpp,
+      }),
+    );
+    assert.equal(result.ok, true, `grant failed: ${JSON.stringify(result)}`);
+
+    const row = await observer.recordGrant.findFirstOrThrow({
+      where: { workspaceId: A.workspaceId, userId: alice.id, anchorId: id.offeredOpp },
+      select: { membershipId: true, userId: true, workspaceId: true },
+    });
+    assert.equal(row.membershipId, alice.membershipId, "the grant named the wrong membership");
+    assert.equal(row.userId, alice.id);
+    assert.equal(row.workspaceId, A.workspaceId);
+    await observer.recordGrant.deleteMany({ where: { userId: alice.id } });
+  });
+
+  test("deleting the membership row takes the grants with it, in the database",
+    pgOnly ?? {},
+    async () => {
+      // No application code involved: the membership is deleted directly, and
+      // the grants must still go. This is the backstop that makes the cleanup
+      // in removeMember a convenience rather than the only thing standing
+      // between a departure and a silent return of access.
+      const user = await makeUser("cascade");
+      const membership = await observer.workspaceMember.create({
+        data: { workspaceId: A.workspaceId, userId: user.id, role: "member", scopeMode: "restricted" },
+        select: { id: true },
+      });
+      await observer.recordGrant.create({
+        data: {
+          workspaceId: A.workspaceId,
+          userId: user.id,
+          membershipId: membership.id,
+          anchorType: "opportunity",
+          anchorId: id.offeredOpp,
+        },
+      });
+      assert.equal((await grantsFor(user.id)).length, 1, "the fixture granted nothing");
+
+      await observer.workspaceMember.delete({ where: { id: membership.id } });
+
+      assert.deepEqual(
+        await grantsFor(user.id),
+        [],
+        "the membership is gone and its grants survived the foreign key",
+      );
+    });
+});
+
+// ---------------------------------------------------------------------------
+// 11. Concurrency
+// ---------------------------------------------------------------------------
+
+describe("two administrators at once", () => {
+  /**
+   * What the database already guarantees, and what it does not.
+   *
+   * Single-use acceptance and duplicate grants are held by a conditional update
+   * and a unique index respectively — no extra machinery needed, and these
+   * tests say so rather than assuming it. Replacement is the one that needed
+   * help: two replacements starting from an empty grant set delete nothing,
+   * block on nothing, and both insert, leaving the union of two sets. The
+   * membership row lock in setMemberScope is there for exactly that case.
+   */
+
+  test("two simultaneous acceptances join once and grant once", pgOnly ?? {}, async () => {
+    const user = await makeUser("race-accept");
+    const token = await issueRestricted({
+      email: user.email,
+      scope: [{ entityType: "opportunity", entityId: id.offeredOpp }],
+    });
+
+    const { acceptInvitation } = await import("../../src/lib/actions/team");
+    await resetRateLimit("mutation", { user: user.id, workspace: user.id, global: user.id });
+    const [first, second] = await Promise.all([
+      runAsTestIdentity(user.id, () => acceptInvitation(token)),
+      runAsTestIdentity(user.id, () => acceptInvitation(token)),
+    ]);
+
+    const won = [first, second].filter((r) => r.ok).length;
+    assert.equal(won, 1, `exactly one acceptance should win, ${won} did`);
+
+    const memberships = await observer.workspaceMember.count({
+      where: { workspaceId: A.workspaceId, userId: user.id },
+    });
+    assert.equal(memberships, 1, "the race produced more than one membership");
+    assert.deepEqual(
+      await grantsFor(user.id),
+      [`opportunity:${id.offeredOpp}`],
+      "the race produced a duplicated or missing grant set",
+    );
+  });
+
+  test("two replacements leave one of the two sets, never their union",
+    pgOnly ?? {},
+    async () => {
+      const user = await makeUser("race-replace");
+      await observer.workspaceMember.create({
+        data: { workspaceId: A.workspaceId, userId: user.id, role: "member", scopeMode: "workspace" },
+      });
+
+      const { setMemberScope } = await import("../../src/lib/actions/settings");
+      const call = (entityId: string, entityType: "opportunity" | "project") =>
+        setMemberScope({
+          workspaceId: A.workspaceId,
+          userId: user.id,
+          scopeMode: "restricted",
+          anchors: [{ entityType, entityId }],
+        });
+
+      await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+      const results = await Promise.all([
+        runAsTestIdentity(A.ownerId, () => call(id.offeredOpp, "opportunity")),
+        runAsTestIdentity(A.ownerId, () => call(id.offeredProject, "project")),
+      ]);
+      assert.ok(results.some((r) => r.ok), `both replacements failed: ${JSON.stringify(results)}`);
+
+      const grants = await grantsFor(user.id);
+      assert.equal(
+        grants.length,
+        1,
+        `the member ended up with ${grants.length} grants — two concurrent replacements ` +
+          `produced a set nobody asked for: ${grants.join(", ")}`,
+      );
+    });
+
+  test("a revocation racing a replacement does not resurrect the revoked grant",
+    pgOnly ?? {},
+    async () => {
+      const user = await makeUser("race-revoke");
+      const membership = await observer.workspaceMember.create({
+        data: { workspaceId: A.workspaceId, userId: user.id, role: "member", scopeMode: "restricted" },
+        select: { id: true },
+      });
+      await observer.recordGrant.create({
+        data: {
+          workspaceId: A.workspaceId, userId: user.id, membershipId: membership.id,
+          anchorType: "opportunity", anchorId: id.offeredOpp,
+        },
+      });
+
+      const { revokeRecordAccess } = await import("../../src/lib/actions/record-grants");
+      const { setMemberScope } = await import("../../src/lib/actions/settings");
+      await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+
+      await Promise.all([
+        runAsTestIdentity(A.ownerId, () =>
+          revokeRecordAccess({
+            workspaceId: A.workspaceId, userId: user.id,
+            anchorType: "opportunity", anchorId: id.offeredOpp,
+          }),
+        ),
+        runAsTestIdentity(A.ownerId, () =>
+          setMemberScope({
+            workspaceId: A.workspaceId, userId: user.id, scopeMode: "restricted",
+            anchors: [{ entityType: "project", entityId: id.offeredProject }],
+          }),
+        ),
+      ]);
+
+      const grants = await grantsFor(user.id);
+      assert.ok(
+        !grants.includes(`opportunity:${id.offeredOpp}`) || grants.length === 1,
+        `the two operations interleaved into a state neither asked for: ${grants.join(", ")}`,
+      );
+    });
+
+  test("removal racing a grant leaves no grant behind", pgOnly ?? {}, async () => {
+    const user = await makeUser("race-remove");
+    await observer.workspaceMember.create({
+      data: { workspaceId: A.workspaceId, userId: user.id, role: "member", scopeMode: "restricted" },
+    });
+
+    const { grantRecordAccess } = await import("../../src/lib/actions/record-grants");
+    const { removeMember } = await import("../../src/lib/actions/settings");
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+
+    await Promise.all([
+      runAsTestIdentity(A.ownerId, () =>
+        grantRecordAccess({
+          workspaceId: A.workspaceId, userId: user.id,
+          anchorType: "opportunity", anchorId: id.offeredOpp,
+        }),
+      ),
+      runAsTestIdentity(A.ownerId, () => removeMember(A.workspaceId, user.id)),
+    ]);
+
+    const membership = await observer.workspaceMember.findFirst({
+      where: { workspaceId: A.workspaceId, userId: user.id },
+      select: { id: true },
+    });
+    if (!membership) {
+      assert.deepEqual(
+        await grantsFor(user.id),
+        [],
+        "the member was removed and a grant written by the losing race survived them",
+      );
+    }
   });
 });

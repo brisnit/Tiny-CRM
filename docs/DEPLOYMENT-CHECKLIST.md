@@ -43,6 +43,7 @@ that no amount of correct deployment will substitute for.
       psql "$DATABASE_URL" -f prisma/postgres/009_record_grants.sql
       psql "$DATABASE_URL" -f prisma/postgres/010_record_scope.sql
       psql "$DATABASE_URL" -f prisma/postgres/011_contact_company_scope.sql
+      psql "$DATABASE_URL" -f prisma/postgres/012_grant_integrity.sql
       ```
       None is optional:
 
@@ -305,6 +306,7 @@ psql "$DATABASE_URL" -f prisma/postgres/008_person_scoped_ai_output.sql
 psql "$DATABASE_URL" -f prisma/postgres/009_record_grants.sql
 psql "$DATABASE_URL" -f prisma/postgres/010_record_scope.sql
 psql "$DATABASE_URL" -f prisma/postgres/011_contact_company_scope.sql
+psql "$DATABASE_URL" -f prisma/postgres/012_grant_integrity.sql
 # ...all of the above BEFORE pushing to main: the build's deployment gate
 # blocks a production build against a database that is behind
 

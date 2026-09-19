@@ -1,7 +1,7 @@
 import { test, describe, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { createTenant, cleanupTenants, db as observer, type Tenant } from "../helpers/fixtures";
+import { createTenant, cleanupTenants, db as observer, type Tenant, membershipIdFor } from "../helpers/fixtures";
 import { runAsTestIdentity } from "../../src/lib/auth/context";
 import { resetRateLimit } from "../../src/lib/rate-limit";
 import { isPostgres } from "../../src/lib/env";
@@ -261,11 +261,13 @@ before(async () => {
     where: { workspaceId: ws, userId: A.viewerId },
     data: { scopeMode: "restricted", role: "manager" },
   });
+  const memberMembership = await membershipIdFor(ws, A.memberId);
+  const viewerMembership = await membershipIdFor(ws, A.viewerId);
   await observer.recordGrant.createMany({
     data: [
-      { workspaceId: ws, userId: A.memberId, anchorType: "opportunity", anchorId: id.grantedOpp, grantedById: A.ownerId },
-      { workspaceId: ws, userId: A.memberId, anchorType: "project", anchorId: id.grantedProject, grantedById: A.ownerId },
-      { workspaceId: ws, userId: A.viewerId, anchorType: "opportunity", anchorId: id.grantedOpp, grantedById: A.ownerId },
+      { workspaceId: ws, userId: A.memberId, membershipId: memberMembership, anchorType: "opportunity", anchorId: id.grantedOpp, grantedById: A.ownerId },
+      { workspaceId: ws, userId: A.memberId, membershipId: memberMembership, anchorType: "project", anchorId: id.grantedProject, grantedById: A.ownerId },
+      { workspaceId: ws, userId: A.viewerId, membershipId: viewerMembership, anchorType: "opportunity", anchorId: id.grantedOpp, grantedById: A.ownerId },
     ],
   });
 });

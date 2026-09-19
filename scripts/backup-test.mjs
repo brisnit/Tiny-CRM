@@ -117,6 +117,7 @@ function applySchema() {
     "009_record_grants.sql",
     "010_record_scope.sql",
     "011_contact_company_scope.sql",
+    "012_grant_integrity.sql",
   ]) {
     execFileSync("node", ["scripts/apply-sql.mjs", `prisma/postgres/${file}`], {
       cwd: ROOT, stdio: "ignore", env,

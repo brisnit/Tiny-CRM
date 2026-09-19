@@ -1,7 +1,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-import { createTenant, cleanupTenants, db as observer, type Tenant } from "../helpers/fixtures";
+import { createTenant, cleanupTenants, db as observer, type Tenant, membershipIdFor } from "../helpers/fixtures";
 import { db } from "../../src/lib/db";
 import { withTenantContext } from "../../src/lib/tenant-db";
 import { isPostgres } from "../../src/lib/env";
@@ -125,6 +125,7 @@ describe("the data model exists, and changes nothing", () => {
       data: {
         workspaceId: A.workspaceId,
         userId: A.memberId,
+        membershipId: await membershipIdFor(A.workspaceId, A.memberId),
         anchorType: "opportunity",
         anchorId: A.opportunityId,
         grantedById: A.ownerId,
@@ -161,6 +162,7 @@ describe("the data model exists, and changes nothing", () => {
       data: {
         workspaceId: A.workspaceId,
         userId: A.memberId,
+        membershipId: await membershipIdFor(A.workspaceId, A.memberId),
         anchorType: "opportunity",
         anchorId: A.opportunityId,
         grantedById: A.ownerId,
@@ -204,6 +206,7 @@ describe("the data model exists, and changes nothing", () => {
       data: {
         workspaceId: A.workspaceId,
         userId: A.memberId,
+        membershipId: await membershipIdFor(A.workspaceId, A.memberId),
         anchorType: "project",
         anchorId: A.projectId,
       },

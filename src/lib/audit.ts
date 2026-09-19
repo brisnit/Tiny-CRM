@@ -31,7 +31,7 @@ export type AuditAction =
   // Record-level access: who was given which piece of work, and who took it
   // back. Filed with the membership events rather than the record ones — this
   // is access control, and reads as such in the log.
-  | "member.access_granted" | "member.access_revoked"
+  | "member.access_granted" | "member.access_revoked" | "member.scope_changed"
   | "workspace.created" | "workspace.updated" | "workspace.archived" | "workspace.deleted"
   | "record.created" | "record.updated" | "record.archived" | "record.restored" | "record.deleted"
   | "pipeline.changed" | "automation.changed" | "field.changed"

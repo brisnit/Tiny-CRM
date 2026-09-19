@@ -185,8 +185,14 @@ model WorkspaceMember {
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  grants    RecordGrant[]
 
   @@unique([workspaceId, userId])
+  /// Not redundant with the primary key. RecordGrant carries all three columns
+  /// and points at them together, so the database itself refuses a grant whose
+  /// membership, workspace and person disagree. A composite foreign key needs a
+  /// unique constraint covering exactly the columns it references.
+  @@unique([id, workspaceId, userId])
   @@index([userId])
 }
 
@@ -200,12 +206,18 @@ model WorkspaceMember {
 /// opportunity?" has to be answerable for an audit screen, and because a grant
 /// needs to record who gave it.
 ///
-/// Inert until record-level policies land: no policy reads this table yet, and
-/// nothing in the product can set a membership to `restricted`.
+/// A grant belongs to a *membership*, not to a person. Someone who leaves and
+/// later rejoins is a new membership, so the grants they used to hold are gone
+/// rather than waiting to reattach — that reattachment is a real bug, and the
+/// foreign key below is what makes it impossible rather than merely unlikely.
 model RecordGrant {
   id          String   @id @default(cuid())
   workspaceId String
   userId      String
+  /// The membership this grant belongs to. Deleting it takes the grants with
+  /// it, in the database, so removal cannot leave anything behind even if the
+  /// application forgets — and the application deletes them too.
+  membershipId String
   /// opportunity | project
   anchorType  String
   anchorId    String
@@ -214,8 +226,15 @@ model RecordGrant {
   createdAt   DateTime @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  /// Three columns, one reference. `membershipId` alone would let the row name
+  /// one membership while `userId` and `workspaceId` named somebody else — two
+  /// independently writable identities that can disagree, and the policies read
+  /// `userId` while the lifecycle reads `membershipId`. Pointing all three at
+  /// the same membership row makes disagreement a constraint violation.
+  membership WorkspaceMember @relation(fields: [membershipId, workspaceId, userId], references: [id, workspaceId, userId], onDelete: Cascade)
 
   @@unique([workspaceId, userId, anchorType, anchorId])
+  @@index([membershipId])
   /// The probe a policy makes for every row it considers.
   @@index([userId, workspaceId, anchorType, anchorId])
   /// The other direction: who can reach this record?

@@ -21,6 +21,10 @@ import { appOrigin } from "@/lib/origin";
 import { recordAudit } from "@/lib/audit";
 import { WORKSPACE_ROLE } from "@/lib/enums";
 import { zId } from "@/lib/validation/common";
+import {
+  dedupeScope, scopeListSchema, scopeModeError, scopeModeSchema,
+} from "@/lib/validation/scope";
+import { resolveAnchors } from "@/lib/auth/anchors";
 
 /**
  * Team membership: invitations in, and the lifecycle of one once it is out.
@@ -42,14 +46,24 @@ import { zId } from "@/lib/validation/common";
  *    ordering note in `auth/invitations.ts`.
  */
 
-const inviteSchema = z.object({
-  workspaceId: zId,
-  // Deliberately permissive on shape and strict on length: an address that
-  // fails delivery is a better outcome than a valid address rejected by a
-  // clever regex.
-  email: z.string().trim().min(3).max(320).email("Enter a valid email address"),
-  role: z.enum(ROLES),
-});
+const inviteSchema = z
+  .object({
+    workspaceId: zId,
+    // Deliberately permissive on shape and strict on length: an address that
+    // fails delivery is a better outcome than a valid address rejected by a
+    // clever regex.
+    email: z.string().trim().min(3).max(320).email("Enter a valid email address"),
+    role: z.enum(ROLES),
+    // Scope is orthogonal to role: "restricted manager" is a coherent thing to
+    // offer somebody. Defaults keep every existing caller meaning exactly what
+    // it meant before.
+    scopeMode: scopeModeSchema.default("workspace"),
+    scope: scopeListSchema.default([]),
+  })
+  .superRefine((value, ctx) => {
+    const problem = scopeModeError(value.scopeMode, value.scope);
+    if (problem) ctx.addIssue({ code: "custom", message: problem, path: ["scope"] });
+  });
 
 export async function inviteTeamMember(
   input: z.input<typeof inviteSchema>,
@@ -86,11 +100,28 @@ export async function inviteTeamMember(
           throw new AppError("conflict", "That person is already in this workspace.");
         }
 
+        // Anchors are checked here, through the inviter's own context, so
+        // nobody can offer access to work they cannot see themselves. They are
+        // checked again at acceptance, because a record can be archived or
+        // deleted in the days a link sits in an inbox.
+        const anchors = dedupeScope(data.scope);
+        if (anchors.length > 0) {
+          const resolved = await resolveAnchors(db, workspaceId, anchors);
+          if (!resolved.ok) {
+            throw new AppError(
+              "not_found",
+              "One of the records you selected is no longer available.",
+            );
+          }
+        }
+
         const invitation = await issueInvitation({
           workspaceId,
           email,
           role: data.role,
           invitedById: actor.identity.id,
+          scopeMode: data.scopeMode,
+          scope: anchors,
         });
 
         await deliver({
@@ -106,9 +137,17 @@ export async function inviteTeamMember(
           action: "member.invited",
           entityType: "invitation",
           entityId: invitation.id,
-          summary: `Invited someone as ${data.role}`,
+          summary:
+            data.scopeMode === "restricted"
+              ? `Invited someone as ${data.role}, limited to ${data.scope.length} record(s)`
+              : `Invited someone as ${data.role}`,
           // The address is the point of the record; the token never is.
-          metadata: { email, role: data.role, scopeMode: "workspace" },
+          metadata: {
+            email,
+            role: data.role,
+            scopeMode: data.scopeMode,
+            anchors: data.scope.map((entry) => `${entry.entityType}:${entry.entityId}`),
+          },
         });
 
         revalidatePathSafely("/settings/team");
@@ -297,6 +336,17 @@ async function finishAcceptance(
         "forbidden",
         "This invitation was sent to a different email address. " +
           "Sign in with that address to accept it.",
+      );
+    }
+    if (result.reason === "unmaterialisable") {
+      // Distinguished from "no longer valid" on purpose. The link is fine and
+      // still unspent; the work it names is not available any more, which is
+      // something only an administrator can put right. Telling the person to
+      // try again would send them round the same loop forever.
+      throw new AppError(
+        "conflict",
+        "This invitation cannot be completed — some of the work it gives you " +
+          "access to is no longer available. Ask whoever invited you to send a new one.",
       );
     }
     throw new AppError("not_found", "That invitation link is no longer valid.");

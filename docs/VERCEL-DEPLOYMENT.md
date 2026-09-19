@@ -112,6 +112,7 @@ node scripts/apply-sql.mjs prisma/postgres/008_person_scoped_ai_output.sql
 node scripts/apply-sql.mjs prisma/postgres/009_record_grants.sql
 node scripts/apply-sql.mjs prisma/postgres/010_record_scope.sql
 node scripts/apply-sql.mjs prisma/postgres/011_contact_company_scope.sql
+node scripts/apply-sql.mjs prisma/postgres/012_grant_integrity.sql
 ```
 
 Then set the login password for `tinycrm_app` as above, and verify:
@@ -543,6 +544,7 @@ A backup that has never been restored is a hypothesis, not a backup.
       node scripts/apply-sql.mjs prisma/postgres/009_record_grants.sql
       node scripts/apply-sql.mjs prisma/postgres/010_record_scope.sql
       node scripts/apply-sql.mjs prisma/postgres/011_contact_company_scope.sql
+      node scripts/apply-sql.mjs prisma/postgres/012_grant_integrity.sql
 3.  ALTER ROLE tinycrm_app WITH LOGIN PASSWORD '<generated>';
     GRANT CONNECT ON DATABASE <db> TO tinycrm_app;
 4.  Verify RLS binds:  reportRlsStatus() as tinycrm_app.
