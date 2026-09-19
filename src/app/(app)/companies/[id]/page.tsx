@@ -45,6 +45,25 @@ export default async function CompanyPage({ params }: PageProps<"/companies/[id]
   const company = await getCompany(read, id);
   if (!company) notFound();
 
+  // A restricted member reaches this company through work they hold and
+  // receives its identity only, so the rest of this page — the edit form, the
+  // related deals and projects, the account history — has nothing to render
+  // from. It gets the header and stops there. The screen that belongs to
+  // record-level access proper is a later step; this is the honest minimum so
+  // that what they can open matches what they are allowed to know.
+  if ("identityOnly" in company) {
+    return (
+      <PageShell wide>
+        <PageHeader
+          backHref="/companies"
+          backLabel="Companies"
+          title={company.name}
+          description={[company.industry, company.location].filter(Boolean).join(" · ") || undefined}
+        />
+      </PageShell>
+    );
+  }
+
   const workspaces = actor.memberships;
   const summary = await getRecordSummary(
     actor,

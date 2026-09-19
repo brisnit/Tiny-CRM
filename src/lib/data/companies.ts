@@ -4,6 +4,7 @@ import type { ReadScope } from "@/lib/auth/access";
 import { contains, db, isSearchable } from "@/lib/db";
 import { tagsForEntities } from "@/lib/actions/tags";
 import { withTenantContext } from "@/lib/tenant-db";
+import { companyIdentity, isRestrictedReader } from "@/lib/data/restricted";
 
 const PAGE_SIZE = 50;
 
@@ -11,6 +12,7 @@ export async function listCompanies(
   read: ReadScope,
   filters: { q?: string; type?: string; relationshipStatus?: string; tag?: string; view?: string; page?: number },
 ) {
+  const identityOnly = isRestrictedReader(read);
   // Read paths do not go through the action wrapper, so this is where they join
   // the RLS model. The ids are the caller's already-authorised scope
   // (resolveReadScope), so this narrows the database to exactly what the
@@ -76,11 +78,18 @@ export async function listCompanies(
     const tags = await tagsForEntities("company", rows.map((r) => r.id));
 
     return {
-      companies: rows.map((c) => ({
-        ...c,
-        pipeline: pipelineBy.get(c.id) ?? { value: 0, count: 0 },
-        tags: tags.get(c.id) ?? [],
-      })),
+      // A restricted member gets identity and nothing derived: the pipeline
+      // figure is computed from deals they may not see, and would disclose in
+      // aggregate what the row policy withholds.
+      companies: rows.map((c) =>
+        identityOnly
+          ? companyIdentity(c)
+          : {
+              ...c,
+              pipeline: pipelineBy.get(c.id) ?? { value: 0, count: 0 },
+              tags: tags.get(c.id) ?? [],
+            },
+      ),
       total,
       page,
       pageCount: Math.max(1, Math.ceil(total / PAGE_SIZE)),
@@ -89,6 +98,9 @@ export async function listCompanies(
 }
 
 export async function getCompany(read: ReadScope, id: string) {
+  // A restricted member reaches this company through work they hold, and
+  // receives its identity only — see src/lib/data/restricted.ts.
+  const identityOnly = isRestrictedReader(read);
   const { workspaceIds } = read;
   // Read paths do not go through the action wrapper, so this is where they join
   // the RLS model. The ids are the caller's already-authorised scope
@@ -167,6 +179,12 @@ export async function getCompany(read: ReadScope, id: string) {
     });
 
     if (!company) return null;
+
+    // Identity only, and before anything derived is computed: the stats below
+    // are built from deals and projects, which a restricted member may not see
+    // and must not be told about in aggregate either.
+    if (identityOnly) return companyIdentity(company);
+
     const tags = await tagsForEntities("company", [id]);
 
     const openDeals = company.deals.filter((d) => d.stage.kind === "open");
