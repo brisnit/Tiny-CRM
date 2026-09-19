@@ -384,3 +384,141 @@ describe("legitimate membership administration still works", () => {
     assert.equal(rows[0].scopeMode, "restricted");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The application agrees with the database
+// ---------------------------------------------------------------------------
+
+describe("membership administration refuses a restricted actor outright", () => {
+  /**
+   * 013 made the database stricter than two server actions. That is the safe
+   * direction to be wrong in, and it is still wrong: a restricted admin would
+   * pass `members:manage`, reach the UPDATE, have the policy narrow it to no
+   * rows, and be told it succeeded. "It worked and nothing happened" is the
+   * worst answer an authorisation check can give.
+   *
+   * These prove the refusal happens in the application, before any mutation,
+   * so the two boundaries say the same thing.
+   */
+
+  let restrictedAdmin = { id: "", email: "" };
+  let target = { id: "" };
+
+  before(async () => {
+    if (!isPostgres) return;
+    const mk = async (label: string) =>
+      observer.user.create({
+        data: {
+          email: `${label}-${randomUUID()}@membership.invalid`,
+          name: label,
+          passwordHash: await bcrypt.hash("correct-horse-battery", 4),
+          emailVerifiedAt: new Date(),
+        },
+        select: { id: true, email: true },
+      });
+
+    restrictedAdmin = await mk("restricted-admin");
+    const victim = await mk("admin-target");
+    target = { id: victim.id };
+
+    // An admin by role, restricted by scope — the coherent combination the
+    // model allows and the one that made this gap reachable.
+    await observer.workspaceMember.create({
+      data: {
+        workspaceId: A.workspaceId, userId: restrictedAdmin.id,
+        role: "admin", scopeMode: "restricted",
+      },
+    });
+    await observer.workspaceMember.create({
+      data: {
+        workspaceId: A.workspaceId, userId: target.id,
+        role: "member", scopeMode: "workspace",
+      },
+    });
+  });
+
+  after(async () => {
+    if (!isPostgres) return;
+    await observer.workspaceMember.deleteMany({
+      where: { workspaceId: A.workspaceId, userId: { in: [restrictedAdmin.id, target.id] } },
+    });
+    await observer.user.deleteMany({ where: { id: { in: [restrictedAdmin.id, target.id] } } });
+  });
+
+  test("changeMemberRole refuses a restricted administrator", pgOnly ?? {}, async () => {
+    const { changeMemberRole } = await import("../../src/lib/actions/settings");
+    const { runAsTestIdentity } = await import("../../src/lib/auth/context");
+    const { resetRateLimit } = await import("../../src/lib/rate-limit");
+    await resetRateLimit("mutation", {
+      user: restrictedAdmin.id, workspace: A.workspaceId, global: restrictedAdmin.id,
+    });
+
+    const result = await runAsTestIdentity(restrictedAdmin.id, () =>
+      changeMemberRole({ workspaceId: A.workspaceId, userId: target.id, role: "manager" }),
+    );
+
+    assert.equal(result.ok, false, "a restricted administrator was allowed to change a role");
+
+    const unchanged = await observer.workspaceMember.findFirst({
+      where: { workspaceId: A.workspaceId, userId: target.id },
+      select: { role: true },
+    });
+    assert.equal(unchanged?.role, "member", "the role changed despite the refusal");
+  });
+
+  test("removeMember refuses a restricted administrator", pgOnly ?? {}, async () => {
+    const { removeMember } = await import("../../src/lib/actions/settings");
+    const { runAsTestIdentity } = await import("../../src/lib/auth/context");
+    const { resetRateLimit } = await import("../../src/lib/rate-limit");
+    await resetRateLimit("mutation", {
+      user: restrictedAdmin.id, workspace: A.workspaceId, global: restrictedAdmin.id,
+    });
+
+    const result = await runAsTestIdentity(restrictedAdmin.id, () =>
+      removeMember(A.workspaceId, target.id),
+    );
+
+    assert.equal(result.ok, false, "a restricted administrator removed a member");
+
+    const survivor = await observer.workspaceMember.findFirst({
+      where: { workspaceId: A.workspaceId, userId: target.id },
+      select: { id: true },
+    });
+    assert.ok(survivor, "the member was removed despite the refusal");
+  });
+
+  test("a full-workspace administrator is unaffected", pgOnly ?? {}, async () => {
+    // The control. Refusing restricted actors must not narrow anybody else.
+    const { changeMemberRole } = await import("../../src/lib/actions/settings");
+    const { runAsTestIdentity } = await import("../../src/lib/auth/context");
+    const { resetRateLimit } = await import("../../src/lib/rate-limit");
+    await resetRateLimit("mutation", { user: A.ownerId, workspace: A.workspaceId, global: A.ownerId });
+
+    const result = await runAsTestIdentity(A.ownerId, () =>
+      changeMemberRole({ workspaceId: A.workspaceId, userId: target.id, role: "manager" }),
+    );
+    assert.equal(result.ok, true, `the owner was refused: ${JSON.stringify(result)}`);
+
+    const changed = await observer.workspaceMember.findFirst({
+      where: { workspaceId: A.workspaceId, userId: target.id },
+      select: { role: true },
+    });
+    assert.equal(changed?.role, "manager", "the owner's change did not take effect");
+    await observer.workspaceMember.updateMany({
+      where: { workspaceId: A.workspaceId, userId: target.id }, data: { role: "member" },
+    });
+  });
+
+  test("an ordinary member without members:manage is still refused", pgOnly ?? {}, async () => {
+    // Unchanged behaviour, asserted so this step cannot be blamed for it later.
+    const { changeMemberRole } = await import("../../src/lib/actions/settings");
+    const { runAsTestIdentity } = await import("../../src/lib/auth/context");
+    const { resetRateLimit } = await import("../../src/lib/rate-limit");
+    await resetRateLimit("mutation", { user: A.viewerId, workspace: A.workspaceId, global: A.viewerId });
+
+    const result = await runAsTestIdentity(A.viewerId, () =>
+      changeMemberRole({ workspaceId: A.workspaceId, userId: target.id, role: "manager" }),
+    );
+    assert.equal(result.ok, false, "a viewer changed somebody's role");
+  });
+});

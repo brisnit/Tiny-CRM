@@ -531,6 +531,11 @@ export async function changeMemberRole(
         const data = memberRoleSchema.parse(input);
         const workspaceId = actor.workspaceId;
 
+        // Administering members is a full-workspace act, and 013 says so in the
+        // database. Without this the two would disagree: a restricted admin
+        // would pass the permission check, reach the UPDATE, have row-level
+        // security narrow it to nothing, and be told it worked.
+        assertUnrestrictedActor(actor, workspaceId);
         assertCanAssignRole(actor, data.role);
 
         const target = await db.workspaceMember.findFirst({
@@ -580,6 +585,10 @@ export async function removeMember(
       async (actor) => {
         const targetId = zId.parse(userId);
         const scopedWorkspaceId = actor.workspaceId;
+
+        // As in changeMemberRole: refused here rather than silently reduced to
+        // zero rows by the policy and reported as a success.
+        assertUnrestrictedActor(actor, scopedWorkspaceId);
 
         const target = await db.workspaceMember.findFirst({
           where: { workspaceId: scopedWorkspaceId, userId: targetId },
