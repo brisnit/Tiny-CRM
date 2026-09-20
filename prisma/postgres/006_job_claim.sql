@@ -80,7 +80,39 @@ AS $$
     SELECT e.id FROM "DomainEvent" e
     WHERE e."deadAt" IS NULL
       AND e."processedAt" IS NULL
-      AND e."availableAt" <= (now() AT TIME ZONE 'UTC')
+      -- One millisecond of grace, and it is not a fudge factor.
+      --
+      -- `availableAt` is timestamp(3) and PostgreSQL *rounds* to that
+      -- precision rather than truncating, so a value written at .8236 is
+      -- stored as .824 — up to half a millisecond after the instant it
+      -- describes. Measured on a cluster, 44.7% of inserts land ahead of their
+      -- own clock that way, and under a UTC session 134 of 300 freshly
+      -- inserted events were not yet due. This comparison carries full
+      -- microsecond precision, so for that sub-millisecond window a
+      -- just-created event is invisible to every worker.
+      --
+      -- What this is not: it is **not** the cause of the intermittent failure
+      -- in the concurrent-dispatch test. That was a test-isolation defect —
+      -- `dispatchSoon()` is fire-and-forget, so a detached dispatcher from an
+      -- earlier action could still be in flight and legitimately take the
+      -- claim, and the test wrongly required one of its own two calls to win.
+      -- The two defects were found together and are unrelated; this one is
+      -- proven on its own terms in tests/integration/events.test.ts by dating
+      -- a row half a millisecond ahead and claiming it in the same
+      -- transaction, where `now()` is the transaction timestamp and both
+      -- statements therefore read an identical clock.
+      --
+      -- Impact without the fix is latency, not loss: the next pass takes the
+      -- event and the sweep takes anything a pass misses. It is also invisible
+      -- on a developer machine west of Greenwich, where `CURRENT_TIMESTAMP`
+      -- coerced into a timestamp without time zone writes local wall clock and
+      -- every event looks hours overdue — so the bug hid precisely where it
+      -- would have been looked for.
+      --
+      -- A millisecond is far below the scheduling latency this queue already
+      -- tolerates, and it does not change which events are eligible, only when
+      -- one becomes eligible by a rounding artefact.
+      AND e."availableAt" <= (now() AT TIME ZONE 'UTC') + interval '1 millisecond'
       AND (
         e.status = 'pending'
         OR e.status = 'failed'

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { runAsTestIdentity } from "../../src/lib/auth/context";
 import { createTenant, cleanupTenants, db, type Tenant } from "../helpers/fixtures";
+import { isPostgres } from "../../src/lib/env";
 
 /**
  * Domain events, the outbox, and the automation engine that consumes them.
@@ -91,16 +92,134 @@ describe("domain events", () => {
 
     // Two dispatchers racing for the same row.
     const [first, second] = await Promise.all([dispatchPendingEvents(), dispatchPendingEvents()]);
-    assert.equal(
-      first.processed + second.processed,
-      1,
-      "the same event was processed more than once",
-    );
+    const emitted = await db.domainEvent.findFirstOrThrow({
+      where: { workspaceId: A.workspaceId, name: "deal.stage.changed" },
+      orderBy: { createdAt: "desc" },
+    });
 
+    // The invariant is "claimed at most once", and the authority for it is the
+    // row, not the return values.
+    //
+    // This assertion used to be `first.processed + second.processed === 1`,
+    // which quietly required one of *these two* calls to be the winner. It is
+    // not entitled to that. `dispatchSoon()` is fire-and-forget, so a detached
+    // dispatcher started by an earlier action in this same process can still be
+    // in flight and legitimately take the claim — at which point both of these
+    // return zero and the old assertion failed, reporting a duplicate that had
+    // not happened. That is a defect in the test, not in the queue: a third
+    // dispatcher winning is exactly what the queue is built to survive.
+    //
+    // `attempts` is incremented once, inside the claiming UPDATE, so it counts
+    // claims by every dispatcher rather than the two this test happens to hold
+    // references to. It is readable immediately and needs nothing to settle.
+    assert.equal(
+      emitted.attempts,
+      1,
+      `the event was claimed ${emitted.attempts} times; exactly one claim may ever succeed`,
+    );
+    assert.ok(
+      first.processed + second.processed <= 1,
+      `both explicit dispatchers processed the same event ` +
+        `(${first.processed} and ${second.processed}) — the claim did not exclude one of them`,
+    );
+    // No assertion on `claimedBy`: a successful run releases the claim
+    // (jobs.ts sets processedAt and clears claimedBy together), so it is null
+    // for exactly the outcome this test wants. `attempts` is the durable
+    // record — 1 means claimed once, 0 would mean never claimed at all, so the
+    // equality above is not vacuous.
+
+    // The side effect, in the direction that can be proven without waiting:
+    // whoever won, the rule must not have run twice. Whether it eventually runs
+    // *once* is a completion property, and this process offers no way to await a
+    // detached dispatcher — see the note in the suite header.
     const runs = await db.automationRun.count({ where: { automationId: automation.id } });
-    assert.equal(runs, 1, "the automation ran twice for one event");
+    assert.ok(runs <= 1, `the automation ran ${runs} times for one event`);
 
     await db.automation.delete({ where: { id: automation.id } });
+  });
+
+  test("an event is claimable the instant it exists", isPostgres ? {} : { skip: "the claim predicate is PostgreSQL" }, async () => {
+    // A separate defect from the one above, proven separately.
+    //
+    // `availableAt` is timestamp(3) and PostgreSQL *rounds* to that precision,
+    // so a row written at .8236 is stored as .824 — up to half a millisecond
+    // after the instant it describes. Measured on a cluster, 44.7% of inserts
+    // land ahead of their own clock that way, and under a UTC session 134 of
+    // 300 freshly inserted events were not yet due. The comparison value in
+    // the claim carries full microsecond precision, so for that sub-millisecond
+    // window a just-created event is invisible to every worker.
+    //
+    // Nothing is lost to it — the next pass takes the event — and it is not the
+    // cause of the concurrency flake above. It is its own bug and this is its
+    // own proof.
+    //
+    // The proof is exact rather than timed. `now()` is the *transaction*
+    // timestamp, so a statement that dates the row and a claim in the same
+    // transaction read an identical clock: half a millisecond ahead is half a
+    // millisecond ahead, whatever the machine or the elapsed round-trips. An
+    // earlier version of this test dated the row against one clock and claimed
+    // against another a few milliseconds later, which made it detect the old
+    // predicate roughly one run in ten — a regression test that misses the
+    // regression.
+    //
+    // The whole thing runs in a transaction that is always rolled back:
+    // `app_claim_jobs` is deliberately global, because the worker has no
+    // workspace, so a real call would mark any other test's pending events
+    // `processing` and strand them for the claim's lifetime.
+    class Rollback extends Error {
+      constructor(readonly claimed: string[]) { super("probe complete"); }
+    }
+    const dueWithin = async (offset: string, ids: string[]): Promise<string[]> => {
+      try {
+        await db.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe(
+            `UPDATE "DomainEvent" SET "availableAt" = (now() AT TIME ZONE 'UTC') + interval '${offset}'
+             WHERE id = ANY($1::text[])`, ids);
+          const rows = await tx.$queryRaw<{ id: string }[]>`
+            SELECT id FROM app_claim_jobs('availability-probe', 100::int, 60::int)`;
+          throw new Rollback(rows.map((row) => row.id));
+        });
+      } catch (error) {
+        if (error instanceof Rollback) return error.claimed;
+        throw error;
+      }
+      return [];
+    };
+
+    const event = await db.domainEvent.create({
+      data: {
+        workspaceId: A.workspaceId, name: "deal.stage.changed",
+        entityType: "deal", entityId: A.dealId, payload: "{}",
+      },
+      select: { id: true },
+    });
+
+    // Exactly the overshoot timestamp(3) rounding can produce.
+    assert.ok(
+      (await dueWithin("0.5 milliseconds", [event.id])).includes(event.id),
+      "an event dated half a millisecond ahead — precisely what timestamp(3) rounding does — " +
+        "was not claimable, so a just-created event can be skipped by every worker",
+    );
+
+    // The control: the grace absorbs the rounding and nothing more.
+    assert.ok(
+      !(await dueWithin("1 hour", [event.id])).includes(event.id),
+      "an event scheduled an hour out was claimed early — the grace is too wide",
+    );
+
+    // The rollbacks did their job: no row anywhere is left holding this claim.
+    assert.equal(
+      await db.domainEvent.count({ where: { claimedBy: "availability-probe" } }),
+      0,
+      "the probe left events claimed by a worker that does not exist",
+    );
+
+    await db.domainEvent.deleteMany({ where: { id: event.id } });
+    assert.equal(
+      await db.domainEvent.count({ where: { id: event.id } }),
+      0,
+      "the probe left its own fixture behind",
+    );
   });
 
   test("a failing consumer records the error and leaves the write intact", async () => {
