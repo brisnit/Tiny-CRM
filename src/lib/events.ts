@@ -36,6 +36,13 @@ export const DOMAIN_EVENTS = [
   "opportunity.decided",
   "opportunity.deadline.near",
   "note.created",
+  // Emitted once a stored object has been verified and its FileAsset row
+  // exists. Nothing consumes it yet: `registerJobHandlers` gives every domain
+  // event a handler, and one with no automation trigger completes as a no-op.
+  // It is here so that the seam for scanning, ingestion and webhooks is the
+  // outbox every other write already uses, rather than a new mechanism added
+  // later to a path that had none.
+  "file.uploaded",
   "member.added",
   "ai.suggestion.applied",
   // Emitted with a future availableAt, so the worker performs it when the

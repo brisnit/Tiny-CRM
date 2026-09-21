@@ -76,3 +76,6 @@ build.db
 # Throwaway database for the browser regression suite
 browser-test.db
 browser-test.db-*
+
+# Throwaway object store for the storage suite
+.miniodata/

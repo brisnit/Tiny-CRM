@@ -12,6 +12,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { ENGINE_SUITE_GLOB } from "./engine-suites.mjs";
+import { storageEnvFor } from "./storage-env.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const node = (args, options = {}) =>
@@ -125,6 +126,9 @@ try {
     );
   }
 
+  // Object storage, when one can be provided. Absent, the storage suites skip.
+  const storage = await storageEnvFor();
+
   const pattern = process.argv[2] ?? ENGINE_SUITE_GLOB;
   const result = spawnSync(
     "npx",
@@ -134,6 +138,7 @@ try {
       stdio: "inherit",
       env: {
         ...env,
+        ...storage,
         NODE_ENV: "test",
         AUTH_SECRET: "test-secret-that-is-at-least-32-characters-long",
         NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ./scripts/allow-server-modules.cjs`.trim(),

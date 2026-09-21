@@ -356,7 +356,9 @@ curl -sI https://your-domain/deals   # expect 307 -> /login
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | If AI is enabled | Absent → the offline engine; no CRM content leaves the deployment |
 | `AI_PROVIDER` | No | `anthropic` (default) \| `openai` \| `offline` |
 | `DATABASE_POOL_MAX` | No | Default 10 per instance |
-| `STORAGE_DRIVER` | No | `none` (default) \| `local` \| `s3`. Uploads are disabled at `none` |
+| `STORAGE_DRIVER` | No | `none` (default) \| `local` \| `s3`. Uploads are disabled at `none`. `local` and `s3` are the same driver; `local` points it at MinIO |
+| `STORAGE_BUCKET` / `S3_ENDPOINT` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | If `STORAGE_DRIVER` is not `none` | All four required together; the gate refuses to boot on a half-configured store |
+| `S3_REGION` | No | `auto` (default), which is what Cloudflare R2 documents |
 | `REQUIRE_MALWARE_SCAN` | No | Fails uploads closed until a scanner is wired in |
 | `ALLOW_DEMO_AUTH` | **Never in production** | The gate refuses to boot |
 | `SEED_ALLOW_PRODUCTION` | **Never in production** | The gate refuses to boot |
