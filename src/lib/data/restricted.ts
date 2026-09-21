@@ -110,11 +110,28 @@ const CONTACT_PRIVATE_FIELDS = [
   "relationship",
 ] as const;
 
+type ContactPrivateField = (typeof CONTACT_PRIVATE_FIELDS)[number];
+
+/**
+ * The shape a restricted reader actually receives.
+ *
+ * The private fields become optional rather than staying required, because
+ * they are genuinely absent at runtime. The previous signature returned `T`
+ * unchanged, which told the compiler `relationship` was still there — so a
+ * page that read `contact.relationship.value` type-checked and then threw a
+ * 500 in production for exactly the readers this projection exists to serve.
+ * Saying so in the type is what makes the next one a build error instead.
+ */
+export type ContactForRestrictedReader<T> = Omit<T, ContactPrivateField> &
+  Partial<Pick<T, Extract<keyof T, ContactPrivateField>>>;
+
 /** Removes the fields above from one contact row. */
-export function contactWithoutPrivateFields<T extends Record<string, unknown>>(row: T): T {
+export function contactWithoutPrivateFields<T extends Record<string, unknown>>(
+  row: T,
+): ContactForRestrictedReader<T> {
   const out = { ...row } as Record<string, unknown>;
   for (const field of CONTACT_PRIVATE_FIELDS) delete out[field];
-  return out as T;
+  return out as ContactForRestrictedReader<T>;
 }
 
 /**
