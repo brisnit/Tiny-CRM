@@ -8,7 +8,7 @@
   "crons": [
     {
       "path": "/api/cron/jobs",
-      "schedule": "*/5 * * * *"
+      "schedule": "*/30 * * * *"
     },
     {
       "path": "/api/cron/jobs?sweep=1",
