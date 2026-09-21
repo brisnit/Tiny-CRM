@@ -74,14 +74,24 @@ export default async function ContactPage({ params }: PageProps<"/contacts/[id]"
         }
         meta={
           <>
-            <ScoreExplainer
-              label={RELATIONSHIP_STRENGTH.label(contact.relationship.value)}
-              tone={RELATIONSHIP_STRENGTH.tone(contact.relationship.value)}
-              score={contact.relationship.score}
-              summary={contact.relationship.summary}
-              factors={contact.relationship.factors}
-              caption="What drives this score"
-            />
+            {/*
+              * Absent for a restricted reader, on purpose. The relationship
+              * score is a judgement we have formed about this person, and
+              * Step 3B withholds it from someone who can reach them only
+              * through one piece of work. The score simply does not appear;
+              * the rest of the page does. Rendering it unconditionally threw
+              * and gave them a 500 instead of the record they are entitled to.
+              */}
+            {contact.relationship ? (
+              <ScoreExplainer
+                label={RELATIONSHIP_STRENGTH.label(contact.relationship.value)}
+                tone={RELATIONSHIP_STRENGTH.tone(contact.relationship.value)}
+                score={contact.relationship.score}
+                summary={contact.relationship.summary}
+                factors={contact.relationship.factors}
+                caption="What drives this score"
+              />
+            ) : null}
             <Badge tone={RELATIONSHIP_TYPE.tone(contact.relationshipType)}>
               {RELATIONSHIP_TYPE.label(contact.relationshipType)}
             </Badge>
@@ -122,9 +132,12 @@ export default async function ContactPage({ params }: PageProps<"/contacts/[id]"
                 location: contact.location,
                 linkedin: contact.linkedin,
                 website: contact.website,
-                leadSource: contact.leadSource,
-                ownerId: contact.ownerId,
-                description: contact.description,
+                // Withheld from a restricted reader, so absent rather than
+                // null. The dialog's contract is "null means unset"; undefined
+                // would mean "unchanged", which is not what absence means here.
+                leadSource: contact.leadSource ?? null,
+                ownerId: contact.ownerId ?? null,
+                description: contact.description ?? null,
                 lastContactedAt: dateInputValue(contact.lastContactedAt),
                 nextFollowUpAt: dateOnlyInputValue(contact.nextFollowUpAt),
               }}
