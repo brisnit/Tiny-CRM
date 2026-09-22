@@ -862,8 +862,9 @@ model FileAsset {
   name        String
   mimeType    String @default("application/octet-stream")
   sizeBytes   Int    @default(0)
-  /// Storage pointer. Local dev writes to ./storage; production swaps in S3/R2
-  /// behind src/lib/storage.ts without touching this column.
+  /// Storage pointer, generated server-side by `storageKeyFor`. Local
+  /// development points src/lib/storage.ts at MinIO; production points the same
+  /// driver at Cloudflare R2, without touching this column.
   storageKey  String
   uploaderId  String?
 
@@ -883,6 +884,19 @@ model FileAsset {
   project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
   opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
 
+  /// One stored object, one row.
+  ///
+  /// Upload confirmation is a separate call from the upload itself, and the
+  /// token authorising it stays valid for its whole window. The application
+  /// refuses a replay (src/lib/actions/files.ts), but that check and the insert
+  /// are two statements: two confirmations racing each other can both pass it.
+  /// Two rows for one object is not a cosmetic duplicate — deleting either one
+  /// removes the object and strands the other.
+  ///
+  /// So the invariant lives here, where concurrency cannot get between the
+  /// check and the write. The application guard stays as the thing that returns
+  /// a civil answer; this is the thing that makes it true.
+  @@unique([workspaceId, storageKey])
   @@index([workspaceId, createdAt])
   @@index([projectId])
   @@index([dealId])

@@ -1,0 +1,38 @@
+-- One stored object, one row.
+--
+-- A document upload is two calls with a gap between them: the server authorises
+-- and hands back a signed token, the browser PUTs the bytes straight to object
+-- storage, and the browser then comes back to confirm. That token stays valid
+-- for its whole window, so a confirmation can arrive twice — a double-click, a
+-- retry after a slow response, or a client doing it deliberately.
+--
+-- The application already refuses the second one (src/lib/actions/files.ts). It
+-- does so by reading FileAsset for the storage key before inserting, and those
+-- are two statements: two confirmations that interleave can both find nothing
+-- and both insert. The guard narrows the window; it cannot close it, because
+-- nothing in the application can hold a window shut across two connections.
+--
+-- What makes this worth a constraint rather than an accepted rarity is the
+-- shape of the damage. Two rows pointing at one object are not a cosmetic
+-- duplicate: the row and the object are separate things, so deleting either row
+-- removes the object and leaves the other row naming bytes that no longer
+-- exist. A reader then sees a document that cannot be downloaded, and no amount
+-- of retrying fixes it.
+--
+-- So the invariant lives here, where concurrency cannot get between the check
+-- and the write. The application guard stays in place and keeps returning a
+-- civil "already added" for the ordinary replay; this is the thing that makes
+-- that answer true rather than merely likely.
+--
+-- Scoped to the workspace as well as the key. The key is a generated UUID under
+-- a workspace prefix and is already globally unique in practice, but the
+-- uniqueness that matters is tenant-local, and a constraint should say what it
+-- means rather than rely on the format of a value.
+--
+-- Safe to apply to an existing database: no product path has ever written to
+-- FileAsset — the first one ships in this branch and is behind a feature flag
+-- that is off — so every environment holds zero rows and the index cannot fail
+-- on existing duplicates.
+
+-- CreateIndex
+CREATE UNIQUE INDEX "FileAsset_workspaceId_storageKey_key" ON "FileAsset"("workspaceId", "storageKey");

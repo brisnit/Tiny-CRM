@@ -135,9 +135,25 @@ export const env = {
    */
   appInstances: Number(optional("APP_INSTANCES") ?? "1"),
 
-  /** Object storage for file uploads. Absent means uploads stay disabled. */
+  /**
+   * Object storage for file uploads. Absent means uploads stay disabled.
+   *
+   * `local` and `s3` are the *same* driver, differing only in where it points.
+   * There is deliberately no filesystem implementation: a second driver would
+   * be a second thing to keep correct, and the one property worth proving
+   * locally — that SigV4 presigning, CORS, ranged reads and deletes behave the
+   * way production behaves — is exactly the property a filesystem stub cannot
+   * demonstrate. `local` is MinIO on a developer's machine, speaking the same
+   * protocol R2 speaks in production.
+   */
   storageDriver: (optional("STORAGE_DRIVER") ?? "none") as "none" | "local" | "s3",
   storageBucket: optional("STORAGE_BUCKET"),
+  /** Full origin of the S3-compatible endpoint, e.g. https://<account>.r2.cloudflarestorage.com */
+  storageEndpoint: optional("S3_ENDPOINT"),
+  /** R2 ignores the region but SigV4 still signs one; `auto` is what R2 documents. */
+  storageRegion: optional("S3_REGION") ?? "auto",
+  storageAccessKeyId: optional("S3_ACCESS_KEY_ID"),
+  storageSecretAccessKey: optional("S3_SECRET_ACCESS_KEY"),
 
   logLevel: (optional("LOG_LEVEL") ?? (isProduction ? "info" : "debug")) as
     | "debug" | "info" | "warn" | "error",
@@ -242,6 +258,19 @@ export function assertProductionEnv(): void {
 
   if (env.storageDriver === "s3" && !env.storageBucket) {
     problems.push("STORAGE_DRIVER=s3 but STORAGE_BUCKET is not set.");
+  }
+
+  // A half-configured object store fails at the first upload rather than at
+  // boot, which is the wrong end of the deployment to discover it.
+  if (env.storageDriver !== "none") {
+    for (const [key, value] of [
+      ["S3_ENDPOINT", env.storageEndpoint],
+      ["S3_ACCESS_KEY_ID", env.storageAccessKeyId],
+      ["S3_SECRET_ACCESS_KEY", env.storageSecretAccessKey],
+      ["STORAGE_BUCKET", env.storageBucket],
+    ] as const) {
+      if (!value) problems.push(`STORAGE_DRIVER=${env.storageDriver} but ${key} is not set.`);
+    }
   }
 
   // Rate limiting is only a control if the counters are shared. On more than one

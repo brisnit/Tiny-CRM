@@ -10,6 +10,7 @@ import { execSync, spawnSync } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { ENGINE_SUITE_GLOB } from "./engine-suites.mjs";
+import { storageEnvFor } from "./storage-env.mjs";
 
 const TEST_DB = resolve(process.cwd(), "test.db");
 const DATABASE_URL = `file:${TEST_DB}`;
@@ -27,6 +28,9 @@ execSync("npx prisma migrate deploy", {
 
 const pattern = process.argv[2] ?? ENGINE_SUITE_GLOB;
 
+// Object storage, when one can be provided. Absent, the storage suites skip.
+const storage = await storageEnvFor();
+
 const result = spawnSync(
   "npx",
   [
@@ -40,6 +44,7 @@ const result = spawnSync(
     stdio: "inherit",
     env: {
       ...process.env,
+      ...storage,
       DATABASE_URL,
       NODE_ENV: "test",
       AUTH_SECRET: "test-secret-that-is-at-least-32-characters-long",
