@@ -273,18 +273,37 @@ export async function confirmUpload(input: unknown): Promise<ActionResult<Confir
         }
 
         // --- Only now does it exist -----------------------------------------
-        const file = await db.fileAsset.create({
-          data: {
-            workspaceId,
-            projectId: recordId,
-            name: accepted.displayName,
-            mimeType: accepted.mimeType,
-            sizeBytes: accepted.sizeBytes,
-            storageKey: ticket.key,
-            uploaderId: actor.identity.id,
-          },
-          select: { id: true, name: true, mimeType: true, sizeBytes: true, createdAt: true },
-        });
+        let file;
+        try {
+          file = await db.fileAsset.create({
+            data: {
+              workspaceId,
+              projectId: recordId,
+              name: accepted.displayName,
+              mimeType: accepted.mimeType,
+              sizeBytes: accepted.sizeBytes,
+              storageKey: ticket.key,
+              uploaderId: actor.identity.id,
+            },
+            select: { id: true, name: true, mimeType: true, sizeBytes: true, createdAt: true },
+          });
+        } catch (error) {
+          // The unique index on (workspaceId, storageKey) refused it, which
+          // means a concurrent confirmation won the race between the guard
+          // above and this insert. That is the same event as a replay, so it
+          // gets the same answer: the caller cannot tell — and should not be
+          // able to tell — which of the two paths refused them.
+          //
+          // Deliberately NOT discarded. The object belongs to the row that won,
+          // and deleting it here would turn a harmless duplicate request into a
+          // broken document for whoever succeeded.
+          if ((error as { code?: string }).code === "P2002") {
+            throw new AppError("conflict", "That file has already been added.", {
+              internal: `unique (workspaceId, storageKey) refused a concurrent confirm for ${ticket.key}`,
+            });
+          }
+          throw error;
+        }
 
         // `record.created` rather than a new audit verb: a FileAsset is a
         // record, and the entityType already makes this queryable as a file.

@@ -1,5 +1,6 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 
 import { createTenant, cleanupTenants, db as observer, membershipIdFor, type Tenant } from "../helpers/fixtures";
 import { requestUpload, confirmUpload } from "../../src/lib/actions/files";
@@ -443,6 +444,92 @@ describe("who may put a document on a project", { concurrency: false }, () => {
     } finally {
       await cleanupTenants([B]);
     }
+  });
+});
+
+describe("one object, one row", { concurrency: false }, () => {
+  test("the database refuses a second row for the same stored object", requirements, async () => {
+    // The application guard is bypassed entirely here, on purpose. This asks
+    // one question and no other: does the database hold the invariant when
+    // nothing in the application is standing in front of it?
+    const key = `workspaces/${A.workspaceId}/${randomUUID()}.pdf`;
+    const row = () => ({
+      workspaceId: A.workspaceId,
+      projectId: id.grantedProject,
+      name: "duplicate.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: PDF.length,
+      storageKey: key,
+    });
+
+    const first = await observer.fileAsset.create({ data: row(), select: { id: true } });
+    try {
+      let code: string | undefined;
+      await assert.rejects(
+        () => observer.fileAsset.create({ data: row(), select: { id: true } }),
+        (error: { code?: string }) => {
+          code = error.code;
+          return true;
+        },
+        "the database accepted two rows for one stored object",
+      );
+      assert.equal(code, "P2002", `refused, but not by a unique constraint (code ${code})`);
+
+      assert.equal(
+        (await observer.fileAsset.findMany({ where: { storageKey: key } })).length,
+        1,
+        "more than one row survived",
+      );
+    } finally {
+      await observer.fileAsset.deleteMany({ where: { id: first.id } });
+    }
+  });
+
+  test("two confirmations racing create exactly one row", requirements, async () => {
+    // End to end, through the real actions, started together. Either the
+    // application guard wins the race or the unique index does; the caller
+    // cannot tell which, and must not be able to.
+    await resetRateLimit("upload", { user: A.ownerId, workspace: A.workspaceId });
+
+    const asked = await request(A.ownerId, id.grantedProject);
+    assert.ok(asked.ok);
+    const ticket = asked.data as Ticket;
+    assert.ok((await upload(ticket, PDF)).ok, "setup failed: object not stored");
+
+    const [a, b] = await Promise.all([
+      confirm(A.ownerId, ticket.uploadToken),
+      confirm(A.ownerId, ticket.uploadToken),
+    ]);
+
+    const succeeded = [a, b].filter((r) => r.ok);
+    const refused = [a, b].filter((r) => !r.ok);
+
+    assert.equal(succeeded.length, 1, "both concurrent confirmations succeeded");
+    assert.equal(refused.length, 1, "neither concurrent confirmation succeeded");
+    assert.equal(
+      refused[0]!.category,
+      "conflict",
+      `the loser refused for the wrong reason: ${refused[0]!.error}`,
+    );
+    // Whichever mechanism refused, the caller gets the same sentence — so a
+    // race and an ordinary replay are indistinguishable from outside.
+    assert.match(refused[0]!.error, /already been added/);
+
+    const key = JSON.parse(
+      Buffer.from(ticket.uploadToken.split(".")[0]!, "base64url").toString("utf8"),
+    ).key as string;
+
+    const rows = await observer.fileAsset.findMany({ where: { storageKey: key }, select: { id: true } });
+    assert.equal(rows.length, 1, `one object ended up with ${rows.length} rows`);
+
+    // The loser must not have deleted the winner's bytes.
+    assert.ok(
+      await getStorage().headObject(key),
+      "the losing confirmation removed the object the surviving row points at",
+    );
+
+    await getStorage().deleteObject(key);
+    await observer.fileAsset.deleteMany({ where: { storageKey: key } });
   });
 });
 
