@@ -24,6 +24,7 @@ import { AddProjectPerson, RemoveProjectPerson } from "@/components/app/project-
 import { ProjectStatusPicker, NextActionEditor, MilestoneList } from "@/components/app/project-controls";
 import { DocumentsPanel } from "@/components/app/documents/documents-panel";
 import { requireActor, resolveReadScope, restrictedIdsFor } from "@/lib/auth/access";
+import { withTenantContext } from "@/lib/tenant-db";
 import { can } from "@/lib/auth/permissions";
 import { isEnabled } from "@/lib/flags";
 import { UPLOAD_ALLOWLIST } from "@/lib/uploads";
@@ -74,7 +75,30 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
    * enforced again inside `deleteFile`, because hiding a button decides nothing:
    * anyone with a document id can call the action directly.
    */
-  const filesEnabled = await isEnabled("files", project.workspaceId);
+  // Inside a tenant context, and it must be. `FeatureFlag` is itself
+  // workspace-scoped and under row-level security
+  //
+  //   USING ("workspaceId" IS NULL OR app_can_see_workspace("workspaceId"))
+  //
+  // so a workspace override is invisible while `app.workspace_ids` is unset.
+  // `getProject` opens a context and closes it again, so by the time the page
+  // body runs there is none: the row is filtered, `isEnabled` falls back to the
+  // built-in default of false, and the panel silently never renders — which is
+  // exactly what happened in production the first time this shipped.
+  //
+  // The context is the one this request has already earned: the project was
+  // resolved under RLS above, so naming its workspace here grants nothing new.
+  // `isEnabled` is deliberately left alone; teaching it to open a context from a
+  // caller-supplied id would let any caller read another workspace's overrides,
+  // which is the boundary this policy exists to hold.
+  const filesEnabled = await withTenantContext(
+    {
+      workspaceIds: [project.workspaceId],
+      userId: actor.identity.id,
+      restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [project.workspaceId]),
+    },
+    () => isEnabled("files", project.workspaceId),
+  );
   const role = actor.memberships.find((m) => m.id === project.workspaceId)?.role ?? "viewer";
   const canUpload = can(role, "record:create");
   const canDeleteAnyDocument = can(role, "record:delete");
