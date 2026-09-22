@@ -10,6 +10,8 @@ import { resetRateLimit } from "../../src/lib/rate-limit";
 import { getStorage } from "../../src/lib/storage";
 import { LIMITS } from "../../src/lib/validation/limits";
 import { isPostgres } from "../../src/lib/env";
+import { withTenantContext } from "../../src/lib/tenant-db";
+import { restrictedIdsFor } from "../../src/lib/auth/access";
 
 /**
  * Project documents, end to end.
@@ -798,6 +800,19 @@ describe("downloading a document", { concurrency: false }, () => {
 
     const location = response.headers.get("location") ?? "";
     assert.ok(location.includes("X-Amz-Signature"), "the redirect target is not a presigned URL");
+
+    // Short-lived. A signed URL is a bearer token for one object while it
+    // lasts, so its life is the mitigation.
+    assert.equal(
+      new URL(location).searchParams.get("X-Amz-Expires"),
+      "60",
+      "the download URL is not short-lived",
+    );
+    assert.equal(
+      response.headers.get("cache-control"),
+      "private, no-store",
+      "the redirect could be cached by a shared cache",
+    );
     const disposition = new URL(location).searchParams.get("response-content-disposition") ?? "";
     assert.match(
       disposition,
@@ -843,7 +858,14 @@ describe("the files flag governs every entry point", { concurrency: false }, () 
           params: Promise.resolve({ id: fileId }),
         }),
       );
-      assert.ok(download.status >= 400, "downloads worked with the flag off");
+      assert.equal(download.status, 403, "downloads worked with the flag off");
+      // And crucially: no signed URL was minted before the refusal, so a
+      // flag-off download cannot be completed by following a redirect.
+      assert.equal(
+        download.headers.get("location"),
+        null,
+        "a presigned URL was issued despite the flag being off",
+      );
     } finally {
       await observer.featureFlag.updateMany({
         where: { key: "files", workspaceId: A.workspaceId },
@@ -852,5 +874,40 @@ describe("the files flag governs every entry point", { concurrency: false }, () 
     }
 
     await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "flagged.pdf"));
+  });
+});
+
+describe("why the download route opens a tenant context", { concurrency: false }, () => {
+  test("a workspace feature flag is unreadable without one", requirements, async () => {
+    // The mechanism behind a real bug in this branch. `FeatureFlag`'s policy is
+    //
+    //   USING ("workspaceId" IS NULL OR app_can_see_workspace("workspaceId"))
+    //
+    // so a workspace override is visible only when `app.workspace_ids` is set.
+    // Outside a context that GUC is unset, the row is filtered, and `isEnabled`
+    // falls back to the built-in default — `files: false`. The feature then
+    // reports itself disabled for everyone, with no error to explain it.
+    //
+    // The server actions never hit this because `recordAction` has already
+    // opened a context around them. A route handler has to do it deliberately,
+    // and this is the test that says why.
+    const { isEnabled } = await import("../../src/lib/flags");
+
+    const outside = await isEnabled("files", A.workspaceId);
+    const inside = await withTenantContext(
+      {
+        workspaceIds: [A.workspaceId],
+        userId: A.ownerId,
+        restrictedWorkspaceIds: restrictedIdsFor([], [A.workspaceId]),
+      },
+      () => isEnabled("files", A.workspaceId),
+    );
+
+    assert.equal(inside, true, "the flag was not readable even inside a tenant context");
+    assert.equal(
+      outside,
+      false,
+      "the flag was readable outside a tenant context — the route's context may no longer be load-bearing",
+    );
   });
 });
