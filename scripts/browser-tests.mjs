@@ -22,6 +22,7 @@ import { execSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
+import { storageEnvFor } from "./storage-env.mjs";
 
 const PORT = Number(process.env.BROWSER_TEST_PORT ?? 3123);
 const BASE_URL = `http://localhost:${PORT}`;
@@ -72,8 +73,13 @@ execSync("npx prisma migrate deploy", { stdio: "inherit", env: { ...process.env,
   console.log("Test database is in WAL mode.");
 }
 
+// Object storage, when one can be provided. The Documents suite skips without
+// it; every other browser suite is unaffected.
+const storage = await storageEnvFor();
+
 const serverEnv = {
   ...process.env,
+  ...storage,
   DATABASE_URL,
   AUTH_SECRET: "browser-test-secret-that-is-at-least-32-characters-long",
   APP_URL: BASE_URL,
@@ -216,6 +222,7 @@ await new Promise((resolveWarm) => {
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
+      ...storage,
       DATABASE_URL,
       BASE_URL,
       NODE_ENV: "test",
@@ -281,12 +288,13 @@ const runner = spawn(
     // A hung test fails as a test instead of starving the job in silence.
     // Generous: the slowest of these takes about five seconds.
     "--test-timeout=120000",
-    "tests/browser/**/*.test.ts",
+    process.argv[2] ?? "tests/browser/**/*.test.ts",
   ],
   {
     stdio: ["inherit", "pipe", "pipe"],
     env: {
       ...process.env,
+      ...storage,
       DATABASE_URL,
       BASE_URL,
       NODE_ENV: "test",

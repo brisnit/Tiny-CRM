@@ -3,12 +3,15 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
 import { createTenant, cleanupTenants, db as observer, membershipIdFor, type Tenant } from "../helpers/fixtures";
-import { requestUpload, confirmUpload } from "../../src/lib/actions/files";
+import { requestUpload, confirmUpload, deleteFile } from "../../src/lib/actions/files";
+import { GET as downloadDocument } from "../../src/app/api/files/[id]/download/route";
 import { runAsTestIdentity } from "../../src/lib/auth/context";
 import { resetRateLimit } from "../../src/lib/rate-limit";
 import { getStorage } from "../../src/lib/storage";
 import { LIMITS } from "../../src/lib/validation/limits";
 import { isPostgres } from "../../src/lib/env";
+import { withTenantContext } from "../../src/lib/tenant-db";
+import { restrictedIdsFor } from "../../src/lib/auth/access";
 
 /**
  * Project documents, end to end.
@@ -54,6 +57,8 @@ const HONEST_PREFLIGHT = Buffer.from(PDF.subarray(0, 16)).toString("base64");
 
 let A: Tenant;
 const id = { grantedProject: "", ungrantedProject: "" };
+/** Two full-workspace members, so "member" tests are not also "restricted" tests. */
+const people = { plainMember: "", otherMember: "" };
 
 type Ticket = {
   uploadToken: string;
@@ -135,7 +140,29 @@ before(async () => {
       grantedById: A.ownerId,
     },
   });
+
+  // `A.memberId` is the restricted one. Ownership rules have to be tested on
+  // somebody whose scope is not also under test, so two ordinary members join.
+  people.plainMember = await addMember("plain");
+  people.otherMember = await addMember("other");
 });
+
+/** A full-workspace member with the `member` role. */
+async function addMember(label: string): Promise<string> {
+  const user = await observer.user.create({
+    data: {
+      email: `docs-${label}-${randomUUID().slice(0, 8)}@test.local`,
+      name: `${label} Member`,
+      passwordHash: "not-used-by-the-in-process-test-identity",
+      emailVerifiedAt: new Date(),
+    },
+    select: { id: true },
+  });
+  await observer.workspaceMember.create({
+    data: { workspaceId: A.workspaceId, userId: user.id, role: "member" },
+  });
+  return user.id;
+}
 
 after(async () => {
   if (!configured) return;
@@ -152,6 +179,11 @@ after(async () => {
     }
   }
   await cleanupTenants([A]);
+  // The two extra members are not part of the fixture tenant, so they are not
+  // swept up by cleanupTenants.
+  await observer.user.deleteMany({
+    where: { id: { in: [people.plainMember, people.otherMember].filter(Boolean) } },
+  });
 });
 
 describe("a document on a project", { concurrency: false }, () => {
@@ -558,5 +590,324 @@ describe("the upload rate limit", { concurrency: false }, () => {
     assert.equal(allowed, 30, `expected 30 uploads before the limit, got ${allowed}`);
 
     await resetRateLimit("upload", { user: A.ownerId, workspace: A.workspaceId });
+  });
+});
+
+/** Uploads one document as a given user and returns its row id. */
+async function uploadAs(userId: string, projectId: string, filename = "contract.pdf"): Promise<string> {
+  await resetRateLimit("upload", { user: userId, workspace: A.workspaceId });
+  const asked = await request(userId, projectId, { filename });
+  assert.ok(asked.ok, `setup: requestUpload refused (${asked.ok ? "" : asked.error})`);
+  const ticket = asked.data as Ticket;
+  assert.ok((await upload(ticket, PDF)).ok, "setup: the object was not stored");
+  const confirmed = await confirm(userId, ticket.uploadToken);
+  assert.ok(confirmed.ok, `setup: confirmUpload refused (${confirmed.ok ? "" : confirmed.error})`);
+  return (confirmed.data as { id: string }).id;
+}
+
+async function rowExists(fileId: string): Promise<boolean> {
+  return (await observer.fileAsset.count({ where: { id: fileId } })) > 0;
+}
+
+async function keyOf(fileId: string): Promise<string> {
+  const row = await observer.fileAsset.findUnique({ where: { id: fileId }, select: { storageKey: true } });
+  return row!.storageKey;
+}
+
+describe("who may delete a document", { concurrency: false }, () => {
+  test("a member may delete one they uploaded", requirements, async () => {
+    // The reason this branch exists at all: `member` does not hold
+    // `record:delete`, so without it someone could attach the wrong contract
+    // and have no way to take it back — and documents have no Trash.
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "mine.pdf");
+    const key = await keyOf(fileId);
+
+    const result = await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "mine.pdf"));
+    assert.ok(result.ok, `a member could not delete their own document: ${result.ok ? "" : result.error}`);
+
+    assert.equal(await rowExists(fileId), false, "the row survived");
+    assert.equal(await getStorage().headObject(key), null, "the object survived");
+  });
+
+  test("a member may NOT delete another member's document", requirements, async () => {
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "not-yours.pdf");
+
+    const result = await runAsTestIdentity(people.otherMember, () => deleteFile(fileId, "not-yours.pdf"));
+
+    assert.ok(!result.ok, "SECURITY FAILURE: a member deleted somebody else's document");
+    assert.equal(result.category, "forbidden");
+    assert.ok(await rowExists(fileId), "the row was removed anyway");
+
+    // And the object is untouched — a refused delete must not destroy bytes.
+    assert.ok(await getStorage().headObject(await keyOf(fileId)), "a refused delete removed the object");
+
+    await runAsTestIdentity(A.ownerId, () => deleteFile(fileId, "not-yours.pdf"));
+  });
+
+  test("a manager-or-above may delete a document they did not upload", requirements, async () => {
+    // The owner holds `record:delete`, which is the manager+ branch.
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "theirs.pdf");
+    const key = await keyOf(fileId);
+
+    const result = await runAsTestIdentity(A.ownerId, () => deleteFile(fileId, "theirs.pdf"));
+
+    assert.ok(result.ok, `an owner could not delete a member's document: ${result.ok ? "" : result.error}`);
+    assert.equal(await rowExists(fileId), false);
+    assert.equal(await getStorage().headObject(key), null);
+  });
+
+  test("a viewer may not delete anything", requirements, async () => {
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "viewer-cannot.pdf");
+    const result = await runAsTestIdentity(A.viewerId, () => deleteFile(fileId, "viewer-cannot.pdf"));
+
+    assert.ok(!result.ok, "SECURITY FAILURE: a viewer deleted a document");
+    assert.ok(await rowExists(fileId), "the row was removed anyway");
+
+    await runAsTestIdentity(A.ownerId, () => deleteFile(fileId, "viewer-cannot.pdf"));
+  });
+});
+
+describe("confirming a deletion", { concurrency: false }, () => {
+  test("the wrong filename is refused, and nothing is destroyed", requirements, async () => {
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "precise.pdf");
+    const key = await keyOf(fileId);
+
+    const result = await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "precise"));
+
+    assert.ok(!result.ok, "a mistyped confirmation deleted the document");
+    assert.equal(result.category, "validation");
+    assert.ok(await rowExists(fileId), "the row was removed on a failed confirmation");
+    assert.ok(await getStorage().headObject(key), "the object was removed on a failed confirmation");
+
+    await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "precise.pdf"));
+  });
+
+  test("the confirmation is checked on the server, not only in the dialog", requirements, async () => {
+    // An empty string is what a direct call to the action would send.
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "server-checks.pdf");
+    const result = await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, ""));
+
+    assert.ok(!result.ok, "SECURITY FAILURE: a deletion with no confirmation succeeded");
+    assert.ok(await rowExists(fileId));
+
+    await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "server-checks.pdf"));
+  });
+});
+
+describe("deletion under record scope", { concurrency: false }, () => {
+  test("a restricted member may delete their own document on granted work", requirements, async () => {
+    const fileId = await uploadAs(A.memberId, id.grantedProject, "granted-mine.pdf");
+    const key = await keyOf(fileId);
+
+    const result = await runAsTestIdentity(A.memberId, () => deleteFile(fileId, "granted-mine.pdf"));
+
+    assert.ok(result.ok, `a restricted member could not delete their own file: ${result.ok ? "" : result.error}`);
+    assert.equal(await rowExists(fileId), false);
+    assert.equal(await getStorage().headObject(key), null);
+  });
+
+  test("a restricted member cannot use a known file id from ungranted work", requirements, async () => {
+    // The id is handed to them directly, which is the whole point: record scope
+    // must not depend on ids being unguessable.
+    const fileId = await uploadAs(A.ownerId, id.ungrantedProject, "not-for-them.pdf");
+    const key = await keyOf(fileId);
+
+    const result = await runAsTestIdentity(A.memberId, () => deleteFile(fileId, "not-for-them.pdf"));
+
+    assert.ok(!result.ok, "SECURITY FAILURE: a restricted member deleted a file on ungranted work");
+    // "Not found" rather than "forbidden": the document's existence is itself
+    // something this member is not entitled to learn.
+    assert.equal(result.category, "not_found");
+    assert.ok(await rowExists(fileId), "the row was removed anyway");
+    assert.ok(await getStorage().headObject(key), "the object was removed anyway");
+
+    await runAsTestIdentity(A.ownerId, () => deleteFile(fileId, "not-for-them.pdf"));
+  });
+});
+
+describe("deletion failure semantics", { concurrency: false }, () => {
+  test("a storage failure after the row is gone leaves no visible document", requirements, async () => {
+    // A key past S3's 1024-byte limit: the store answers DELETE with 400, so
+    // `deleteObject` throws for real rather than through a stub. The row is
+    // created directly because no upload could produce a key this shape.
+    const doomedKey = `workspaces/${A.workspaceId}/${"x".repeat(1200)}.pdf`;
+    const file = await observer.fileAsset.create({
+      data: {
+        workspaceId: A.workspaceId,
+        projectId: id.grantedProject,
+        name: "orphan-maker.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: PDF.length,
+        storageKey: doomedKey,
+        uploaderId: people.plainMember,
+      },
+      select: { id: true },
+    });
+
+    const result = await runAsTestIdentity(people.plainMember, () =>
+      deleteFile(file.id, "orphan-maker.pdf"),
+    );
+
+    // The person is told it is gone, because from where they stand it is.
+    assert.ok(result.ok, `the failure was surfaced to the user: ${result.ok ? "" : result.error}`);
+    assert.equal(await rowExists(file.id), false, "the row was resurrected by a storage failure");
+
+    // And the orphan is recorded where an operator would look for it.
+    const entry = await observer.auditLog.findFirst({
+      where: { entityId: file.id, action: "record.deleted" },
+      select: { metadata: true },
+    });
+    assert.ok(entry, "no audit entry for the deletion");
+    const metadata = JSON.parse(entry.metadata ?? "{}") as { orphanedObject?: boolean };
+    assert.equal(metadata.orphanedObject, true, "the orphaned object was not recorded");
+  });
+
+  test("authorisation and confirmation are decided before storage is touched", requirements, async () => {
+    // Both refusals above already assert the object survives. This states the
+    // ordering as its own claim: a document refused for *either* reason keeps
+    // its bytes, so no refused request can destroy anything.
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "ordering.pdf");
+    const key = await keyOf(fileId);
+
+    const wrongPerson = await runAsTestIdentity(people.otherMember, () => deleteFile(fileId, "ordering.pdf"));
+    assert.ok(!wrongPerson.ok);
+    assert.ok(await getStorage().headObject(key), "an unauthorised delete removed the object");
+
+    const wrongName = await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "nope.pdf"));
+    assert.ok(!wrongName.ok);
+    assert.ok(await getStorage().headObject(key), "an unconfirmed delete removed the object");
+
+    await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "ordering.pdf"));
+  });
+});
+
+describe("downloading a document", { concurrency: false }, () => {
+  const call = (userId: string, fileId: string) =>
+    runAsTestIdentity(userId, () =>
+      downloadDocument(new Request(`http://localhost/api/files/${fileId}/download`) as never, {
+        params: Promise.resolve({ id: fileId }),
+      }),
+    );
+
+  test("redirects to storage, as an attachment, without proxying bytes", requirements, async () => {
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "readable.pdf");
+
+    const response = await call(people.plainMember, fileId);
+    if (response.status !== 302) {
+      // The reason matters more than the number when this fails.
+      assert.fail(`expected a redirect, got ${response.status}: ${await response.text()}`);
+    }
+
+    const location = response.headers.get("location") ?? "";
+    assert.ok(location.includes("X-Amz-Signature"), "the redirect target is not a presigned URL");
+
+    // Short-lived. A signed URL is a bearer token for one object while it
+    // lasts, so its life is the mitigation.
+    assert.equal(
+      new URL(location).searchParams.get("X-Amz-Expires"),
+      "60",
+      "the download URL is not short-lived",
+    );
+    assert.equal(
+      response.headers.get("cache-control"),
+      "private, no-store",
+      "the redirect could be cached by a shared cache",
+    );
+    const disposition = new URL(location).searchParams.get("response-content-disposition") ?? "";
+    assert.match(
+      disposition,
+      /^attachment; filename="readable\.pdf"$/,
+      `forced download was not preserved: ${disposition || "(no disposition parameter)"}`,
+    );
+    // The body carries no file: the browser is sent to storage.
+    assert.equal((await response.text()).length, 0, "the route streamed the file itself");
+
+    await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "readable.pdf"));
+  });
+
+  test("a restricted member cannot download from work they were not given", requirements, async () => {
+    const fileId = await uploadAs(A.ownerId, id.ungrantedProject, "hidden.pdf");
+
+    const response = await call(A.memberId, fileId);
+    assert.ok(response.status >= 400, "SECURITY FAILURE: an ungranted document was downloadable");
+    assert.equal(response.status, 404);
+
+    await runAsTestIdentity(A.ownerId, () => deleteFile(fileId, "hidden.pdf"));
+  });
+});
+
+describe("the files flag governs every entry point", { concurrency: false }, () => {
+  test("upload, download and delete all refuse while it is off", requirements, async () => {
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "flagged.pdf");
+
+    await observer.featureFlag.updateMany({
+      where: { key: "files", workspaceId: A.workspaceId },
+      data: { enabled: false },
+    });
+
+    try {
+      const upload = await request(people.plainMember, id.grantedProject);
+      assert.ok(!upload.ok, "uploads worked with the flag off");
+
+      const removal = await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "flagged.pdf"));
+      assert.ok(!removal.ok, "deletion worked with the flag off");
+      assert.ok(await rowExists(fileId), "a flag-refused delete still removed the row");
+
+      const download = await runAsTestIdentity(people.plainMember, () =>
+        downloadDocument(new Request(`http://localhost/api/files/${fileId}/download`) as never, {
+          params: Promise.resolve({ id: fileId }),
+        }),
+      );
+      assert.equal(download.status, 403, "downloads worked with the flag off");
+      // And crucially: no signed URL was minted before the refusal, so a
+      // flag-off download cannot be completed by following a redirect.
+      assert.equal(
+        download.headers.get("location"),
+        null,
+        "a presigned URL was issued despite the flag being off",
+      );
+    } finally {
+      await observer.featureFlag.updateMany({
+        where: { key: "files", workspaceId: A.workspaceId },
+        data: { enabled: true },
+      });
+    }
+
+    await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "flagged.pdf"));
+  });
+});
+
+describe("why the download route opens a tenant context", { concurrency: false }, () => {
+  test("a workspace feature flag is unreadable without one", requirements, async () => {
+    // The mechanism behind a real bug in this branch. `FeatureFlag`'s policy is
+    //
+    //   USING ("workspaceId" IS NULL OR app_can_see_workspace("workspaceId"))
+    //
+    // so a workspace override is visible only when `app.workspace_ids` is set.
+    // Outside a context that GUC is unset, the row is filtered, and `isEnabled`
+    // falls back to the built-in default — `files: false`. The feature then
+    // reports itself disabled for everyone, with no error to explain it.
+    //
+    // The server actions never hit this because `recordAction` has already
+    // opened a context around them. A route handler has to do it deliberately,
+    // and this is the test that says why.
+    const { isEnabled } = await import("../../src/lib/flags");
+
+    const outside = await isEnabled("files", A.workspaceId);
+    const inside = await withTenantContext(
+      {
+        workspaceIds: [A.workspaceId],
+        userId: A.ownerId,
+        restrictedWorkspaceIds: restrictedIdsFor([], [A.workspaceId]),
+      },
+      () => isEnabled("files", A.workspaceId),
+    );
+
+    assert.equal(inside, true, "the flag was not readable even inside a tenant context");
+    assert.equal(
+      outside,
+      false,
+      "the flag was readable outside a tenant context — the route's context may no longer be load-bearing",
+    );
   });
 });

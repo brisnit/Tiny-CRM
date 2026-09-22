@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   AlertTriangle, Building2, CalendarDays, CheckSquare, FileText, Flag, Landmark,
-  Mail, Paperclip, Target, Users,
+  Mail, Target, Users,
 } from "lucide-react";
 
 import { PageHeader, PageShell, MetaItem } from "@/components/app/page-header";
@@ -22,14 +22,18 @@ import { TaskRow } from "@/components/app/task-row";
 import { RecordHeaderActions } from "@/components/app/record-edit";
 import { AddProjectPerson, RemoveProjectPerson } from "@/components/app/project-people";
 import { ProjectStatusPicker, NextActionEditor, MilestoneList } from "@/components/app/project-controls";
+import { DocumentsPanel } from "@/components/app/documents/documents-panel";
 import { requireActor, resolveReadScope, restrictedIdsFor } from "@/lib/auth/access";
+import { can } from "@/lib/auth/permissions";
+import { isEnabled } from "@/lib/flags";
+import { UPLOAD_ALLOWLIST } from "@/lib/uploads";
 import { readScope } from "@/lib/scope";
 import { getProject } from "@/lib/data/projects";
 import { getEditContext } from "@/lib/data/shell";
 import { getRecordSummary } from "@/lib/ai/summaries";
 import { describeProvider } from "@/lib/ai/provider";
 import { formatCompact, formatMoney } from "@/lib/money";
-import { dateOnlyInputValue, describeDeadline, formatDateOnly, formatDay, formatDayOnly, timeAgo } from "@/lib/dates";
+import { dateOnlyInputValue, describeDeadline, formatDateOnly, formatDayOnly, timeAgo } from "@/lib/dates";
 import { describeProjectTarget } from "@/lib/rfp-lifecycle";
 import { PROJECT_HEALTH, PROJECT_PRIORITY, PROJECT_TYPE, SUBMISSION_STATUS } from "@/lib/enums";
 
@@ -58,6 +62,33 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
   );
 
   const editContext = await getEditContext(actor, { workspaceIds: [project.workspaceId], userId: actor.identity.id, restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [project.workspaceId]) });
+
+  /**
+   * Documents.
+   *
+   * The flag decides whether the capability exists here at all — off means the
+   * panel is not rendered, and the actions refuse independently, so "disabled"
+   * is not merely "hidden".
+   *
+   * `canDelete` is computed per document for the UI only. The same rule is
+   * enforced again inside `deleteFile`, because hiding a button decides nothing:
+   * anyone with a document id can call the action directly.
+   */
+  const filesEnabled = await isEnabled("files", project.workspaceId);
+  const role = actor.memberships.find((m) => m.id === project.workspaceId)?.role ?? "viewer";
+  const canUpload = can(role, "record:create");
+  const canDeleteAnyDocument = can(role, "record:delete");
+  const documents = project.files.map((file) => ({
+    id: file.id,
+    name: file.name,
+    mimeType: file.mimeType,
+    sizeBytes: file.sizeBytes,
+    createdAt: file.createdAt.toISOString(),
+    uploaderName: file.uploader?.name ?? null,
+    canDelete:
+      canDeleteAnyDocument ||
+      (canUpload && file.uploaderId !== null && file.uploaderId === actor.identity.id),
+  }));
 
   // The stored target date is still shown; this decides what it means now.
   const target = describeProjectTarget(project.targetDate, project.targetMet);
@@ -286,6 +317,15 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
             )}
           </Panel>
 
+          {filesEnabled ? (
+            <DocumentsPanel
+              projectId={project.id}
+              documents={documents}
+              allowedExtensions={UPLOAD_ALLOWLIST}
+              canUpload={canUpload}
+            />
+          ) : null}
+
           <Panel>
             <PanelHeader title="Timeline" />
             <div className="border-t border-hairline p-4">
@@ -435,19 +475,6 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
                 href: `/notes/${note.id}`,
                 title: note.title ?? "Untitled note",
                 subtitle: note.plainText.slice(0, 100),
-              }))}
-            />
-          ) : null}
-
-          {project.files.length > 0 ? (
-            <RelatedList
-              title="Files"
-              icon={<Paperclip />}
-              emptyTitle="No files"
-              items={project.files.map((file) => ({
-                id: file.id,
-                title: file.name,
-                subtitle: `${Math.round(file.sizeBytes / 1024)} KB · ${formatDay(file.createdAt)}`,
               }))}
             />
           ) : null}
