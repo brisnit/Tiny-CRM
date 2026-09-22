@@ -911,3 +911,103 @@ describe("why the download route opens a tenant context", { concurrency: false }
     );
   });
 });
+
+describe("the Project page's own flag resolution", { concurrency: false }, () => {
+  /**
+   * The production regression, reproduced.
+   *
+   * The Documents panel did not appear on a project whose workspace had
+   * `files = true`. Nothing was wrong with the flag row, the workspace id, the
+   * conditional, or the deployed build. The page read the flag *after*
+   * `getProject` had opened and closed its own tenant context, so
+   * `app.workspace_ids` was unset, `FeatureFlag`'s policy filtered the override,
+   * and `isEnabled` fell back to the built-in default of `false`.
+   *
+   * It reached production because the browser suite runs on SQLite, which has no
+   * row-level security: the row was readable there and the panel rendered. Only
+   * PostgreSQL can observe this, so the test lives here.
+   *
+   * The two assertions are deliberately opposed. One proves the page now works.
+   * The other proves it works because the page *earns* a context — not because
+   * the boundary was loosened to make the first one pass.
+   */
+  test("resolves a workspace override the way the page does", requirements, async () => {
+    const { getProject } = await import("../../src/lib/data/projects");
+    const { isEnabled } = await import("../../src/lib/flags");
+
+    const read = {
+      workspaceIds: [A.workspaceId],
+      userId: A.ownerId,
+      restrictedWorkspaceIds: [],
+    };
+
+    await runAsTestIdentity(A.ownerId, async () => {
+      // Step one, exactly as the page does it: this opens a tenant context and
+      // closes it again on return.
+      const project = await getProject(read, id.grantedProject);
+      assert.ok(project, "setup: the project did not resolve");
+      assert.equal(project.workspaceId, A.workspaceId);
+
+      // Step two as it shipped: bare, with no context left open. This is the
+      // bug, and it must keep reading false — if it ever returns true, the
+      // policy has been loosened and the wrapper below is no longer doing
+      // anything.
+      assert.equal(
+        await isEnabled("files", project.workspaceId),
+        false,
+        "the workspace override was readable with no tenant context — the RLS boundary has been weakened",
+      );
+
+      // Step two as fixed: inside the context this request already earned by
+      // resolving the project under RLS.
+      const filesEnabled = await withTenantContext(
+        {
+          workspaceIds: [project.workspaceId],
+          userId: A.ownerId,
+          restrictedWorkspaceIds: restrictedIdsFor([], [project.workspaceId]),
+        },
+        () => isEnabled("files", project.workspaceId),
+      );
+
+      assert.equal(
+        filesEnabled,
+        true,
+        "the page's flag lookup still cannot see the workspace override — the Documents panel would not render",
+      );
+    });
+  });
+
+  test("every flag lookup on a render surface sits inside a tenant context", async () => {
+    /**
+     * A source assertion, because that is where this rule actually lives.
+     *
+     * The test above proves the *mechanism* — a context makes the override
+     * visible, and its absence does not. It cannot prove the page still uses
+     * it: revert the page and that test keeps passing while production breaks
+     * again in exactly the same way.
+     *
+     * So this reads the page and asserts the shape. A workspace-scoped
+     * `isEnabled` on a page that never opens a context resolves to the built-in
+     * default and hides the feature with no error anywhere.
+     *
+     * Deliberately not engine-gated: the source is the same on both engines,
+     * and this is the assertion that has to hold on the one that does not have
+     * row-level security to reveal the mistake.
+     */
+    const { readFileSync } = await import("node:fs");
+    const page = "src/app/(app)/projects/[id]/page.tsx";
+    const source = readFileSync(page, "utf8");
+
+    const looksUpAFlag = /isEnabled\(\s*"[a-zA-Z]+"\s*,\s*project\.workspaceId/.test(source);
+    assert.ok(looksUpAFlag, `${page} no longer resolves a workspace-scoped flag — update this test`);
+
+    // The lookup must be an argument to withTenantContext, not a bare call.
+    const wrapped = /withTenantContext\(\s*\{[\s\S]{0,400}?\},\s*\(\)\s*=>\s*isEnabled\(/.test(source);
+    assert.ok(
+      wrapped,
+      `${page} reads a workspace-scoped feature flag outside withTenantContext. ` +
+        "FeatureFlag is under RLS, so the override is filtered and isEnabled falls back " +
+        "to the built-in default — the panel silently never renders.",
+    );
+  });
+});
