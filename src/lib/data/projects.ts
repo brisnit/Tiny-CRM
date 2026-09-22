@@ -211,7 +211,13 @@ export async function getProject(read: ReadScope, id: string) {
           take: 30,
         },
         files: {
-          select: { id: true, name: true, mimeType: true, sizeBytes: true, createdAt: true },
+          select: {
+            id: true, name: true, mimeType: true, sizeBytes: true, createdAt: true,
+            uploaderId: true,
+            // Who added it. Nullable because `uploaderId` is SetNull — a
+            // document outlives the person who uploaded it.
+            uploader: { select: { name: true } },
+          },
           orderBy: { createdAt: "desc" },
         },
         events: {

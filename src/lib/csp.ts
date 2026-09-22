@@ -67,6 +67,39 @@
 
 const isProduction = process.env.NODE_ENV === "production";
 
+/**
+ * The object-storage origin the browser may PUT to, or null.
+ *
+ * Only the origin: the presigned URL's path and query carry the key and the
+ * signature, and neither belongs in a policy header. Read from the environment
+ * rather than from `src/lib/env.ts` because this module is evaluated by the
+ * proxy on every request and must stay free of the application's module graph.
+ */
+function storageOrigin(): string | null {
+  const driver = process.env.STORAGE_DRIVER;
+  if (!driver || driver === "none") return null;
+
+  const endpoint = process.env.S3_ENDPOINT;
+  if (!endpoint) return null;
+
+  try {
+    const url = new URL(endpoint);
+
+    // `new URL("https://*")` parses, and its origin is `https://*` — which
+    // would put a wildcard into the policy and let an injected script post to
+    // any host on the internet. A misconfigured endpoint must fail closed, so
+    // the protocol and hostname are checked rather than assumed.
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    if (!/^[a-z0-9.-]+$/i.test(url.hostname)) return null;
+
+    return url.origin;
+  } catch {
+    // A malformed endpoint is a configuration error, not a reason to widen the
+    // policy. Uploads will fail visibly; the policy stays closed.
+    return null;
+  }
+}
+
 export function contentSecurityPolicy(nonce: string): string {
   return [
     "default-src 'self'",
@@ -87,7 +120,17 @@ export function contentSecurityPolicy(nonce: string): string {
 
     "img-src 'self' data: blob: https://avatars.githubusercontent.com https://lh3.googleusercontent.com",
     "font-src 'self' data:",
-    "connect-src 'self'",
+    // Document uploads go browser -> object storage directly and never through
+    // this application, so the browser has to be allowed to reach exactly one
+    // more origin. Without it the upload is blocked by our own policy and the
+    // only evidence is a bare "csp" in the network log — which is how this was
+    // found, by a browser test, after the same upload had been proven to work
+    // from a page that carried no CSP at all.
+    //
+    // One exact origin, never a wildcard, and only when object storage is
+    // actually configured: with `STORAGE_DRIVER` unset this is byte-for-byte
+    // the policy that shipped before.
+    `connect-src 'self'${storageOrigin() ? ` ${storageOrigin()}` : ""}`,
     "form-action 'self'",
     "frame-ancestors 'none'",
     "frame-src 'none'",

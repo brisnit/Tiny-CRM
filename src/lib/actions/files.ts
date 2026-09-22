@@ -6,7 +6,8 @@ import { db } from "@/lib/db";
 import {
   audit, emitEvent, guard, recordAction, revalidateRecord, type ActionResult,
 } from "@/lib/actions/base";
-import { AppError } from "@/lib/errors";
+import { assertConfirmation } from "@/lib/destructive";
+import { AppError, forbidden, noSuchRecord } from "@/lib/errors";
 import { requireFlag } from "@/lib/flags";
 import { log } from "@/lib/logger";
 import { getStorage } from "@/lib/storage";
@@ -364,3 +365,111 @@ function decodeHead(base64: string): Uint8Array {
   }
 }
 
+
+/**
+ * Deleting a document.
+ *
+ * ---------------------------------------------------------------------------
+ * Who may do it
+ * ---------------------------------------------------------------------------
+ *
+ * A `member` holds `record:create` but not `record:delete`, so gating purely on
+ * `record:delete` would let someone upload a document and then be unable to
+ * remove it — not even the wrong file they attached a moment ago. For ordinary
+ * records that asymmetry is survivable because a member can archive, and the
+ * Trash is the way back. `FileAsset` has no archive, so there would be no way
+ * back at all.
+ *
+ * So: anyone with `record:delete` may remove any document they can reach, and a
+ * member may remove one they uploaded themselves. `record:create` is required
+ * even on that second branch, so someone demoted to viewer cannot keep deleting
+ * their back catalogue.
+ *
+ * None of this widens what anybody can *see*. The row is resolved through
+ * `recordAction`, so row-level security has already decided whether this actor
+ * can reach the file at all; ownership is an additional condition on top of
+ * that decision, never a substitute for it.
+ *
+ * ---------------------------------------------------------------------------
+ * Order of operations
+ * ---------------------------------------------------------------------------
+ *
+ * Authorisation, then confirmation, then the row, then the object — and nothing
+ * touches storage until every check has passed, so a refused delete never
+ * destroys bytes.
+ *
+ * The row goes before the object deliberately. Reversed, a failure between the
+ * two would leave a row pointing at bytes that no longer exist: a document
+ * visible in the list that can never be downloaded, and that no retry repairs.
+ * In this order the same failure leaves an orphaned object — invisible, cheap,
+ * and collectable later. So a storage failure after the row is gone is recorded
+ * on the audit entry and logged; it is not reported to the person, because from
+ * their point of view the document is gone, which is true.
+ */
+export async function deleteFile(
+  fileId: string,
+  confirmation: string,
+): Promise<ActionResult<{ id: string }>> {
+  return guard(async () => {
+    const id = zId.parse(fileId);
+
+    return recordAction("fileAsset", id, { rateLimit: "mutation" }, async ({ actor, workspaceId, recordId }) => {
+      await requireFlag("files", workspaceId);
+
+      // Read under the same tenant context that resolved it. A restricted
+      // member who cannot see this file never gets here — `recordAction` has
+      // already failed to resolve it.
+      const file = await db.fileAsset.findFirst({
+        where: { id: recordId, workspaceId },
+        select: { id: true, name: true, storageKey: true, uploaderId: true, projectId: true },
+      });
+      if (!file) throw noSuchRecord();
+
+      const mayDeleteAnything = actor.can("record:delete");
+      const isOwnUpload = file.uploaderId !== null && file.uploaderId === actor.identity.id;
+      const mayDeleteOwn = isOwnUpload && actor.can("record:create");
+
+      if (!mayDeleteAnything && !mayDeleteOwn) {
+        // "Forbidden" rather than "not found": this person can see the document
+        // in the list, so pretending it does not exist would be a lie they can
+        // immediately disprove, and it would hide the actual remedy.
+        throw forbidden("Only the person who uploaded this document, or a manager, can delete it.");
+      }
+
+      assertConfirmation(confirmation, file.name);
+
+      // Scoped to the workspace as well as the id, and the count is inspected:
+      // under row-level security a delete the policy refuses removes zero rows
+      // rather than raising, and an unchecked `deleteMany` would report that as
+      // success.
+      const removed = await db.fileAsset.deleteMany({ where: { id: recordId, workspaceId } });
+      if (removed.count === 0) throw noSuchRecord();
+
+      let orphaned = false;
+      try {
+        await getStorage().deleteObject(file.storageKey);
+      } catch (error) {
+        orphaned = true;
+        log.error("document row deleted but its object could not be removed", {
+          workspaceId,
+          fileId: file.id,
+          error: String(error),
+        });
+      }
+
+      await audit(actor, {
+        workspaceId,
+        action: "record.deleted",
+        entityType: "fileAsset",
+        entityId: file.id,
+        summary: `Deleted ${file.name}`,
+        // The orphan is recorded where an operator will look for it, rather
+        // than only in a log line that scrolls away.
+        metadata: orphaned ? { orphanedObject: true, storageKey: file.storageKey } : null,
+      });
+
+      if (file.projectId) revalidateRecord([`/projects/${file.projectId}`]);
+      return { id: file.id };
+    });
+  });
+}

@@ -71,3 +71,34 @@ export function groupBy<T, K extends string>(items: T[], key: (item: T) => K) {
 export function sum(values: number[]) {
   return values.reduce((total, value) => total + value, 0);
 }
+
+/**
+ * A file size a person can read.
+ *
+ * The five record pages that list files each inline
+ * `Math.round(sizeBytes / 1024) + " KB"`, which reports "0 KB" for anything
+ * under half a kilobyte and never reaches megabytes. A 12-byte text file and an
+ * empty one therefore look identical, and a 40 MB video reads as "40960 KB".
+ *
+ * Below a kilobyte the exact byte count is the useful number, so it is kept.
+ * Above it, one decimal while the mantissa is small — 1.4 MB says something
+ * 1 MB does not — and none once it is large enough that the decimal is noise.
+ *
+ * Binary units throughout (1 KB = 1024 bytes), matching how the upload limit is
+ * expressed in src/lib/validation/limits.ts.
+ */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes < 1024) return `${Math.round(bytes)} ${Math.round(bytes) === 1 ? "byte" : "bytes"}`;
+
+  const units = ["KB", "MB", "GB", "TB"] as const;
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+
+  const rounded = value < 10 ? Math.round(value * 10) / 10 : Math.round(value);
+  return `${rounded} ${units[unit]}`;
+}
