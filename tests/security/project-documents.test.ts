@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
 import { createTenant, cleanupTenants, db as observer, membershipIdFor, type Tenant } from "../helpers/fixtures";
-import { requestUpload, confirmUpload, deleteFile } from "../../src/lib/actions/files";
+import { requestUpload, confirmUpload, deleteFile, requestDocumentPreview } from "../../src/lib/actions/files";
 import { GET as downloadDocument } from "../../src/app/api/files/[id]/download/route";
 import { runAsTestIdentity } from "../../src/lib/auth/context";
 import { resetRateLimit } from "../../src/lib/rate-limit";
@@ -1009,5 +1009,125 @@ describe("the Project page's own flag resolution", { concurrency: false }, () =>
         "FeatureFlag is under RLS, so the override is filtered and isEnabled falls back " +
         "to the built-in default — the panel silently never renders.",
     );
+  });
+});
+
+describe("previewing a document", { concurrency: false }, () => {
+  /**
+   * Preview is a separate capability from download, and it has to be
+   * authorised on its own terms rather than inheriting download's.
+   *
+   * These run on PostgreSQL deliberately. The browser suite runs on SQLite,
+   * which has no row-level security — it is the environment in which the
+   * feature-flag defect passed CI and still broke production. Record scope and
+   * the flag are both RLS-shaped, so they are proven here.
+   */
+  const preview = (userId: string, fileId: string) =>
+    runAsTestIdentity(userId, () => requestDocumentPreview(fileId));
+
+  test("returns short-lived signed access, and never the storage key", requirements, async () => {
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "viewable.pdf");
+    const key = await keyOf(fileId);
+
+    const result = await preview(people.plainMember, fileId);
+    assert.ok(result.ok, `preview refused: ${result.ok ? "" : result.error}`);
+
+    const data = result.data;
+    assert.equal(data.name, "viewable.pdf");
+    assert.equal(data.mimeType, "application/pdf");
+    assert.equal(data.sizeBytes, PDF.length);
+
+    const url = new URL(data.url);
+    assert.ok(url.searchParams.get("X-Amz-Signature"), "not a presigned URL");
+    assert.equal(url.searchParams.get("X-Amz-Expires"), "60", "the preview URL is not short-lived");
+
+    // The viewer needs bytes, not a durable handle on where they live.
+    //
+    // Note what this does *not* claim. A presigned URL necessarily contains the
+    // object's path — that is what it addresses — so the key is inside `url` by
+    // construction and asserting otherwise would be asserting a falsehood. The
+    // property that matters is that it is not handed over as a field of its
+    // own: there is nothing durable to keep, and the one reference that exists
+    // is inside a signature that stops working in sixty seconds.
+    assert.ok(!("storageKey" in data), "the response exposed the storage key as a field");
+    const fields = Object.keys(data).sort();
+    assert.deepEqual(
+      fields,
+      ["expiresAt", "mimeType", "name", "sizeBytes", "url"],
+      "the preview response grew a field that was not reviewed",
+    );
+    assert.ok(new URL(data.url).pathname.includes(encodeURIComponent(key.split("/").pop()!)),
+      "sanity: the signed URL should address the object it is for");
+
+    // And the URL actually yields the document, so this is a working capability
+    // rather than a well-formed string.
+    const fetched = await fetch(data.url);
+    assert.ok(fetched.ok, `the preview URL did not serve the object: ${fetched.status}`);
+    assert.equal((await fetched.arrayBuffer()).byteLength, PDF.length);
+
+    await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "viewable.pdf"));
+  });
+
+  test("a restricted member may preview work they were given", requirements, async () => {
+    const fileId = await uploadAs(A.memberId, id.grantedProject, "granted-view.pdf");
+    const result = await preview(A.memberId, fileId);
+    assert.ok(result.ok, `a granted document could not be previewed: ${result.ok ? "" : result.error}`);
+    await runAsTestIdentity(A.memberId, () => deleteFile(fileId, "granted-view.pdf"));
+  });
+
+  test("a restricted member cannot preview a known file id from ungranted work", requirements, async () => {
+    // The id is handed over directly: record scope must not depend on ids
+    // being unguessable.
+    const fileId = await uploadAs(A.ownerId, id.ungrantedProject, "hidden-view.pdf");
+
+    const result = await preview(A.memberId, fileId);
+    assert.ok(!result.ok, "SECURITY FAILURE: an ungranted document was previewable");
+    assert.equal(result.category, "not_found");
+
+    await runAsTestIdentity(A.ownerId, () => deleteFile(fileId, "hidden-view.pdf"));
+  });
+
+  test("a member of another workspace cannot preview", requirements, async () => {
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "not-theirs.pdf");
+    const B = await createTenant("PreviewOutsider");
+    try {
+      const result = await preview(B.ownerId, fileId);
+      assert.ok(!result.ok, "SECURITY FAILURE: a foreign workspace previewed a document");
+      assert.equal(result.category, "not_found");
+    } finally {
+      await cleanupTenants([B]);
+      await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "not-theirs.pdf"));
+    }
+  });
+
+  test("a viewer may preview, because preview is a read", requirements, async () => {
+    // record:view is the permission preview asks for, and a viewer holds it.
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "read-only.pdf");
+    const result = await preview(A.viewerId, fileId);
+    assert.ok(result.ok, `a viewer could not preview: ${result.ok ? "" : result.error}`);
+    await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "read-only.pdf"));
+  });
+
+  test("preview refuses while the files flag is off", requirements, async () => {
+    const fileId = await uploadAs(people.plainMember, id.grantedProject, "flagged-view.pdf");
+    await observer.featureFlag.updateMany({
+      where: { key: "files", workspaceId: A.workspaceId },
+      data: { enabled: false },
+    });
+
+    try {
+      const result = await preview(people.plainMember, fileId);
+      assert.ok(!result.ok, "preview worked with the flag off");
+      assert.equal(result.category, "forbidden");
+      // And no signed URL was minted before the refusal.
+      assert.ok(!("url" in (result as object)), "a URL was returned despite the refusal");
+    } finally {
+      await observer.featureFlag.updateMany({
+        where: { key: "files", workspaceId: A.workspaceId },
+        data: { enabled: true },
+      });
+    }
+
+    await runAsTestIdentity(people.plainMember, () => deleteFile(fileId, "flagged-view.pdf"));
   });
 });

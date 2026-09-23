@@ -473,3 +473,88 @@ export async function deleteFile(
     });
   });
 }
+
+/**
+ * Short-lived access for the in-app viewer.
+ *
+ * Preview and download are separate capabilities, deliberately. Download is a
+ * route that redirects the browser at storage; this returns a URL as *data*,
+ * for the viewer to fetch bytes from and render itself. They are not the same
+ * contract wearing different clothes:
+ *
+ *   - download navigates, so `Content-Disposition: attachment` governs it and
+ *     the file is saved;
+ *   - preview never navigates, so that header is irrelevant to it — a `fetch`
+ *     into JavaScript ignores disposition entirely.
+ *
+ * That is what lets the viewer exist without carving an exception into forced
+ * download. Nothing is served inline, no object is made public, and the signed
+ * URL is the same shape and lifetime the download path already uses.
+ *
+ * Authorisation is `recordAction` on the FileAsset, which resolves the row
+ * under row-level security and hands back the workspace it actually belongs to
+ * — never one the caller supplied. The flag check then runs *inside* that
+ * context, which is not incidental: `FeatureFlag` is workspace-scoped and under
+ * RLS, and reading it outside a context silently returns the built-in default.
+ * That exact mistake shipped to production once already.
+ */
+export type DocumentPreview = {
+  /** Short-lived, signed, single object. The browser fetches bytes from it. */
+  url: string;
+  /** The type the server determined at upload, never a browser's claim. */
+  mimeType: string;
+  name: string;
+  sizeBytes: number;
+  expiresAt: string;
+};
+
+/**
+ * Sixty seconds, matching the download route.
+ *
+ * A presigned URL's signature is checked when the request *starts*, not while
+ * it streams, so this only has to cover time-to-first-byte — not the transfer
+ * of a 25 MB file. Nothing is cached: closing the viewer drops the bytes, and
+ * reopening re-authorises, so a revoked grant takes effect immediately rather
+ * than being served from something stale.
+ */
+const PREVIEW_URL_TTL_SECONDS = 60;
+
+export async function requestDocumentPreview(
+  fileId: string,
+): Promise<ActionResult<DocumentPreview>> {
+  return guard(async () => {
+    const id = zId.parse(fileId);
+
+    return recordAction(
+      "fileAsset",
+      id,
+      { permission: "record:view", rateLimit: "mutation" },
+      async ({ workspaceId, recordId }) => {
+        await requireFlag("files", workspaceId);
+
+        const file = await db.fileAsset.findFirst({
+          where: { id: recordId, workspaceId },
+          select: { name: true, mimeType: true, sizeBytes: true, storageKey: true },
+        });
+        if (!file) throw noSuchRecord();
+
+        const url = await getStorage().createDownloadUrl({
+          key: file.storageKey,
+          contentType: file.mimeType,
+          downloadName: file.name,
+          expiresInSeconds: PREVIEW_URL_TTL_SECONDS,
+        });
+
+        // The storage key is deliberately not returned. The viewer needs bytes,
+        // not a durable handle on where they live.
+        return {
+          url,
+          mimeType: file.mimeType,
+          name: file.name,
+          sizeBytes: file.sizeBytes,
+          expiresAt: new Date(Date.now() + PREVIEW_URL_TTL_SECONDS * 1000).toISOString(),
+        };
+      },
+    );
+  });
+}

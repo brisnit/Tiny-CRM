@@ -6,6 +6,7 @@ import { Download, FileUp, Loader2, Paperclip, RotateCcw, Trash2, X } from "luci
 import { toast } from "sonner";
 
 import { DeleteDocumentDialog } from "@/components/app/documents/delete-document-dialog";
+import { DocumentViewer } from "@/components/app/documents/document-viewer";
 import { DocumentIcon } from "@/components/app/documents/document-icon";
 import { useDocumentUpload, type UploadItem } from "@/components/app/documents/use-document-upload";
 import { Button } from "@/components/ui/button";
@@ -66,6 +67,7 @@ export function DocumentsPanel({
   const router = useRouter();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [deleting, setDeleting] = React.useState<DocumentView | null>(null);
+  const [viewing, setViewing] = React.useState<DocumentView | null>(null);
 
   const { items, enqueue, retry, dismiss, clearCompleted } = useDocumentUpload({
     projectId,
@@ -157,7 +159,12 @@ export function DocumentsPanel({
       ) : (
         <ul className="divide-y divide-hairline border-t border-hairline">
           {documents.map((document) => (
-            <DocumentRow key={document.id} document={document} onDelete={() => setDeleting(document)} />
+            <DocumentRow
+              key={document.id}
+              document={document}
+              onOpen={() => setViewing(document)}
+              onDelete={() => setDeleting(document)}
+            />
           ))}
         </ul>
       )}
@@ -179,6 +186,13 @@ export function DocumentsPanel({
         <div className="min-w-0">{body}</div>
       )}
 
+      {viewing ? (
+        <DocumentViewer
+          document={viewing}
+          onOpenChange={(open) => { if (!open) setViewing(null); }}
+        />
+      ) : null}
+
       {deleting ? (
         <DeleteDocumentDialog
           open
@@ -197,7 +211,15 @@ function describe(count: number): string {
 }
 
 /** One stored document. Matches RelatedList's row geometry exactly. */
-function DocumentRow({ document, onDelete }: { document: DocumentView; onDelete: () => void }) {
+function DocumentRow({
+  document,
+  onOpen,
+  onDelete,
+}: {
+  document: DocumentView;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
   const meta = [
     formatBytes(document.sizeBytes),
     document.uploaderName,
@@ -207,10 +229,21 @@ function DocumentRow({ document, onDelete }: { document: DocumentView; onDelete:
   return (
     <li className="group flex items-center gap-3 px-4 py-2.5">
       <DocumentIcon mimeType={document.mimeType} />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] font-medium text-body">{document.name}</div>
-        <div className="truncate text-[11.5px] text-muted">{meta.join(" · ")}</div>
-      </div>
+      {/* The name is the trigger. A button rather than a click handler on the
+          row, so it is reachable by keyboard and announced as an action; the
+          Download and Delete controls stay outside it rather than nested, which
+          would be an interactive element inside another one. */}
+      <button
+        type="button"
+        onClick={onOpen}
+        className="min-w-0 flex-1 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+        aria-label={`View ${document.name}`}
+      >
+        <span className="block truncate text-[13px] font-medium text-body hover:underline">
+          {document.name}
+        </span>
+        <span className="block truncate text-[11.5px] text-muted">{meta.join(" · ")}</span>
+      </button>
       <div className="flex shrink-0 items-center gap-1">
         {/* A real link, so the browser downloads it the way it downloads
             anything else. The route authorises, then redirects to a URL that
