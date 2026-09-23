@@ -6,6 +6,7 @@ import { askTinyAi, ensureThread } from "@/lib/ai/crm-agent";
 import { requireFlag } from "@/lib/flags";
 import { AppError, toAppError } from "@/lib/errors";
 import { log, newRequestId, runWithContext } from "@/lib/logger";
+import { withTenantContext } from "@/lib/tenant-db";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { LIMITS } from "@/lib/validation/limits";
 import { zId, zScope } from "@/lib/validation/common";
@@ -71,15 +72,46 @@ export async function POST(request: Request) {
         throw new AppError("forbidden", "Your role cannot use Tiny AI.");
       }
 
+      /**
+       * The flag, read where this request is allowed to see it.
+       *
+       * `FeatureFlag` is workspace-scoped and under row-level security, so a
+       * workspace override is only visible while `app.workspace_ids` is set.
+       * Read with no context it is filtered out and `isEnabled` falls back to
+       * the built-in default — and for `ai` that default is `true`, so a
+       * workspace that had deliberately switched Tiny AI off kept getting it.
+       *
+       * The context is the one this request has already earned: `readable` is
+       * the caller's own memberships filtered by `ai:use`, and the focused
+       * branch names a workspace `requireRecordAccess` just resolved under RLS.
+       * Neither grants anything new. `isEnabled` is deliberately left alone —
+       * teaching it to open a context from a caller-supplied id would let any
+       * caller read another workspace's overrides, which is the boundary this
+       * policy exists to hold.
+       */
+      const flagInContext = (workspaceIds: string[], forWorkspace: string | null) =>
+        withTenantContext(
+          {
+            workspaceIds,
+            userId: actor.identity.id,
+            restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, workspaceIds),
+          },
+          () => requireFlag("ai", forWorkspace),
+        );
+
       // A focused record is authorised on its own terms before retrieval.
       if (body.focus) {
         const { requireRecordAccess } = await import("@/lib/auth/access");
         const { workspaceId } = await requireRecordAccess(body.focus.type, body.focus.id, {
           permission: "ai:use",
         });
-        await requireFlag("ai", workspaceId);
+        await flagInContext([workspaceId], workspaceId);
       } else {
-        await requireFlag("ai", readable.length === 1 ? readable[0] : null);
+        // Unchanged behaviour for the multi-workspace case: with more than one
+        // readable workspace there is no single override to consult, so only a
+        // global row applies. Widening that is a product decision, not part of
+        // this fix.
+        await flagInContext(readable, readable.length === 1 ? readable[0]! : null);
       }
 
       const scope = {
