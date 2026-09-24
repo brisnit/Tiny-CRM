@@ -162,6 +162,7 @@ jobs:
           node scripts/apply-sql.mjs prisma/postgres/011_contact_company_scope.sql
           node scripts/apply-sql.mjs prisma/postgres/012_grant_integrity.sql
           node scripts/apply-sql.mjs prisma/postgres/013_membership_write_integrity.sql
+          node scripts/apply-sql.mjs prisma/postgres/014_document_intelligence.sql
         env:
           DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
 
