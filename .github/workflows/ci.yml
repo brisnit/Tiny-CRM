@@ -269,6 +269,12 @@ jobs:
         env:
           DATABASE_URL: file:./build.db
 
+      # Reads the .next/server trace manifests the build above just wrote, so it
+      # has to run here: every other job runs the suite without building, and
+      # this file skips itself when there is no build to inspect.
+      - name: The pdf.js worker ships with the functions that need it
+        run: npx tsx --test tests/unit/pdf-worker-tracing.test.ts
+
       - name: The production gate accepts a correct configuration
         run: npm run check:config
         env:
