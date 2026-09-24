@@ -33,6 +33,7 @@ const TENANT_MODELS = [
   "notification", "integration", "emailMessage", "calendarEvent", "eventAttendee",
   "auditLog", "domainEvent", "jobRun", "securityAlert", "projectContact",
   "dealContact", "opportunityContact", "importBatch", "workspaceInvitation",
+  "documentIngestion", "documentChunk",
 ];
 
 /** Establishes tenant context; a call inside one of these is compliant. */
@@ -94,6 +95,16 @@ const EXCEPTIONS: Record<string, string> = {
     "the claim step uses the app_claim_jobs SECURITY DEFINER function on rootDb; " +
     "every job then runs inside withTenantContext for its own workspace",
   "src/lib/jobs/handlers.ts": "handlers run inside the job's tenant context",
+  "src/lib/documents/ingest.ts":
+    "runs inside the job's tenant context, and refuses to proceed without one: " +
+    "the first thing it does is documentIntelligenceEnabled(), which calls " +
+    "assertTenantContext and throws rather than reading a flag — or a file — " +
+    "outside a context. Establishing its own would be wrong here: the job " +
+    "runner has already earned the workspace, and a module that opens a " +
+    "context for itself grants itself the scope it should be verifying",
+  "src/lib/documents/read.ts":
+    "every export begins with requireDocumentIntelligence(), which asserts a " +
+    "tenant context before any read, for the same reason as ingest.ts",
   "src/lib/security/alerts.ts": "scopes each write to the alert's own workspace or user",
   "src/lib/ai/privacy.ts": "reads the workspace's AI mode in that workspace's context",
   "src/lib/entitlements.ts": "account-wide plan usage, isolated context over the actor's memberships",

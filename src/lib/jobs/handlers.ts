@@ -83,6 +83,33 @@ export function registerJobHandlers(): void {
     log.warn("workspace deleted by scheduled job", { workspaceId: workspace.id });
   });
 
+  // --- Document Intelligence ----------------------------------------------
+  //
+  // Registered *after* the loop above, so this replaces the generic automation
+  // handler for `file.uploaded`. Nothing is lost by that: TRIGGER_FOR_EVENT has
+  // no entry for `file.uploaded`, so the generic handler's first action is to
+  // return. A test pins that — if an automation trigger is ever mapped to this
+  // event, it fails rather than silently stopping firing.
+  //
+  // Ingestion is deliberately tolerant of being called when it should do
+  // nothing. The gates are checked inside `ingestFileAsset`, not here, so there
+  // is exactly one place that decides whether a document may be read.
+  registerHandler("file.uploaded", async (job) => {
+    const { ingestFileAsset } = await import("@/lib/documents/ingest");
+
+    const outcome = await ingestFileAsset({
+      fileAssetId: job.entityId,
+      workspaceId: job.workspaceId,
+    });
+
+    if (!outcome.ingested && outcome.reason === "missing_file") {
+      // Deleted between upload and ingestion, or never visible to this job.
+      // Retrying cannot make it reappear, and a dead-letter alert for a file
+      // somebody deleted is noise.
+      throw new PermanentJobError("The file no longer exists");
+    }
+  });
+
   // --- Overdue tasks ------------------------------------------------------
   registerHandler("task.overdue", async (job) => {
     const task = await db.task.findFirst({

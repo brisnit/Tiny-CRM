@@ -21,6 +21,19 @@ export const FLAGS = {
   integrations: { default: false, description: "Live email and calendar sync" },
   experimentalSearch: { default: false, description: "Full-text search backend" },
   auditLogUi: { default: true, description: "Audit log screen in settings" },
+  /**
+   * Document Intelligence: reading uploaded documents so they can be asked
+   * about. Gated separately from `files` and from `ai` because it is neither:
+   * storing a PDF is not reading it, and answering from a record is not
+   * answering from somebody's contract. All three must be on — see
+   * `requireDocumentIntelligence` in src/lib/documents/gate.ts.
+   *
+   * Default false, with no override anywhere. This ships dark.
+   */
+  documentAi: {
+    default: false,
+    description: "Reading uploaded documents so Tiny can answer questions about them",
+  },
 } as const;
 
 export type FlagKey = keyof typeof FLAGS;

@@ -1,5 +1,7 @@
 import "server-only";
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { rootDb, runWithTenantClient, currentTenantClient } from "@/lib/db";
 import { AppError } from "@/lib/errors";
 import { isPostgres } from "@/lib/env";
@@ -107,6 +109,30 @@ export const NO_RECORD_READS: string[] = [];
  * `workspaceId` clause returns rows from these workspaces and no others; a
  * query run with no context at all returns nothing.
  */
+/**
+ * The declared tenant scope, independent of the engine.
+ *
+ * `currentTenantClient()` answers "is there an ambient transaction", which is
+ * the right question on PostgreSQL and always `null` on SQLite — where this
+ * function is a deliberate pass-through that opens no transaction at all.
+ *
+ * Some checks need the other question: "did the caller establish a tenant
+ * context before doing this?" That is a property of the *call shape* rather
+ * than of the database, it is equally true on both engines, and asserting it is
+ * how a workspace-scoped feature-flag read can be caught on SQLite — where the
+ * absence of row-level security otherwise hides the mistake entirely. See
+ * src/lib/documents/gate.ts, and the three occurrences of that defect it exists
+ * to prevent a fourth of.
+ *
+ * Deliberately carries no client and grants no access. It is a marker.
+ */
+const tenantScope = new AsyncLocalStorage<{ workspaceIds: string[]; userId: string | null }>();
+
+/** The tenant scope declared by the nearest enclosing `withTenantContext`, if any. */
+export function currentTenantScope(): { workspaceIds: string[]; userId: string | null } | null {
+  return tenantScope.getStore() ?? null;
+}
+
 export async function withTenantContext<T>(
   context: TenantContext,
   fn: (tx: Prisma.TransactionClient) => Promise<T>,
@@ -140,14 +166,19 @@ export async function withTenantContext<T>(
   // pass-through, exactly as it was before the request path started using it.
   // Isolation on SQLite remains what it always was — the application's own
   // guards, which every tenant-isolation test also exercises.
-  if (!isPostgres) return fn(rootDb as unknown as Prisma.TransactionClient);
+  const scope = { workspaceIds: ids, userId: context.userId ?? null };
+
+  if (!isPostgres) {
+    return tenantScope.run(scope, () => fn(rootDb as unknown as Prisma.TransactionClient));
+  }
 
   const existing = currentTenantClient();
+  // Already inside one: the scope marker is already set by that call.
   if (existing && !options.isolated) return fn(existing);
 
   // rootDb, not db: `db` resolves to the ambient transaction, and this is the
   // call that creates one.
-  return rootDb.$transaction(
+  return tenantScope.run(scope, () => rootDb.$transaction(
     async (tx) => {
       if (isPostgres) {
         // `set_config(name, value, true)` is SET LOCAL, as a function, so the
@@ -177,7 +208,7 @@ export async function withTenantContext<T>(
       // concurrency, reported to the user as an unrelated failure.
       maxWait: options.maxWait ?? 10_000,
     },
-  );
+  ));
 }
 
 /**

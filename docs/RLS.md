@@ -205,6 +205,45 @@ CREATE POLICY tenant_isolation ON "PipelineStage"
 The subquery reads a table that is itself protected, so a row whose parent is
 invisible is invisible too.
 
+### Derived from the document — `DocumentIngestion`, `DocumentChunk`
+
+Extracted document text, which is the most exposed thing in the schema: reading
+the PDF needs a signed URL and a byte range, reading a chunk needs a `SELECT`.
+
+The rule is *not* "same workspace". It is **you may read a document's
+intelligence exactly when you may read the document** — so the predicate is
+`FileAsset`'s own, re-derived from `FileAsset`'s columns:
+
+```sql
+CREATE POLICY tenant_isolation ON "DocumentChunk"
+  USING (EXISTS (
+    SELECT 1 FROM "FileAsset" f
+    WHERE f.id = "fileAssetId"
+      AND f."workspaceId" = "workspaceId"
+      AND app_can_see_workspace(f."workspaceId")
+      AND app_can_see_child(f."workspaceId", f."opportunityId", f."projectId")
+  ));
+```
+
+`app_can_see_child` is what carries the restricted-member rule across: a member
+granted one project cannot read text extracted from a document attached to
+another, even knowing the chunk's id. A workspace-only policy would have let
+them, because the chunk carries a `workspaceId` of its own.
+
+That column is not trusted, either. `(fileAssetId, workspaceId)` is a composite
+foreign key onto `FileAsset (id, workspaceId)`, so a row claiming a workspace its
+document does not belong to cannot be written at all.
+
+Unlike the parent-derived policies above, this **re-states** the parent's
+predicate rather than relying on the parent's own policy filtering the subquery.
+That is the convention 010 already established for `Milestone` and the contact
+join tables, and it keeps the rule true without depending on a reading of when
+PostgreSQL applies a referenced table's policies inside a policy expression.
+
+`tests/security/document-intelligence.test.ts` attacks it: foreign workspace,
+restricted member with and without a grant, a known chunk id, a known file id,
+an insert against an unreachable document, and the delete cascade.
+
 ### Person-scoped — `SavedView`, `Notification`
 
 Gated on `app.user_id` **and** the workspace when one is set. A saved view belongs
@@ -357,6 +396,7 @@ psql "$DATABASE_URL" -f prisma/postgres/003_deferrable_constraints.sql
       psql "$DATABASE_URL" -f prisma/postgres/011_contact_company_scope.sql
       psql "$DATABASE_URL" -f prisma/postgres/012_grant_integrity.sql
       psql "$DATABASE_URL" -f prisma/postgres/013_membership_write_integrity.sql
+      psql "$DATABASE_URL" -f prisma/postgres/014_document_intelligence.sql
 
 # The migration creates tinycrm_app with NOLOGIN and no password on purpose:
 # a credential in a migration file is a credential in version control.

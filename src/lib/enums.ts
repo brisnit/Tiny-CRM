@@ -355,6 +355,69 @@ export const AUTOMATION_ACTION = optionMap([
   { value: "add_tag", label: "Add a tag", tone: TONE.neutral },
 ] as const);
 
+// --- Document Intelligence -------------------------------------------------
+
+/**
+ * How far a document has got, and what came out.
+ *
+ * Four of these are terminal outcomes rather than failures, and the difference
+ * matters to what a person is told:
+ *
+ *   ready         text was extracted and chunked
+ *   partial_text  a document with text on some pages and none on most of them
+ *   no_text       no readable text at all — very likely a scan
+ *   unsupported   we could not read this kind of file (encrypted, not a PDF)
+ *   failed        something went wrong on our side
+ *
+ * `no_text` is not an error. A scanned contract is a perfectly valid document
+ * that this product cannot read yet, and saying "failed" would blame the user's
+ * file for our missing OCR.
+ */
+export const DOCUMENT_INGESTION_STATUS = optionMap([
+  { value: "pending", label: "Waiting", tone: TONE.neutral },
+  { value: "processing", label: "Reading", tone: TONE.blue },
+  { value: "ready", label: "Ready", tone: TONE.green },
+  {
+    value: "partial_text",
+    label: "Partly readable",
+    tone: TONE.amber,
+    description: "Tiny found text on only some pages of this document.",
+  },
+  {
+    value: "no_text",
+    label: "No readable text",
+    tone: TONE.amber,
+    description: "Tiny couldn't find readable text in this PDF. It may be a scanned document.",
+  },
+  {
+    value: "unsupported",
+    label: "Can't be read",
+    tone: TONE.stone,
+    description: "Tiny can't read this file. It may be encrypted or damaged.",
+  },
+  { value: "failed", label: "Couldn't be read", tone: TONE.rose },
+] as const);
+
+export type DocumentIngestionStatus = (typeof DOCUMENT_INGESTION_STATUS.values)[number];
+
+/**
+ * Why extraction did not produce text, as a category.
+ *
+ * Deliberately coarse and deliberately ours. A provider or library message can
+ * name a bucket, a request id or a file path, and this value is stored on a row
+ * a browser will render. Nothing here is derived from an exception's text.
+ */
+export const DOCUMENT_ERROR_CODE = optionMap([
+  { value: "encrypted", label: "Password protected", tone: TONE.stone },
+  { value: "unsupported_type", label: "Not a PDF", tone: TONE.stone },
+  { value: "too_large", label: "Too large to read", tone: TONE.stone },
+  { value: "unreadable", label: "Damaged or unreadable", tone: TONE.rose },
+  { value: "storage_unavailable", label: "Storage unavailable", tone: TONE.rose },
+  { value: "internal", label: "Something went wrong", tone: TONE.rose },
+] as const);
+
+export type DocumentErrorCode = (typeof DOCUMENT_ERROR_CODE.values)[number];
+
 // --- Zod schemas used by every server action -------------------------------
 
 export const zEnum = <T extends { values: [string, ...string[]] }>(map: T) =>
