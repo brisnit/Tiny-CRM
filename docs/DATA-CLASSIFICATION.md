@@ -50,7 +50,9 @@ candid assessments. That is the standard the rest of this file applies.
 | RFP / opportunity records | `Opportunity.*` | Solicitation numbers, deadlines, requirements, bid strategy — timed leverage in a live competitive process. |
 | Company records | `Company.*` | Who the customer works with. |
 | Project detail | `Project.*`, `Milestone.*` | Budgets, revenue, delivery risk. |
-| Files | `FileAsset` + object storage | Proposals and contracts. **Uploads are disabled in this build.** |
+| Files | `FileAsset` + object storage | Proposals and contracts. Behind the `files` flag, enabled per workspace. |
+| Extracted document text | `DocumentChunk.text` | The inside of those proposals and contracts, in plain text and searchable. Strictly more exposed than the object it came from: the PDF needs a signed URL and a byte range to read, a chunk row is a `SELECT`. Under RLS derived from the file's own access rules, so a restricted member who cannot open the document cannot read what was extracted from it (`prisma/postgres/014_document_intelligence.sql`). Never logged. |
+| Document ingestion state | `DocumentIngestion.*` | Page counts, character counts, status and a failure category. No document content, and deliberately no storage key, bucket or URL. |
 | Activity timeline | `Activity.*` | What was said, to whom, when. |
 | Email and calendar | `EmailMessage`, `CalendarEvent` | Third-party correspondence. |
 | AI summaries | `AiInsight.body` | Compressed versions of everything above — and easier to exfiltrate than the source, because one record carries the gist of many. |

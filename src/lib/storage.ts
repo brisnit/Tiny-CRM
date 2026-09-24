@@ -23,6 +23,7 @@ import { log } from "@/lib/logger";
  *   createDownloadUrl  a time-limited URL the browser may GET one object from
  *   headObject         authoritative size and type of a stored object
  *   readRange          a few bytes from the front of an object
+ *   readObject         the whole object, server-side, under a hard ceiling
  *   deleteObject       removal
  *
  * Nothing here returns a provider SDK object, a bucket handle, or a raw
@@ -39,9 +40,23 @@ import { log } from "@/lib/logger";
  * few megabytes, well under the 25 MB this product accepts, so a proxying
  * design would fail on exactly the files people most want to store.
  *
- * `readRange` is the single exception, and it is bounded to the first sixteen
- * bytes of an object. Sixteen bytes is metadata, not a file — see the magic
- * byte discussion in `src/lib/actions/files.ts`.
+ * `readRange` is one exception, and it is bounded to the first sixteen bytes of
+ * an object. Sixteen bytes is metadata, not a file — see the magic byte
+ * discussion in `src/lib/actions/files.ts`.
+ *
+ * `readObject` is the other, and it is a different kind of exception: it really
+ * does buffer a whole document. It exists for Document Intelligence, which has
+ * to hand complete bytes to a PDF parser, and it is deliberately **not** the
+ * browser path — nothing it returns is ever sent to a client. The constraint
+ * that made the upload path avoid proxying is a request-body limit on the way
+ * *in*; reading an object we already own, into a background job, under an
+ * explicit ceiling, is not the same operation.
+ *
+ * The alternative considered and rejected was for the server to fetch its own
+ * presigned URL. That works, and it was proven working during the Phase 3B
+ * spike — but it sends a credential-bearing URL out through the public edge to
+ * read bytes we already hold keys for, and it puts a signed URL into a variable
+ * in the ingestion path. A private signed GET is strictly less exposure.
  *
  * ---------------------------------------------------------------------------
  * Why there is one driver and not two
@@ -104,6 +119,14 @@ export interface StorageDriver {
   headObject(key: string): Promise<StoredObject | null>;
   /** Inclusive byte range. Returns fewer bytes than asked when the object is shorter. */
   readRange(key: string, start: number, endInclusive: number): Promise<Uint8Array>;
+  /**
+   * The whole object, server-side, bounded.
+   *
+   * Throws `StorageObjectTooLarge` rather than returning a truncated buffer: a
+   * half-read PDF is not a smaller PDF, and silently handing one to a parser
+   * produces a confident wrong answer instead of an error.
+   */
+  readObject(key: string, maxBytes: number): Promise<Uint8Array>;
   /** Idempotent: deleting an absent object is not an error. */
   deleteObject(key: string): Promise<void>;
 }
@@ -150,7 +173,45 @@ class UnconfiguredStorage implements StorageDriver {
   async createDownloadUrl(): Promise<string> { this.refuse(); }
   async headObject(): Promise<StoredObject | null> { this.refuse(); }
   async readRange(): Promise<Uint8Array> { this.refuse(); }
+  /**
+   * Refuses, like every other capability here.
+   *
+   * Considered and rejected: returning an empty buffer so that ingestion could
+   * "work" with no storage configured. An empty buffer is not a zero-page PDF,
+   * it is a lie — extraction would fail on it and the document would be marked
+   * unreadable, blaming the customer's file for a missing environment variable.
+   * Refusing produces `storage_unavailable`, which is what actually happened.
+   */
+  async readObject(): Promise<Uint8Array> { this.refuse(); }
   async deleteObject(): Promise<void> { this.refuse(); }
+}
+
+/**
+ * The object was bigger than the caller was willing to read.
+ *
+ * A distinct type rather than a generic failure because the ingestion path has
+ * to tell these apart: too large is a fact about the document that a person can
+ * be told, and a storage outage is a fact about us that they cannot act on.
+ *
+ * Carries sizes for the log, and no key, bucket or endpoint in its message.
+ */
+export class StorageObjectTooLarge extends Error {
+  constructor(
+    readonly key: string,
+    readonly sizeBytes: number,
+    readonly maxBytes: number,
+  ) {
+    super(`Stored object exceeds the ${maxBytes} byte ceiling`);
+    this.name = "StorageObjectTooLarge";
+  }
+}
+
+/** The object is not there. Distinguished for the same reason as above. */
+export class StorageObjectMissing extends Error {
+  constructor(readonly key: string) {
+    super("Stored object does not exist");
+    this.name = "StorageObjectMissing";
+  }
 }
 
 type S3Config = {
@@ -264,6 +325,95 @@ class S3Storage implements StorageDriver {
     const buffer = new Uint8Array(await response.arrayBuffer());
     const wanted = endInclusive - start + 1;
     return buffer.length > wanted ? buffer.subarray(0, wanted) : buffer;
+  }
+
+  /**
+   * The whole object, read privately, under a hard ceiling.
+   *
+   * Signed with the Authorization header rather than a query string, so no
+   * credential-bearing URL is ever produced, logged, or capable of being passed
+   * to anything else. The bytes travel from the provider into this process and
+   * stop here.
+   *
+   * The ceiling is enforced **twice**, because one of the checks can be lied to:
+   *
+   *  1. `Content-Length`, before the body is touched. This is the cheap check
+   *     and the one that matters operationally — an oversized object costs one
+   *     round trip and no memory.
+   *
+   *  2. While consuming the stream, against the bytes actually received. A
+   *     response may carry no `Content-Length` at all (chunked encoding), or an
+   *     understated one. Trusting a header to bound an allocation is how a
+   *     memory-exhaustion bug is written, and the first check alone is exactly
+   *     that. The second one is the one that is actually load-bearing; the
+   *     first is an optimisation over it.
+   *
+   * Both throw `StorageObjectTooLarge` rather than truncating. A parser handed
+   * the first N bytes of a PDF does not report a smaller document, it reports a
+   * damaged one — and we would have damaged it.
+   */
+  async readObject(key: string, maxBytes: number): Promise<Uint8Array> {
+    if (!Number.isInteger(maxBytes) || maxBytes <= 0) {
+      throw new AppError("internal", "File storage is not available right now.", {
+        internal: `readObject called with a nonsensical ceiling: ${maxBytes}`,
+      });
+    }
+
+    const response = await this.client.fetch(this.objectUrl(key).toString(), { method: "GET" });
+
+    if (response.status === 404) {
+      throw new StorageObjectMissing(key);
+    }
+    if (!response.ok) {
+      throw await this.failure("GET", key, response);
+    }
+
+    // (1) Declared size, before a byte of the body is read.
+    const declared = response.headers.get("content-length");
+    if (declared !== null) {
+      const size = Number(declared);
+      if (Number.isFinite(size) && size > maxBytes) {
+        // The body is abandoned deliberately: there is no reason to receive it.
+        await response.body?.cancel().catch(() => {});
+        throw new StorageObjectTooLarge(key, size, maxBytes);
+      }
+    }
+
+    if (!response.body) {
+      // A 200 with no body is not an empty document; it is a response we do not
+      // understand, and guessing which would be worse than saying so.
+      throw new AppError("internal", "File storage is not available right now.", {
+        internal: `GET ${key} returned ${response.status} with no body`,
+      });
+    }
+
+    // (2) Received size, which is the check that cannot be talked out of.
+    const reader = response.body.getReader();
+    const parts: Uint8Array[] = [];
+    let received = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        received += value.byteLength;
+        if (received > maxBytes) {
+          await reader.cancel().catch(() => {});
+          throw new StorageObjectTooLarge(key, received, maxBytes);
+        }
+        parts.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const bytes = new Uint8Array(received);
+    let offset = 0;
+    for (const part of parts) {
+      bytes.set(part, offset);
+      offset += part.byteLength;
+    }
+    return bytes;
   }
 
   async deleteObject(key: string): Promise<void> {

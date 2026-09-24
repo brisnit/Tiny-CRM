@@ -884,6 +884,10 @@ model FileAsset {
   project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
   opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
 
+  /// Document Intelligence. Cascades from here, in the database. Chunks hang
+  /// off the ingestion rather than off the file, so there is one path down.
+  ingestion DocumentIngestion?
+
   /// One stored object, one row.
   ///
   /// Upload confirmation is a separate call from the upload itself, and the
@@ -897,12 +901,131 @@ model FileAsset {
   /// check and the write. The application guard stays as the thing that returns
   /// a civil answer; this is the thing that makes it true.
   @@unique([workspaceId, storageKey])
+  /// Target of the composite foreign key on DocumentIngestion.
+  ///
+  /// The intelligence tables carry `workspaceId` of their own, for the same
+  /// deny-by-default policy predicate every other scoped table uses. A copied
+  /// column can disagree with its source, so it is not merely copied: the
+  /// ingestion row points (fileAssetId, workspaceId) at this pair, and a row
+  /// claiming a workspace its file does not belong to is a constraint
+  /// violation rather than something a policy has to catch.
+  @@unique([id, workspaceId])
   @@index([workspaceId, createdAt])
   @@index([projectId])
   @@index([dealId])
   @@index([companyId])
   @@index([contactId])
   @@index([opportunityId])
+}
+
+// ---------------------------------------------------------------------------
+// Document Intelligence
+//
+// Extracted, page-aware text for an uploaded document, so that a later phase can
+// answer questions from the document itself rather than from a model's memory.
+//
+// Three things are deliberate here.
+//
+// **Everything hangs off FileAsset.** The file is the authoritative record of
+// which workspace and which project a document belongs to, and it is already
+// under both the workspace policy and the restricted-member record scope. The
+// intelligence tables inherit that boundary by deriving from it rather than by
+// restating it, so a chunk id learned from somewhere else is not a way around
+// the file's own access rules.
+//
+// **The copied columns cannot drift.** `workspaceId` is carried here for the
+// same deny-by-default predicate the rest of the schema uses, and a copy that
+// can disagree with its source is a security bug waiting to happen. The
+// composite foreign keys below make disagreement impossible rather than
+// unlikely — the same device RecordGrant uses for the same reason.
+//
+// **No secrets live here.** No storage key, bucket, endpoint, signed URL or
+// credential is stored on either table. An intelligence row knows what the
+// document said, never where the bytes are kept.
+// ---------------------------------------------------------------------------
+
+/// One document's ingestion state. Exactly one row per FileAsset.
+model DocumentIngestion {
+  id          String @id @default(cuid())
+  workspaceId String
+  fileAssetId String @unique
+
+  /// pending | processing | ready | partial_text | no_text | unsupported | failed
+  /// Validated by DOCUMENT_INGESTION_STATUS in src/lib/enums.ts.
+  status String @default("pending")
+
+  /// Facts about what was extracted. Null until a run completes.
+  pageCount  Int?
+  charCount  Int?
+  chunkCount Int?
+
+  /// Which extractor produced this result. A future extractor bumps the
+  /// constant in src/lib/documents/extract.ts, and rows below it can be
+  /// reprocessed without guessing which ones are stale.
+  extractorVersion Int @default(1)
+
+  /// Why it failed, as a category a UI can render. Never a provider message,
+  /// which can name a bucket or a request id. See DOCUMENT_ERROR_CODE.
+  errorCode String?
+
+  /// Non-fatal observations, as a JSON array of short codes. A String column
+  /// because the schema runs on SQLite too — see the portability contract.
+  warnings String @default("[]")
+
+  requestedAt DateTime  @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  /// Extraction attempts made. Distinct from the job's own attempt counter:
+  /// this survives the event row being swept.
+  attempts Int @default(0)
+
+  /// (fileAssetId, workspaceId) rather than fileAssetId alone, so this row
+  /// cannot claim a workspace its file does not belong to.
+  fileAsset FileAsset       @relation(fields: [fileAssetId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  chunks    DocumentChunk[]
+
+  /// Declared for the composite relation to FileAsset above. `fileAssetId` is
+  /// already unique on its own, which is what makes this 1:1; Prisma requires
+  /// the pair it actually references to be declared unique as well.
+  @@unique([fileAssetId, workspaceId])
+  /// Target of DocumentChunk's composite foreign key.
+  @@unique([id, fileAssetId, workspaceId])
+  @@index([workspaceId, status])
+  @@index([status, requestedAt])
+}
+
+/// A retrievable span of one document, with the pages it came from.
+model DocumentChunk {
+  id          String @id @default(cuid())
+  workspaceId String
+  fileAssetId String
+  ingestionId String
+
+  /// Position within the document, from 0. Stable across reprocessing of the
+  /// same bytes by the same extractor version.
+  ordinal Int
+  text    String
+
+  /// The page span this text came from, inclusive. Equal when a chunk sits
+  /// inside one page. This is the provenance a grounded answer cites.
+  pageStart Int
+  pageEnd   Int
+
+  charCount     Int
+  /// Rough, provider-neutral. Nothing is embedded yet and this commits us to
+  /// no tokenizer; it exists so a retrieval budget can be reasoned about.
+  tokenEstimate Int
+
+  createdAt DateTime @default(now())
+
+  /// Three columns, one reference: a chunk cannot name one ingestion while its
+  /// file and workspace name another.
+  ingestion DocumentIngestion @relation(fields: [ingestionId, fileAssetId, workspaceId], references: [id, fileAssetId, workspaceId], onDelete: Cascade)
+
+  /// Re-running extraction writes ordinal 0..n-1 again. This is what makes a
+  /// redelivered event replace a chunk set instead of doubling it.
+  @@unique([ingestionId, ordinal])
+  @@index([workspaceId, fileAssetId, ordinal])
 }
 
 // ---------------------------------------------------------------------------
