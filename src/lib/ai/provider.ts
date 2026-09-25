@@ -192,6 +192,40 @@ export function describeProvider() {
 /** Reset between tests or after configuration changes. */
 export function resetProvider() {
   cached = null;
+  installedForTests = null;
+}
+
+/**
+ * A provider installed by a test, so a test can observe whether a code path
+ * reached a provider **at all**.
+ *
+ * Separate from `cached` on purpose: `cached` is the resolution cache and is
+ * consulted only on the transmitting path, whereas this is consulted first on
+ * every path. That difference is the whole reason it exists.
+ *
+ * It exists for one assertion that cannot otherwise be made: that an
+ * unsupported document question results in **zero** provider invocations.
+ * Neither alternative works. Counting network calls proves nothing — with no
+ * API key configured the provider is the local `OfflineProvider`, which makes
+ * no network calls whether it is invoked or not. Asserting on the response text
+ * proves nothing either — a refusal the model produced reads identically to one
+ * it was never asked for, and only one of those is a guarantee.
+ *
+ * `null` in production, and nothing outside a test ever sets it. The real
+ * resolution — including the privacy path this deliberately short-circuits — is
+ * still exercised by tests/security/ai-privacy.test.ts, which installs nothing.
+ */
+let installedForTests: AiProvider | null = null;
+
+/** Installs a provider for the duration of a test. `null` restores normal resolution. */
+export function setProviderForTests(provider: AiProvider | null) {
+  installedForTests = provider;
+  cached = null;
+}
+
+/** Asserted by tests: no production path may leave a provider installed. */
+export function installedProviderForTests(): AiProvider | null {
+  return installedForTests;
 }
 
 /**
@@ -207,6 +241,10 @@ export function resetProvider() {
  * `getProvider()`, so the mode cannot be bypassed by forgetting a check.
  */
 export async function getProviderForWorkspace(workspaceId: string): Promise<AiProvider> {
+  // First, and on every path: a test that installed a provider is asking
+  // "was a provider reached?", which is a different question from "which one".
+  if (installedForTests) return installedForTests;
+
   const { aiPermission } = await import("@/lib/ai/privacy");
   const permission = await aiPermission(workspaceId);
 

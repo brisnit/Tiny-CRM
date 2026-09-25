@@ -105,6 +105,12 @@ const EXCEPTIONS: Record<string, string> = {
   "src/lib/documents/read.ts":
     "every export begins with requireDocumentIntelligence(), which asserts a " +
     "tenant context before any read, for the same reason as ingest.ts",
+  "src/lib/documents/retrieve.ts":
+    "retrievePassages() begins with requireDocumentIntelligence(), which asserts " +
+    "a tenant context and throws without one. The context belongs to the route, " +
+    "which opened it over the workspace requireRecordAccess resolved from the " +
+    "FileAsset; opening one here would mean trusting a workspace id this module " +
+    "was handed rather than one the caller earned",
   "src/lib/security/alerts.ts": "scopes each write to the alert's own workspace or user",
   "src/lib/ai/privacy.ts": "reads the workspace's AI mode in that workspace's context",
   "src/lib/entitlements.ts": "account-wide plan usage, isolated context over the actor's memberships",
