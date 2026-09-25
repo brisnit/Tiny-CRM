@@ -35,6 +35,29 @@ export async function register() {
     database: isProduction ? "postgres" : env.databaseUrl.startsWith("file:") ? "sqlite" : "postgres",
     aiProvider: env.aiProvider,
     demoAuth: env.allowDemoAuth,
+    /**
+     * TEMPORARY DIAGNOSTIC — remove once the provider question is settled.
+     *
+     * Production resolves `providerProfile()` to `offline` even though
+     * ANTHROPIC_API_KEY is configured in Vercel and appears in this
+     * deployment's own environment manifest. Everything observable from
+     * outside — the Vercel API, the CLI, deployment metadata, runtime logs and
+     * the source — has been exhausted without separating three possibilities:
+     * the stored value is blank, the value arrives and our resolution is wrong,
+     * or the platform manifests the name without delivering it.
+     *
+     * Two booleans separate them, and reveal nothing else. Not the value, not a
+     * prefix or suffix, not a length, not a hash, not a character class —
+     * nothing from which any part of the secret could be recovered.
+     *
+     * The names deliberately avoid "key" and "apiKey": `redact()` in
+     * src/lib/logger.ts scrubs fields matching /api[-_]?key/i, which would
+     * replace these with "[redacted]" and waste the deployment. That is not
+     * hypothetical — it is exactly what happened to the `passages` field, which
+     * matched /pass(word|hash)?/ and reported "[redacted]" in production.
+     */
+    anthropicConfigured: "ANTHROPIC_API_KEY" in process.env,
+    anthropicNonEmpty: (process.env.ANTHROPIC_API_KEY ?? "").trim().length > 0,
   });
 
   const { reportObservabilityStatus } = await import("@/lib/observability");
