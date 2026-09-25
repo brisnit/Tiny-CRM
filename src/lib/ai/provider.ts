@@ -170,9 +170,24 @@ export function getProvider(): AiProvider {
   return cached;
 }
 
-/** True when a real model is configured. The UI says so rather than pretending. */
-export function isModelBacked() {
-  return getProvider().id !== "offline";
+/**
+ * True when a real model is behind this provider.
+ *
+ * Takes the provider it should judge, defaulting to the globally configured one
+ * so existing callers — the settings screen, the panel headers — are unchanged.
+ *
+ * The argument exists because the global answer and the *per-workspace* answer
+ * are different questions. `getProviderForWorkspace` can hand back the built-in
+ * engine even when a model is configured, if that workspace's privacy mode
+ * forbids transmission. A caller that needs to know what it actually got has to
+ * ask about the provider it actually got.
+ *
+ * This is the product's existing word for the capability — the settings screen
+ * already renders "Connected" or "Built-in engine" from it — so document Q&A
+ * asks the same question rather than inventing a second vocabulary.
+ */
+export function isModelBacked(provider: AiProvider = getProvider()) {
+  return provider.id !== "offline";
 }
 
 export function describeProvider() {
