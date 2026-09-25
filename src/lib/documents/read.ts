@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { ReadScope } from "@/lib/auth/access";
 import { db } from "@/lib/db";
 import { requireDocumentIntelligence } from "@/lib/documents/gate";
 import type { DocumentErrorCode, DocumentIngestionStatus } from "@/lib/enums";
@@ -18,9 +19,27 @@ import type { DocumentErrorCode, DocumentIngestionStatus } from "@/lib/enums";
  * not a lifecycle operation. Deleting the document deletes the text, and that
  * is the one path that does.
  *
- * Nothing here accepts a workspace id from a request. The caller passes one it
- * has already earned, inside a tenant context, and row-level security is the
- * backstop underneath that.
+ * ---------------------------------------------------------------------------
+ * Why these take a ReadScope rather than a workspace id
+ * ---------------------------------------------------------------------------
+ *
+ * The first version took `(fileAssetId, workspaceId)`. That is the wrong shape:
+ * the workspace was an *argument*, so the signature invited a caller to supply
+ * one, and "the caller passes one it has already earned" was a convention
+ * rather than a constraint. Nothing exploited it — the module was unreferenced
+ * and both row-level security and the gate make an unowned workspace fail
+ * closed — but a boundary that depends on every future caller reading a comment
+ * is not a boundary.
+ *
+ * A `ReadScope` is produced by `resolveReadScope` from the actor's own
+ * memberships and carries the restricted-project scope with it. It cannot be
+ * manufactured from request input, which makes the honest version of the rule
+ * expressible in the type. `searchEverything` in src/lib/data/search.ts is the
+ * same shape for the same reason.
+ *
+ * Widening is still impossible below this: the workspace used is the
+ * intersection of the scope with the file's own workspace, and row-level
+ * security is the backstop underneath that.
  */
 
 export type DocumentIntelligenceSummary = {
@@ -35,15 +54,14 @@ export type DocumentIntelligenceSummary = {
 
 /** What a UI would need to say "ready", "still reading", or "couldn't read this". */
 export async function getDocumentIntelligence(
+  read: ReadScope,
   fileAssetId: string,
-  workspaceId: string,
 ): Promise<DocumentIntelligenceSummary | null> {
+  const workspaceId = await workspaceOf(read, fileAssetId);
+  if (!workspaceId) return null;
   await requireDocumentIntelligence(workspaceId);
 
   const row = await db.documentIngestion.findFirst({
-    // Both columns, though `fileAssetId` is unique: the workspace is what the
-    // caller earned, and naming it keeps this query honest even if someone
-    // later passes an id from somewhere less trustworthy.
     where: { fileAssetId, workspaceId },
     select: {
       status: true,
@@ -83,10 +101,12 @@ export type RetrievedChunk = {
  * corpus by accident.
  */
 export async function getDocumentChunks(
+  read: ReadScope,
   fileAssetId: string,
-  workspaceId: string,
   options: { take?: number } = {},
 ): Promise<RetrievedChunk[]> {
+  const workspaceId = await workspaceOf(read, fileAssetId);
+  if (!workspaceId) return [];
   await requireDocumentIntelligence(workspaceId);
 
   return db.documentChunk.findMany({
@@ -95,6 +115,24 @@ export async function getDocumentChunks(
     take: Math.min(options.take ?? 200, 500),
     select: { ordinal: true, text: true, pageStart: true, pageEnd: true },
   });
+}
+
+/**
+ * The file's own workspace, if this scope reaches it.
+ *
+ * Resolved from the row rather than taken from the caller, and constrained to
+ * the scope's workspaces, so a file outside the scope is indistinguishable from
+ * one that does not exist. Row-level security narrows it again underneath —
+ * a restricted member reaching for an ungranted project's file gets nothing
+ * here even though the workspace matches.
+ */
+async function workspaceOf(read: ReadScope, fileAssetId: string): Promise<string | null> {
+  if (read.workspaceIds.length === 0) return null;
+  const file = await db.fileAsset.findFirst({
+    where: { id: fileAssetId, workspaceId: { in: read.workspaceIds } },
+    select: { workspaceId: true },
+  });
+  return file?.workspaceId ?? null;
 }
 
 function parseWarnings(raw: string): string[] {

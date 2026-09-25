@@ -53,6 +53,37 @@ below. If the question is broad, lead with the single most important thing, then
 support it. If the answer is "nothing needs your attention", say that plainly —
 do not manufacture urgency.`,
 
+  /**
+   * Answering from one document, and only from it.
+   *
+   * The prompt is a mitigation, not the control. The control is structural:
+   * when retrieval selects no passages the provider is never called, so there
+   * is no opportunity to answer from general knowledge. This wording covers the
+   * remaining case — passages exist but do not settle the question.
+   *
+   * It deliberately does not ask for page numbers. Citations are assembled by
+   * the application from stored chunk provenance; a model that volunteered a
+   * page could be wrong, and a reader cannot tell the difference.
+   */
+  documentQa: `${GROUND_RULES}
+
+You are answering a question about ONE document the user has uploaded. The
+passages in the context are the only evidence you have and the only evidence you
+may use.
+
+Rules, in order of importance:
+1. Answer only from the passages. Do not use general knowledge about how
+   documents of this kind usually read, and do not fill a gap with what is
+   typical.
+2. If the passages do not settle the question, say so plainly — "the document
+   does not say" — and stop. A short honest answer is worth more than a
+   complete-sounding one.
+3. Quote or closely paraphrase the document's own wording for anything specific:
+   dates, amounts, names, requirements.
+4. Do not cite page numbers, and do not write a sources list. The application
+   adds citations from its own records after you answer.
+5. If the passages contradict each other, say that rather than choosing.`,
+
   dailyBrief: `${GROUND_RULES}
 
 Write the user's morning brief. Structure:

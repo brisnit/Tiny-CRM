@@ -51,6 +51,11 @@ function fakeStorage(behaviour: {
 
 const goodPdf = () => new Uint8Array(buildPdf(KNOWN_GOOD_PAGES));
 
+/** A ReadScope for A's owner, the shape resolveReadScope produces in a request. */
+function readScope() {
+  return { workspaceIds: [A.workspaceId], userId: A.ownerId, restrictedWorkspaceIds: [] };
+}
+
 /** Runs inside a tenant context for A, the way a job does. */
 async function inContext<T>(fn: () => Promise<T>): Promise<T> {
   return withTenantContext(
@@ -221,7 +226,7 @@ describe("a successful ingestion", () => {
 
     assert.equal(outcome.ingested && outcome.status, "ready");
 
-    const summary = await inContext(() => getDocumentIntelligence(fileId, A.workspaceId));
+    const summary = await inContext(() => getDocumentIntelligence(readScope(), fileId));
     assert.ok(summary);
     assert.equal(summary.status, "ready");
     assert.equal(summary.pageCount, 3);
@@ -229,7 +234,7 @@ describe("a successful ingestion", () => {
     assert.equal(summary.errorCode, null);
     assert.ok(summary.finishedAt instanceof Date);
 
-    const chunks = await inContext(() => getDocumentChunks(fileId, A.workspaceId));
+    const chunks = await inContext(() => getDocumentChunks(readScope(), fileId));
     assert.ok(chunks.length > 0);
     assert.deepEqual(chunks.map((c) => c.ordinal), chunks.map((_, i) => i));
     for (const chunk of chunks) {
@@ -549,12 +554,12 @@ describe("turning documentAi off after a document was ingested", () => {
 
     // Access is closed.
     await assert.rejects(
-      () => inContext(() => getDocumentIntelligence(fileId, A.workspaceId)),
+      () => inContext(() => getDocumentIntelligence(readScope(), fileId)),
       /not enabled for this workspace/,
       "intelligence stayed readable after documentAi was turned off",
     );
     await assert.rejects(
-      () => inContext(() => getDocumentChunks(fileId, A.workspaceId)),
+      () => inContext(() => getDocumentChunks(readScope(), fileId)),
       /not enabled for this workspace/,
     );
 

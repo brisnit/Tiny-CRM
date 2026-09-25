@@ -41,11 +41,114 @@ const bodySchema = z.object({
     .optional(),
   focus: z
     .object({
-      type: z.enum(["contact", "company", "deal", "project", "opportunity"]),
+      type: z.enum(["contact", "company", "deal", "project", "opportunity", "fileAsset"]),
       id: zId,
     })
     .nullish(),
 });
+
+/**
+ * The document question path.
+ *
+ * Kept out of POST so the ordering that matters is readable in one place:
+ *
+ *   authorise the file (already done) -> three gates -> retrieve -> decide
+ *
+ * The decision is the point. With no passages this returns the deterministic
+ * unsupported answer and **never resolves a provider**, so there is no model
+ * call to answer from general knowledge. With passages it streams, and appends
+ * citations the application built from stored page provenance.
+ */
+async function answerAboutDocument(input: {
+  actor: Awaited<ReturnType<typeof getActor>>;
+  workspaceId: string;
+  fileAssetId: string;
+  question: string;
+  requestId: string;
+}): Promise<Response> {
+  const { retrievePassages } = await import("@/lib/documents/retrieve");
+  const { answerFromDocument, unsupportedAnswer } = await import("@/lib/ai/document-agent");
+  const { restrictedIdsFor } = await import("@/lib/auth/access");
+  const { withTenantContext } = await import("@/lib/tenant-db");
+  const { assertWithinLimit, recordUsage } = await import("@/lib/entitlements");
+  const actor = input.actor!;
+
+  // The same monthly entitlement the CRM agent enforces. Without this the
+  // document path would be a way around the plan's AI allowance: a paid limit
+  // that one endpoint checks and another does not is not a limit.
+  await assertWithinLimit(actor, "aiRequestsPerMonth");
+
+  const scope = {
+    workspaceIds: [input.workspaceId],
+    userId: actor.identity.id,
+    restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [input.workspaceId]),
+  };
+
+  // Retrieval — and the three gates it asserts — inside the context this
+  // request earned from its own memberships.
+  const { result, fileName } = await withTenantContext(scope, async () => {
+    const retrieved = await retrievePassages({
+      fileAssetId: input.fileAssetId,
+      workspaceId: input.workspaceId,
+      question: input.question,
+    });
+    // The filename for a citation or a refusal. Read here, under the same
+    // context, rather than trusted from anywhere.
+    const { db } = await import("@/lib/db");
+    const file = await db.fileAsset.findFirst({
+      where: { id: input.fileAssetId, workspaceId: input.workspaceId },
+      select: { name: true },
+    });
+    return { result: retrieved, fileName: file?.name ?? "this document" };
+  });
+
+  const textHeaders = {
+    "Content-Type": "text/plain; charset=utf-8",
+    "Cache-Control": "no-store",
+    "x-request-id": input.requestId,
+  };
+
+  // THE REFUSAL INVARIANT. No provider is resolved on this path.
+  if (result.passages.length === 0) {
+    log.info("document question unsupported", {
+      reason: result.reason,
+      corpusChunks: result.corpus.chunks,
+    });
+    return new Response(unsupportedAnswer(fileName, result), { status: 200, headers: textHeaders });
+  }
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        for await (const chunk of answerFromDocument({
+          workspaceId: input.workspaceId,
+          fileName,
+          question: input.question,
+          result,
+        })) {
+          controller.enqueue(encoder.encode(chunk));
+        }
+        // Recorded only when a provider was actually called. A refusal costs
+        // nothing, so it does not spend the allowance; the rate limiter is what
+        // bounds a caller asking unanswerable questions in a loop.
+        await recordUsage(actor.identity.id, "ai_requests");
+      } catch (raw) {
+        const error = toAppError(raw);
+        if (error.category === "internal") {
+          log.error("document answer failed", { error: String(error.internal) });
+        }
+        controller.enqueue(encoder.encode(`\n\n⚠ ${error.message}`));
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: { ...textHeaders, "X-Accel-Buffering": "no" },
+  });
+}
 
 export async function POST(request: Request) {
   const requestId = newRequestId();
@@ -106,6 +209,30 @@ export async function POST(request: Request) {
           permission: "ai:use",
         });
         await flagInContext([workspaceId], workspaceId);
+
+        /**
+         * Asking about a document.
+         *
+         * Separate from the CRM path because the grounding rules are different:
+         * the answer may come only from the document, the citations are built
+         * from stored page provenance, and an unsupported question must not
+         * reach a model at all.
+         *
+         * The workspace is the one `requireRecordAccess` just resolved from the
+         * FileAsset — never a caller-supplied id. `body.focus.id` is the only
+         * thing the request contributed, and it was authorised above with
+         * `ai:use`, so a viewer never gets here and a foreign id is already a
+         * "no such record".
+         */
+        if (body.focus.type === "fileAsset") {
+          return await answerAboutDocument({
+            actor,
+            workspaceId,
+            fileAssetId: body.focus.id,
+            question: body.question,
+            requestId,
+          });
+        }
       } else {
         // Unchanged behaviour for the multi-workspace case: with more than one
         // readable workspace there is no single override to consult, so only a
@@ -113,6 +240,15 @@ export async function POST(request: Request) {
         // this fix.
         await flagInContext(readable, readable.length === 1 ? readable[0]! : null);
       }
+
+      // Rebuilt rather than passed through: narrowing `focus.type` does not
+      // narrow `focus` itself, and widening the CRM agent's focus type to a case
+      // it does not handle would be the wrong fix.
+      const focused = body.focus ?? null;
+      const crmFocus =
+        focused && focused.type !== "fileAsset"
+          ? { type: focused.type, id: focused.id }
+          : null;
 
       const scope = {
         workspaceIds: readable,
@@ -136,7 +272,11 @@ export async function POST(request: Request) {
               scope,
               question: body.question,
               history: body.history,
-              focus: body.focus ?? null,
+              // Narrowed deliberately: the fileAsset branch above returned, so
+              // this can only be a CRM record. Stating it here keeps the CRM
+              // agent's focus type unchanged rather than widening it to a case
+              // it does not handle.
+              focus: crmFocus,
               threadId: thread.id,
             })) {
               controller.enqueue(encoder.encode(chunk));

@@ -36,6 +36,15 @@ export const LIMITS = {
   maxAiQuestion: 4_000,
   maxAiHistoryTurns: 6,
   maxAiContextChars: 14_000,
+  /**
+   * Document passages sent with one question.
+   *
+   * Below `maxAiContextChars` on purpose: the document context is not the only
+   * thing in the prompt, and six passages at the chunker's ~2,500-char target
+   * would be ~15,000 — over the general ceiling on its own. This leaves room
+   * for the question and the history.
+   */
+  maxAiDocumentContextChars: 12_000,
   maxAiProposals: 50,
 
   /** Money, in minor units. Guards against overflow and absurd inputs. */
