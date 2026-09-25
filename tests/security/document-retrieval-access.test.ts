@@ -228,6 +228,90 @@ describe("the refusal invariant", () => {
   });
 });
 
+/** The AI usage counter, the durable observable for "a provider actually ran". */
+async function aiRequests(userId: string): Promise<number> {
+  const row = await observer.usageCounter.findFirst({
+    where: { userId, metric: "ai_requests" },
+    orderBy: { period: "desc" },
+    select: { count: true },
+  });
+  return row?.count ?? 0;
+}
+
+describe("the three structural states of a document question", () => {
+  test("1. NO EVIDENCE — refusal, no provider, no usage, no citations", async () => {
+    const before = await aiRequests(A.ownerId);
+    const r = await ask(A.ownerId, id.readyFile, "What bid bond amount is required?");
+
+    assert.equal(r.status, 200);
+    assert.equal(r.calls, 0, "a provider was called with no evidence");
+    assert.match(r.body, /couldn't find anything about that/);
+    assert.ok(!r.body.includes("Sources"), "a refusal carried citations");
+    assert.equal(await aiRequests(A.ownerId), before, "usage moved without a provider call");
+  });
+
+  test("2. EVIDENCE + NO CAPABLE PROVIDER — refusal, no generation, no usage, no citations", async () => {
+    /**
+     * The regression test for the production failure of 2026-09-25.
+     *
+     * It installs NOTHING. `setProviderForTests` is cleared, so resolution runs
+     * exactly as it does in production: no API key configured, so
+     * `providerProfile()` is offline, `aiPermission` denies transmission, and
+     * `getProviderForWorkspace` hands back the real OfflineProvider.
+     *
+     * That seam is precisely what hid this bug — every earlier test replaced the
+     * provider before resolution could reach the branch that breaks. This test
+     * exists to never be short-circuited again.
+     */
+    resetProvider();
+    assert.equal(installedProviderForTests(), null, "the seam must be clear for this test to mean anything");
+
+    const before = await aiRequests(A.ownerId);
+    await resetRateLimit("ai", { user: A.ownerId });
+    await resetRateLimit("aiHourly", { user: A.ownerId });
+
+    const response = await runAsTestIdentity(A.ownerId, () =>
+      aiChat(new Request("http://localhost/api/ai/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          // A question the fixture genuinely supports, so retrieval finds
+          // evidence and the *capability* check is what refuses. A question with
+          // no matches would hit the no-evidence refusal first and prove nothing
+          // about this branch.
+          question: "What is the submission deadline?",
+          focus: { type: "fileAsset", id: id.readyFile },
+        }),
+      })));
+    const body = await response.text();
+
+    assert.equal(response.status, 200, body.slice(0, 200));
+    assert.match(body, /no model available/i, `expected the provider-unavailable refusal, got: ${body.slice(0, 200)}`);
+    assert.ok(!body.includes("Sources"), "citations were attached to a refusal");
+
+    // The exact production symptom: the offline engine's canned CRM prose.
+    assert.ok(!/Nothing is due/i.test(body), "the built-in engine answered a document question");
+    assert.ok(!/you are clear today/i.test(body), "the built-in engine answered a document question");
+
+    assert.equal(await aiRequests(A.ownerId), before, "usage was recorded without a capable provider");
+
+    // Restore the seam for the remaining tests.
+    provider = new CountingProvider();
+    setProviderForTests(provider);
+  });
+
+  test("3. EVIDENCE + CAPABLE PROVIDER — one call, grounded answer, citations, one usage", async () => {
+    const before = await aiRequests(A.ownerId);
+    const r = await ask(A.ownerId, id.readyFile, "What is the submission deadline?");
+
+    assert.equal(r.status, 200, r.body.slice(0, 200));
+    assert.equal(r.calls, 1, "the capable provider was not called exactly once");
+    assert.match(r.body, /Sources/);
+    assert.match(r.body, /ready-doc\.pdf — pp\. 3–4/);
+    assert.equal(await aiRequests(A.ownerId), before + 1, "usage did not increment exactly once");
+  });
+});
+
 describe("grounding and citations", () => {
   test("the answer carries a citation built from the chunk's stored pages", async () => {
     const r = await ask(A.ownerId, id.readyFile, "What is the submission deadline?");

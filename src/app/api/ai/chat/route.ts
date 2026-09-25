@@ -67,7 +67,8 @@ async function answerAboutDocument(input: {
   requestId: string;
 }): Promise<Response> {
   const { retrievePassages } = await import("@/lib/documents/retrieve");
-  const { answerFromDocument, unsupportedAnswer } = await import("@/lib/ai/document-agent");
+  const { answerFromDocument, unsupportedAnswer, providerUnavailableAnswer, resolveDocumentProvider } =
+    await import("@/lib/ai/document-agent");
   const { restrictedIdsFor } = await import("@/lib/auth/access");
   const { withTenantContext } = await import("@/lib/tenant-db");
   const { assertWithinLimit, recordUsage } = await import("@/lib/entitlements");
@@ -117,6 +118,30 @@ async function answerAboutDocument(input: {
     return new Response(unsupportedAnswer(fileName, result), { status: 200, headers: textHeaders });
   }
 
+  /**
+   * The second refusal: evidence exists, but nothing can answer from it.
+   *
+   * Resolved and checked *before* a stream is constructed, so the built-in
+   * engine is never handed document text. It cannot answer from a source — it
+   * matches CRM keywords — and the route would then staple accurate page
+   * citations to whatever it produced. A wrong answer wearing correct
+   * provenance is worse than either failure on its own; this is the production
+   * failure of 2026-09-25 (request 80474f7e), where four correct citations were
+   * attached to "Nothing is due — you are clear today."
+   *
+   * No provider call, no usage, no citations — the same shape as the
+   * no-evidence refusal above.
+   */
+  const { provider, capable } = await resolveDocumentProvider(input.workspaceId);
+  if (!capable) {
+    log.info("document question unanswerable", {
+      reason: "provider_not_model_backed",
+      provider: provider.id,
+      passageCount: result.passages.length,
+    });
+    return new Response(providerUnavailableAnswer(fileName), { status: 200, headers: textHeaders });
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -126,6 +151,7 @@ async function answerAboutDocument(input: {
           fileName,
           question: input.question,
           result,
+          provider,
         })) {
           controller.enqueue(encoder.encode(chunk));
         }
