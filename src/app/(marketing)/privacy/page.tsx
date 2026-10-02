@@ -169,20 +169,30 @@ export default function PrivacyPage() {
               </tr>
               <tr>
                 {/*
-                  Delivery is configured — the production gate warns on every boot
-                  when either mail variable is missing, and that warning is absent
-                  from all 612 boot records in the last 48 hours, so both are set.
-                  Which provider receives the mail is a different question: the
-                  adapter is a generic authenticated JSON POST, and the endpoint URL
-                  is encrypted and not readable from here.
+                  Identified from the headers of a real password-reset email, not
+                  from configuration — the endpoint URL is encrypted and unreadable.
+                  Three independent Resend-specific signals agreed: the DKIM
+                  selector `s=resend` signing `d=tinycrm.biz`, a Message-ID domain
+                  of `rsend.tinycrm.biz`, and delivery via Amazon SES, which is the
+                  infrastructure Resend is built on.
+
+                  Resend is the direct processor — the party contracted with. SES is
+                  Resend's own subprocessor, named below rather than listed as a row
+                  here, because listing it as a peer would misdescribe who holds the
+                  relationship.
                 */}
-                <td className="py-2 pr-4 text-body"><NeedsDetail>email provider name</NeedsDetail></td>
+                <td className="py-2 pr-4 text-body">Resend</td>
                 <td className="py-2 pr-4">Transactional email only — verification, password reset, invitations</td>
                 <td className="py-2"><NeedsDetail>provider region</NeedsDetail></td>
               </tr>
             </tbody>
           </table>
         </div>
+        <p>
+          Resend delivers through <strong>Amazon SES</strong>, which is Resend&apos;s own
+          subprocessor rather than a service we contract with directly. Transactional email
+          carries your name, your email address and a link — never CRM record contents.
+        </p>
         <p>
           Whether international transfer terms are required for your jurisdiction is{" "}
           <NeedsDetail>for legal review</NeedsDetail>. Whether a data processing agreement is
