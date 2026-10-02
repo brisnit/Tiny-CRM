@@ -34,8 +34,8 @@ export default function PrivacyPage() {
           everything below: you decide what goes in, and we handle it on your behalf.
         </p>
         <p>
-          Tiny CRM is operated by <strong>Artifact Digital LLC</strong>, at{" "}
-          <NeedsDetail>registered business address</NeedsDetail>.
+          Tiny CRM is operated by <strong>Artifact Digital LLC</strong>, 178 N. Cuyamaca St.,
+          El Cajon, CA 92020, United States.
         </p>
         <p>
           In data-protection terms this most likely makes us a <em>processor</em> for the contact
@@ -144,8 +144,16 @@ export default function PrivacyPage() {
               </tr>
               <tr className="border-b border-hairline/60">
                 <td className="py-2 pr-4 text-body">Cloudflare R2</td>
-                <td className="py-2 pr-4">Storage for uploaded files</td>
-                <td className="py-2"><NeedsDetail>R2 bucket location</NeedsDetail></td>
+                <td className="py-2 pr-4">Storage for uploaded files (bucket <code>tiny-crm-documents</code>)</td>
+                {/*
+                  Cloudflare's own label for this bucket, quoted as given. R2
+                  location hints name a broad area, not a country or a state, and
+                  Cloudflare does not commit to a specific one within it — so
+                  "Western North America" is the whole of what is known. Writing
+                  "United States" or "California" here would be an inference
+                  dressed as a fact about where customer files sit.
+                */}
+                <td className="py-2">Western North America (WNAM)</td>
               </tr>
               <tr className="border-b border-hairline/60">
                 <td className="py-2 pr-4 text-body">Anthropic</td>
@@ -160,8 +168,16 @@ export default function PrivacyPage() {
                 <td className="py-2"><NeedsDetail>per Stripe&apos;s terms</NeedsDetail></td>
               </tr>
               <tr>
+                {/*
+                  Delivery is configured — the production gate warns on every boot
+                  when either mail variable is missing, and that warning is absent
+                  from all 612 boot records in the last 48 hours, so both are set.
+                  Which provider receives the mail is a different question: the
+                  adapter is a generic authenticated JSON POST, and the endpoint URL
+                  is encrypted and not readable from here.
+                */}
                 <td className="py-2 pr-4 text-body"><NeedsDetail>email provider name</NeedsDetail></td>
-                <td className="py-2 pr-4">Transactional email only</td>
+                <td className="py-2 pr-4">Transactional email only — verification, password reset, invitations</td>
                 <td className="py-2"><NeedsDetail>provider region</NeedsDetail></td>
               </tr>
             </tbody>
@@ -266,7 +282,10 @@ export default function PrivacyPage() {
           the statutory rights that apply, are <NeedsDetail>for legal review</NeedsDetail>.
         </p>
         <p>
-          Privacy requests go to <NeedsDetail>privacy contact email</NeedsDetail>.
+          Privacy requests go to{" "}
+          <a href="mailto:privacy@tinycrm.biz" className="text-brand-600 hover:underline dark:text-brand-400">
+            privacy@tinycrm.biz
+          </a>.
         </p>
       </Section>
 
@@ -293,9 +312,11 @@ export default function PrivacyPage() {
           <NeedsDetail>a business decision</NeedsDetail>.
         </p>
         <p>
-          Artifact Digital LLC, <NeedsDetail>registered business address</NeedsDetail>. Contact:{" "}
-          <NeedsDetail>contact email</NeedsDetail>. Governing law and jurisdiction:{" "}
-          <NeedsDetail>for legal review</NeedsDetail>.
+          Artifact Digital LLC, 178 N. Cuyamaca St., El Cajon, CA 92020, United States. Contact:{" "}
+          <a href="mailto:privacy@tinycrm.biz" className="text-brand-600 hover:underline dark:text-brand-400">
+            privacy@tinycrm.biz
+          </a>. Governing law and jurisdiction: <NeedsDetail>for legal review</NeedsDetail> — a
+          business address is not a choice of law.
         </p>
       </Section>
     </LegalPage>

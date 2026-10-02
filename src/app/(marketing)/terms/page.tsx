@@ -26,9 +26,9 @@ export default function TermsPage() {
     <LegalPage title="Terms of service" updated="2 October 2026" intro={<DraftBanner />}>
       <Section id="parties" heading="1. Who these terms are between">
         <p>
-          These terms are between you and <strong>Artifact Digital LLC</strong>, at{" "}
-          <NeedsDetail>registered business address</NeedsDetail>
-          {" "}(&ldquo;we&rdquo;, &ldquo;us&rdquo;), covering your use of Tiny CRM.
+          These terms are between you and <strong>Artifact Digital LLC</strong>, 178 N. Cuyamaca St.,
+          El Cajon, CA 92020, United States (&ldquo;we&rdquo;, &ldquo;us&rdquo;), covering your use of
+          Tiny CRM.
         </p>
         <p>
           By creating an account you accept them. If you are accepting on behalf of an organisation,
@@ -188,8 +188,11 @@ export default function TermsPage() {
         </p>
         <p>
           Governing law and the courts with jurisdiction are{" "}
-          <NeedsDetail>for legal review</NeedsDetail>. Contact for legal notices:{" "}
-          <NeedsDetail>legal contact email</NeedsDetail>.
+          <NeedsDetail>for legal review</NeedsDetail> — a California business address does not by
+          itself choose California law. Contact for legal notices:{" "}
+          <a href="mailto:privacy@tinycrm.biz" className="text-brand-600 hover:underline dark:text-brand-400">
+            privacy@tinycrm.biz
+          </a>.
         </p>
       </Section>
     </LegalPage>
