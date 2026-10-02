@@ -26,7 +26,7 @@ export default function TermsPage() {
     <LegalPage title="Terms of service" updated="2 October 2026" intro={<DraftBanner />}>
       <Section id="parties" heading="1. Who these terms are between">
         <p>
-          These terms are between you and <NeedsDetail>legal entity name</NeedsDetail>, at{" "}
+          These terms are between you and <strong>Artifact Digital LLC</strong>, at{" "}
           <NeedsDetail>registered business address</NeedsDetail>
           {" "}(&ldquo;we&rdquo;, &ldquo;us&rdquo;), covering your use of Tiny CRM.
         </p>

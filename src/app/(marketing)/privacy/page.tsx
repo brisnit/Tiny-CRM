@@ -34,7 +34,7 @@ export default function PrivacyPage() {
           everything below: you decide what goes in, and we handle it on your behalf.
         </p>
         <p>
-          The operator of this service is <NeedsDetail>legal entity name</NeedsDetail>, at{" "}
+          Tiny CRM is operated by <strong>Artifact Digital LLC</strong>, at{" "}
           <NeedsDetail>registered business address</NeedsDetail>.
         </p>
         <p>
@@ -107,19 +107,56 @@ export default function PrivacyPage() {
           </li>
         </ol>
         <p>The services this deployment relies on:</p>
-        <ul className="list-disc space-y-1 pl-5">
-          <li><strong>Vercel</strong> — application hosting.</li>
-          <li><strong>Neon</strong> — the PostgreSQL database.</li>
-          <li><strong>Cloudflare R2</strong> — storage for files you upload.</li>
-          <li><strong>Stripe</strong> — payment processing, if you subscribe.</li>
-          <li><strong>Anthropic</strong> — the AI model provider, for workspaces with AI enabled.</li>
-          <li>An email delivery provider for transactional mail: <NeedsDetail>provider name</NeedsDetail>.</li>
-        </ul>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-[13px]">
+            <thead>
+              <tr className="border-b border-hairline text-left text-body">
+                <th className="py-2 pr-4 font-semibold">Service</th>
+                <th className="py-2 pr-4 font-semibold">Purpose</th>
+                <th className="py-2 font-semibold">Processing location</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-b border-hairline/60">
+                <td className="py-2 pr-4 text-body">Vercel</td>
+                <td className="py-2 pr-4">Application hosting</td>
+                {/* Verified: vercel.json pins `regions: ["pdx1"]`. */}
+                <td className="py-2">US West (Oregon)</td>
+              </tr>
+              <tr className="border-b border-hairline/60">
+                <td className="py-2 pr-4 text-body">Neon</td>
+                <td className="py-2 pr-4">PostgreSQL database</td>
+                <td className="py-2"><NeedsDetail>Neon region</NeedsDetail></td>
+              </tr>
+              <tr className="border-b border-hairline/60">
+                <td className="py-2 pr-4 text-body">Cloudflare R2</td>
+                <td className="py-2 pr-4">Storage for uploaded files</td>
+                <td className="py-2"><NeedsDetail>R2 bucket location</NeedsDetail></td>
+              </tr>
+              <tr className="border-b border-hairline/60">
+                <td className="py-2 pr-4 text-body">Anthropic</td>
+                <td className="py-2 pr-4">AI model provider, where AI is enabled</td>
+                {/* Verified: no `inference_geo` anywhere in src/, so routing is
+                    Anthropic's global default rather than pinned to a region. */}
+                <td className="py-2">Not pinned to a region</td>
+              </tr>
+              <tr className="border-b border-hairline/60">
+                <td className="py-2 pr-4 text-body">Stripe</td>
+                <td className="py-2 pr-4">Payment processing, if you subscribe</td>
+                <td className="py-2"><NeedsDetail>per Stripe&apos;s terms</NeedsDetail></td>
+              </tr>
+              <tr>
+                <td className="py-2 pr-4 text-body"><NeedsDetail>email provider name</NeedsDetail></td>
+                <td className="py-2 pr-4">Transactional email only</td>
+                <td className="py-2"><NeedsDetail>provider region</NeedsDetail></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <p>
-          The processing locations of each, and whether international transfer terms are required
-          for your jurisdiction, are <NeedsDetail>for legal review</NeedsDetail>. Whether a data
-          processing agreement is offered, and on what terms, is{" "}
-          <NeedsDetail>a business decision</NeedsDetail>.
+          Whether international transfer terms are required for your jurisdiction is{" "}
+          <NeedsDetail>for legal review</NeedsDetail>. Whether a data processing agreement is
+          offered, and on what terms, is <NeedsDetail>a business decision</NeedsDetail>.
         </p>
       </Section>
 
@@ -242,7 +279,8 @@ export default function PrivacyPage() {
           <NeedsDetail>a business decision</NeedsDetail>.
         </p>
         <p>
-          Contact: <NeedsDetail>contact email</NeedsDetail>. Governing law and jurisdiction:{" "}
+          Artifact Digital LLC, <NeedsDetail>registered business address</NeedsDetail>. Contact:{" "}
+          <NeedsDetail>contact email</NeedsDetail>. Governing law and jurisdiction:{" "}
           <NeedsDetail>for legal review</NeedsDetail>.
         </p>
       </Section>
