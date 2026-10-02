@@ -109,8 +109,39 @@ async function main() {
     await client.query("BEGIN TRANSACTION READ ONLY");
     opened = true;
 
-    const who = await client.query("SELECT current_user AS role, current_database() AS db");
-    console.log(`\nConnected as ${who.rows[0].role} to ${who.rows[0].db} (read-only transaction)\n`);
+    const who = await client.query(
+      "SELECT current_user AS role, current_database() AS db, version() AS version",
+    );
+    const migrations = await client
+      .query('SELECT count(*)::int AS n FROM "_prisma_migrations" WHERE finished_at IS NOT NULL')
+      .catch(() => ({ rows: [{ n: "unknown" }] }));
+
+    console.log("\nDATABASE IDENTITY");
+    console.log(`  host                 ${host || "(unparsed)"}`);
+    console.log(`  database             ${who.rows[0].db}`);
+    console.log(`  role                 ${who.rows[0].role}`);
+    console.log(`  server               ${String(who.rows[0].version).split(" ").slice(0, 2).join(" ")}`);
+    console.log(`  migrations applied   ${migrations.rows[0].n}`);
+    console.log("  transaction          READ ONLY\n");
+
+    // Reading the wrong database is the failure that makes every number below
+    // meaningless while looking entirely plausible, so it is checked rather than
+    // assumed. A test database is where fixtures live — including one that writes
+    // a UsageCounter of exactly 9,999 to prove the UI degrades when an allowance
+    // is spent — so a figure from here can easily be mistaken for real spend.
+    const looksLikeTest =
+      loopback ||
+      /test|dev|local|staging|shadow/i.test(String(who.rows[0].db)) ||
+      /localhost|127\.0\.0\.1/.test(host);
+
+    if (looksLikeTest) {
+      console.log("!".repeat(72));
+      console.log("  THIS DOES NOT LOOK LIKE PRODUCTION.");
+      console.log(`  host=${host || "?"} database=${who.rows[0].db}`);
+      console.log("  Numbers from a test or local database must not be used to make a");
+      console.log("  migration or pricing decision. Stop and reconnect to production.");
+      console.log("!".repeat(72) + "\n");
+    }
 
     // ---- 1. Plan distribution -------------------------------------------
     const dist = await client.query(`
@@ -272,42 +303,137 @@ async function main() {
     }
 
     // ---- 5. AI usage, the cost-bearing metric ---------------------------
-    const ai = await client.query(`
-      SELECT u.period, count(*)::int AS accounts, sum(u.count)::int AS requests,
-             max(u.count)::int AS busiest_account
-      FROM "UsageCounter" u
-      WHERE u.metric = 'ai_requests'
-      GROUP BY u.period
-      ORDER BY u.period DESC
-      LIMIT 6
-    `);
-    console.log("\nAI REQUESTS BY PERIOD (the metered metric)");
-    if (ai.rows.length === 0) console.log("  (no AI usage recorded — consistent with the provider resolving to the built-in engine)");
-    for (const r of ai.rows) {
-      console.log(`  ${r.period}: ${r.requests} request(s) across ${r.accounts} account(s), busiest=${r.busiest_account}`);
-    }
+    //
+    // Reported with enough context to judge whether a figure is real spend.
+    //
+    // `reserveAiRequest` refuses once the stored count reaches the plan limit, so
+    // a count ABOVE that limit cannot have come from the application's metering
+    // path. It is then either pre-enforcement data, a direct database write, or a
+    // test fixture — and one fixture in this repository writes exactly 9,999 to
+    // prove the UI degrades when an allowance is spent
+    // (tests/integration/ai-enhancement-boundary.test.ts). A number like that must
+    // not be read as provider spend without evidence.
+    //
+    // UsageCounter is deliberately outside RLS, so these need no context.
+    console.log("\nAI REQUESTS (the metered, cost-bearing metric)");
 
-    const aiTop = await client.query(`
-      SELECT us.email, u.period, u.count
+    const aiRows = await client.query(`
+      SELECT us.email, us.plan, u.period, u.count, u."updatedAt"
       FROM "UsageCounter" u JOIN "User" us ON us.id = u."userId"
       WHERE u.metric = 'ai_requests'
       ORDER BY u.count DESC
-      LIMIT 10
+      LIMIT 25
     `);
-    if (aiTop.rows.length) {
-      console.log("  heaviest account-periods:");
-      for (const r of aiTop.rows) console.log(`    ${r.email} ${r.period}: ${r.count}`);
+
+    if (aiRows.rows.length === 0) {
+      console.log("  no AI usage recorded in any period");
+    } else {
+      const PLAN_AI_LIMIT = {
+        free: 10, plus: 30, pro: 60,
+        legacy_pro: 1000, legacy_lifetime: 2000,
+        lifetime: 2000,
+      };
+      console.log(`  ${"account".padEnd(34)} ${"plan".padEnd(16)} ${"period".padEnd(9)} count  limit  verdict`);
+      for (const r of aiRows.rows) {
+        const limit = PLAN_AI_LIMIT[r.plan];
+        const impossible = typeof limit === "number" && r.count > limit;
+        const verdict = impossible
+          ? "EXCEEDS the enforceable limit — not from the metering path"
+          : "consistent with metering";
+        console.log(
+          `  ${String(r.email).slice(0, 33).padEnd(34)} ${String(r.plan).padEnd(16)} ` +
+            `${String(r.period).padEnd(9)} ${String(r.count).padStart(5)}  ${String(limit ?? "?").padStart(5)}  ${verdict}`,
+        );
+      }
+
+      const suspicious = aiRows.rows.filter((r) => {
+        const limit = PLAN_AI_LIMIT[r.plan];
+        return typeof limit === "number" && r.count > limit;
+      });
+      if (suspicious.length > 0) {
+        console.log();
+        console.log("  " + "!".repeat(70));
+        console.log(`  ${suspicious.length} row(s) hold a count the application could not have produced.`);
+        console.log("  Treat these as test or manual data until proven otherwise. Corroborate");
+        console.log("  against the provider's own usage dashboard before calling any of it spend.");
+        console.log("  " + "!".repeat(70));
+      }
     }
 
     // ---- 6. Document intelligence footprint ------------------------------
-    // Pro's differentiator. Worth knowing how much is already ingested.
-    const docs = await client.query(`
-      SELECT count(DISTINCT i."fileAssetId")::int AS documents,
-             count(c.id)::int AS chunks
-      FROM "DocumentIngestion" i
-      LEFT JOIN "DocumentChunk" c ON c."fileAssetId" = i."fileAssetId"
-    `).catch(() => ({ rows: [{ documents: "n/a", chunks: "n/a" }] }));
-    console.log(`\nDocument intelligence: ${docs.rows[0].documents} ingested document(s), ${docs.rows[0].chunks} chunk(s)`);
+    //
+    // Counted inside each account's tenant context, one workspace at a time.
+    //
+    // The first version of this ran a single query with no context at all and
+    // reported zero. `DocumentIngestion` and `DocumentChunk` are FORCE ROW LEVEL
+    // SECURITY with a policy requiring app_can_see_workspace on the owning
+    // FileAsset, so with no context every row is filtered and the count is zero
+    // whatever the database holds. It reported "0 documents" for a deployment that
+    // was demonstrably answering questions about a PDF — a false clean, and the
+    // same defect this codebase has already recorded three times for feature
+    // flags.
+    console.log("\nDOCUMENT INTELLIGENCE");
+
+    const everyAccount = await client.query('SELECT id, email FROM "User" ORDER BY "createdAt"');
+    const documentsSeen = new Set();
+    let chunkTotal = 0;
+    const perWorkspace = [];
+
+    for (const account of everyAccount.rows) {
+      await setContext(client, { userId: account.id, workspaceIds: [] });
+      const members = await client.query(
+        `SELECT m."workspaceId" AS id, w.name
+           FROM "WorkspaceMember" m JOIN "Workspace" w ON w.id = m."workspaceId"
+          WHERE m."userId" = $1 AND w."archivedAt" IS NULL`,
+        [account.id],
+      );
+      const workspaceIds = members.rows.map((r) => r.id);
+      if (workspaceIds.length === 0) continue;
+
+      await setContext(client, { userId: account.id, workspaceIds });
+      const rows = await client.query(
+        `SELECT f."workspaceId" AS ws,
+                count(DISTINCT i."fileAssetId")::int AS documents,
+                count(c.id)::int AS chunks
+           FROM "DocumentIngestion" i
+           JOIN "FileAsset" f ON f.id = i."fileAssetId"
+           LEFT JOIN "DocumentChunk" c ON c."fileAssetId" = i."fileAssetId"
+          WHERE f."workspaceId" = ANY($1)
+          GROUP BY f."workspaceId"`,
+        [workspaceIds],
+      ).catch((error) => {
+        console.log(`  (query failed for ${account.email}: ${error.message})`);
+        return { rows: [] };
+      });
+
+      for (const row of rows.rows) {
+        const name = members.rows.find((m) => m.id === row.ws)?.name ?? row.ws;
+        if (!perWorkspace.some((w) => w.id === row.ws)) {
+          perWorkspace.push({ id: row.ws, name, documents: row.documents, chunks: row.chunks });
+        }
+      }
+
+      // Distinct ingested files, so a workspace shared by several accounts is not
+      // double-counted.
+      const ids = await client.query(
+        `SELECT DISTINCT i."fileAssetId" AS id
+           FROM "DocumentIngestion" i JOIN "FileAsset" f ON f.id = i."fileAssetId"
+          WHERE f."workspaceId" = ANY($1)`,
+        [workspaceIds],
+      ).catch(() => ({ rows: [] }));
+      for (const row of ids.rows) documentsSeen.add(row.id);
+    }
+
+    for (const w of perWorkspace) {
+      console.log(`  ${w.name.padEnd(28)} documents=${w.documents}  chunks=${w.chunks}`);
+      chunkTotal += w.chunks;
+    }
+    console.log(`  TOTAL: ${documentsSeen.size} distinct ingested document(s), ${chunkTotal} chunk(s)`);
+    if (documentsSeen.size === 0) {
+      console.log("  NOTE: zero here means no account's context revealed an ingested document.");
+      console.log("        If a workspace is known to answer questions about a PDF, that is a");
+      console.log("        contradiction — check the database identity above before trusting it.");
+    }
 
     // ---- Summary ---------------------------------------------------------
     console.log("\n" + "=".repeat(72));
