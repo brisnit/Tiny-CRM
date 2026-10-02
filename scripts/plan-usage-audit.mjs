@@ -329,100 +329,135 @@ async function main() {
       console.log("  no AI usage recorded in any period");
     } else {
       /**
-       * AI limits by era, because a stored count must be judged against the
-       * limits that were in force when it was written.
+       * AI limits by era, because a stored count must be judged against the limits
+       * that were in force when it was written.
        *
-       * The first version compared every row against *today's* limits and
-       * therefore accused September of anomalies: a Free account with exactly 25
-       * requests had simply used its whole allowance, because Free was 25 then
-       * and is 10 now. Judging history by a later rule is how a correct number
-       * gets reported as evidence of a problem.
-       *
-       * Metering differed too. Until the pricing release, the check and the
-       * increment were separate calls — `assertWithinLimit` then `recordUsage` —
-       * so two concurrent requests could both pass the read and both record.
-       * Counts slightly above a limit are therefore *expected* from that era and
-       * bounded by the per-user AI rate limit, which is 20 a minute. The current
-       * path claims atomically and cannot overshoot at all.
+       * The first version compared every row against *today's* limits and so
+       * accused September of anomalies: a Free account with exactly 25 requests had
+       * simply used its whole allowance, because Free was 25 then and is 10 now.
        */
       const ERAS = {
-        legacy: {
-          label: "pre-pricing",
-          limits: { free: 25, pro: 1000, lifetime: 2000 },
-          // The old read-then-write pair could overshoot under concurrency.
-          tolerance: 20,
-        },
+        legacy: { label: "pre-pricing", limits: { free: 25, pro: 1000, lifetime: 2000 } },
         current: {
           label: "Free/Plus/Pro",
           limits: { free: 10, plus: 30, pro: 60, legacy_pro: 1000, legacy_lifetime: 2000 },
-          // reserveAiRequest is one atomic statement; overshoot is impossible.
-          tolerance: 0,
         },
       };
 
       /**
-       * The first period in which the new pricing was serving, as "YYYY-MM".
+       * When the new pricing began serving, as an ISO date — **not** a month.
        *
-       * `null` means it has not deployed yet, so every period is judged by the
-       * legacy limits — which is correct today. **Set this when the pricing
-       * release goes out**, or this audit will keep grading new data by old rules.
+       * A release lands mid-month, and a monthly counter then spans both eras: a
+       * count accumulated under Free 25 before the cutover and Free 10 after can
+       * legitimately exceed 10 while being entirely valid. Treating the whole month
+       * as "current" would report those as anomalies.
+       *
+       * The period containing this date is therefore judged by whichever era is
+       * more permissive for that plan, and labelled as spanning the cutover. Set it
+       * when the pricing release deploys; `null` means it has not, so every period
+       * is judged by the pre-pricing limits.
        */
-      const NEW_PRICING_EFFECTIVE_PERIOD = null;
+      const NEW_PRICING_EFFECTIVE_AT = null;
+      const cutoverPeriod = NEW_PRICING_EFFECTIVE_AT ? NEW_PRICING_EFFECTIVE_AT.slice(0, 7) : null;
 
-      const eraFor = (period) =>
-        NEW_PRICING_EFFECTIVE_PERIOD && period >= NEW_PRICING_EFFECTIVE_PERIOD
-          ? ERAS.current
-          : ERAS.legacy;
+      /**
+       * Whether overshoot above a limit was bounded in the pre-pricing era.
+       *
+       * **It was not established, and this script does not claim it was.**
+       *
+       * The reasoning that it was bounded by the per-user AI rate limit of 20 a
+       * minute does not hold. None of src/lib/ai/{summaries,crm-agent,classification}.ts
+       * enforces a rate limit itself, and `getRecordSummary` / `getDailyBrief` are
+       * called from six server-component page renders — home, projects, deals,
+       * opportunities, companies, contacts. A metered request therefore occurred
+       * during an ordinary page load with no AI limiter in the path, so concurrency
+       * there was bounded by render concurrency, which nothing here measures.
+       *
+       * So a pre-pricing count above its limit is *possible* under the old
+       * non-atomic check-then-increment, but by an unknown amount. Such rows are
+       * reported as needing explanation rather than waved through by a tolerance
+       * this script cannot justify.
+       */
+      const LEGACY_OVERSHOOT_BOUND = "unproven";
+
+      const eraFor = (period) => {
+        if (!cutoverPeriod) return { era: ERAS.legacy, spans: false };
+        if (period < cutoverPeriod) return { era: ERAS.legacy, spans: false };
+        if (period > cutoverPeriod) return { era: ERAS.current, spans: false };
+        return { era: ERAS.current, spans: true };
+      };
+
+      const limitFor = (plan, period) => {
+        const { era, spans } = eraFor(period);
+        if (!spans) return { limit: era.limits[plan], era, spans };
+        // The cutover month: the more permissive of the two, since the counter
+        // legitimately accumulated under both.
+        const a = ERAS.legacy.limits[plan];
+        const b = ERAS.current.limits[plan];
+        const candidates = [a, b].filter((v) => typeof v === "number");
+        return { limit: candidates.length ? Math.max(...candidates) : undefined, era, spans };
+      };
 
       console.log(
-        NEW_PRICING_EFFECTIVE_PERIOD
-          ? `  periods from ${NEW_PRICING_EFFECTIVE_PERIOD} judged by the ${ERAS.current.label} limits; ` +
-              `earlier periods by ${ERAS.legacy.label} (Free 25, Pro 1000, Lifetime 2000)\n`
+        cutoverPeriod
+          ? `  pricing cutover ${NEW_PRICING_EFFECTIVE_AT}; ${cutoverPeriod} spans both eras and is\n` +
+              `  judged by the more permissive limit of the two\n`
           : "  the new pricing has not deployed, so every period is judged by the pre-pricing\n" +
               "  limits in force when it was written: Free 25, Pro 1000, Lifetime 2000\n",
       );
-      console.log(`  ${"account".padEnd(32)} ${"plan".padEnd(16)} ${"period".padEnd(9)} count  limit  verdict`);
+      console.log(`  ${"account".padEnd(30)} ${"plan".padEnd(15)} ${"period".padEnd(9)} count  limit  verdict`);
 
       const verdictFor = (row) => {
-        const era = eraFor(row.period);
-        const limit = era.limits[row.plan];
-        if (typeof limit !== "number") return { limit: null, text: "plan not priced in this era", flag: false };
-        if (row.count <= limit) {
+        const { limit, era, spans } = limitFor(row.plan, row.period);
+        if (typeof limit !== "number") {
+          return { limit: null, text: "plan not priced in this era", flag: false };
+        }
+        if (row.count < limit) return { limit, text: "within the allowance", flag: false };
+        if (row.count === limit) return { limit, text: "allowance fully used — valid", flag: false };
+
+        // Above the limit.
+        if (era === ERAS.current && !spans) {
           return {
             limit,
-            text: row.count === limit ? "allowance fully used — valid" : "within the allowance",
-            flag: false,
+            text: "IMPOSSIBLE — reserveAiRequest is atomic and refuses at the limit",
+            flag: true,
           };
-        }
-        if (row.count <= limit + era.tolerance) {
-          return { limit, text: `over by ${row.count - limit}, within the old race tolerance`, flag: false };
         }
         return {
           limit,
-          text: "IMPOSSIBLE under the metering of its era — investigate",
+          text: `over by ${row.count - limit} — possible under the old non-atomic metering, bound ${LEGACY_OVERSHOOT_BOUND}`,
           flag: true,
         };
       };
 
       for (const r of aiRows.rows) {
         const v = verdictFor(r);
+        const { spans } = limitFor(r.plan, r.period);
         console.log(
-          `  ${String(r.email).slice(0, 31).padEnd(32)} ${String(r.plan).padEnd(16)} ` +
-            `${String(r.period).padEnd(9)} ${String(r.count).padStart(5)}  ${String(v.limit ?? "?").padStart(5)}  ${v.text}`,
+          `  ${String(r.email).slice(0, 29).padEnd(30)} ${String(r.plan).padEnd(15)} ` +
+            `${String(r.period).padEnd(9)} ${String(r.count).padStart(5)}  ${String(v.limit ?? "?").padStart(5)}  ` +
+            `${v.text}${spans ? " [spans cutover]" : ""}`,
         );
       }
 
-      const suspicious = aiRows.rows.filter((r) => verdictFor(r).flag);
-      if (suspicious.length > 0) {
+      const needsExplanation = aiRows.rows.filter((r) => verdictFor(r).flag);
+      if (needsExplanation.length > 0) {
         console.log();
         console.log("  " + "!".repeat(70));
-        console.log(`  ${suspicious.length} row(s) hold a count no metering path of their era could produce.`);
-        for (const r of suspicious) {
+        console.log(`  ${needsExplanation.length} row(s) sit above the limit of their era and need explanation.`);
+        for (const r of needsExplanation) {
           console.log(`    ${r.email}  ${r.period}  count=${r.count}`);
         }
-        console.log("  These are not evidence of spend. Investigate them with");
-        console.log("  scripts/investigate-usage-anomaly.mjs, and corroborate any figure you");
-        console.log("  intend to treat as a bill against the provider's own usage dashboard.");
+        console.log();
+        console.log("  Pre-pricing metering was a non-atomic check-then-increment, so SOME");
+        console.log("  overshoot was possible — but the amount is NOT bounded by anything this");
+        console.log("  script can establish. The AI modules enforce no rate limit of their own,");
+        console.log("  and summaries and the daily brief ran inside page renders, so concurrency");
+        console.log("  there was bounded by render concurrency, not by the per-user AI limit.");
+        console.log();
+        console.log("  Investigate with scripts/investigate-usage-anomaly.mjs. Do not treat any");
+        console.log("  figure as spend without reconciling it against the model provider's own");
+        console.log("  usage dashboard for the same period.");
         console.log("  " + "!".repeat(70));
       }
     }
