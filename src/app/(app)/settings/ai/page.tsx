@@ -56,8 +56,9 @@ export default async function AiSettings() {
           </p>
           {modelBacked ? (
             <p className="text-[12.5px] leading-relaxed text-muted">
-              Requests go to your own API account, so there is no AI surcharge on your subscription. Context is
-              scoped to the workspaces you can see and capped before it is sent.
+              Model answers count against your monthly plan allowance; built-in insights never do. Context is
+              scoped to the workspaces you can see and capped before it is sent, so a request cannot grow
+              without bound.
             </p>
           ) : (
             <>

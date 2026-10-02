@@ -54,7 +54,15 @@ describe("documentAi is only ever read through the gate", () => {
   test("no source file outside the gate names the flag", () => {
     // src/lib/flags.ts declares it; the gate reads it. Anywhere else is a
     // direct read that would bypass the tenant-context assertion.
-    const allowed = new Set([GATE, "src/lib/flags.ts"]);
+    const allowed = new Set([
+      GATE,
+      "src/lib/flags.ts",
+      // Declares which flag gates a line of pricing copy; it performs no read.
+      // The hazard this test guards is a *read* without a tenant context, and a
+      // string in a data structure cannot be one. The read that corresponds to
+      // this declaration is documentQaAdvertised(), in the gate.
+      "src/lib/plans.ts",
+    ]);
 
     const offenders = sourceFiles()
       .filter((file) => !allowed.has(relative(file)))

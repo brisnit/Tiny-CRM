@@ -79,3 +79,6 @@ browser-test.db-*
 
 # Throwaway object store for the storage suite
 .miniodata/
+
+# Local state for scripts/stripe-test-clock-dunning.mjs (object ids only, no secrets).
+.stripe-test-clock-state.json

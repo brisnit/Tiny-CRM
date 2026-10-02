@@ -1,5 +1,7 @@
 import "server-only";
 
+import { fitContext } from "@/lib/ai/prompt-budget";
+
 /**
  * Every system prompt in one place, so the product's voice is a single editable
  * artefact rather than something scattered through call sites.
@@ -154,13 +156,21 @@ An empty array is a valid and good answer.`,
  * it is embedded.
  */
 export function withContext(question: string, context: string) {
+  const safeQuestion = stripDelimiters(question);
+  // The context is trimmed to the request's character budget here, inside the
+  // function that owns the delimiter structure. Input tokens are billed, and
+  // nothing else bounded how much context a request could carry — see
+  // src/lib/ai/prompt-budget.ts. Trimming must happen before the closing tag is
+  // appended, never after, or a truncation could remove it and leave retrieved
+  // records reading as instructions.
+  const fitted = fitContext(stripDelimiters(context), safeQuestion.length);
   return [
     "<user_request>",
-    stripDelimiters(question),
+    safeQuestion,
     "</user_request>",
     "",
     "<crm_context>",
-    stripDelimiters(context),
+    fitted,
     "</crm_context>",
   ].join("\n");
 }

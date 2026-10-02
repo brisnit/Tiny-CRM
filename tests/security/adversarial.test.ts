@@ -197,7 +197,11 @@ describe("adversarial", () => {
       const before = await db.user.findUnique({ where: { id: A.memberId }, select: { plan: true } });
 
       const result = await asMember(() =>
-        updateProfile({ name: "Legit Name", plan: "lifetime" } as never),
+        // A *currently sellable* plan id, so the payload would really elevate the
+        // account if updateProfile ever passed it through. An id the plan table no
+        // longer knows resolves to Free, which would make this pass for the wrong
+        // reason.
+        updateProfile({ name: "Legit Name", plan: "pro" } as never),
       );
       assert.equal(result.ok, true);
 
@@ -681,7 +685,10 @@ describe("adversarial", () => {
         "the free-plan contact limit was not enforced",
       );
 
-      await db.user.update({ where: { id: A.ownerId }, data: { plan: "lifetime" } });
+      // Lifts the ceiling again for the tests that follow. `legacy_lifetime`, not
+      // the old `lifetime` string: an unrecognised plan id resolves to Free, which
+      // would leave the limit in place and silently constrain later tests.
+      await db.user.update({ where: { id: A.ownerId }, data: { plan: "legacy_lifetime" } });
     });
   });
 });

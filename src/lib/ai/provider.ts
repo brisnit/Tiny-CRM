@@ -4,6 +4,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
 import { env } from "@/lib/env";
+import { MAX_ATTEMPTS } from "@/lib/ai/cost";
+import { fitMessages } from "@/lib/ai/prompt-budget";
 
 /**
  * Model-provider abstraction.
@@ -55,9 +57,24 @@ export interface AiProvider {
 class AnthropicProvider implements AiProvider {
   readonly id = "anthropic" as const;
   readonly model = env.anthropicModel;
-  private client = new Anthropic({ apiKey: env.anthropicApiKey });
+  /**
+   * `maxRetries` is set explicitly because the SDK default is 2 — three charged
+   * attempts for one logical request, while `recordUsage` counted one. One retry
+   * keeps the useful half of that behaviour (a transient 429 or 5xx) and halves
+   * the worst-case bill. MAX_ATTEMPTS in src/lib/ai/cost.ts is the same number,
+   * and tests/unit/ai-cost-model.test.ts fails if the two drift apart.
+   *
+   * The timeout is well under the SDK's 10-minute default. An abandoned request
+   * is still billed, so a long tail costs money and returns nothing.
+   */
+  private client = new Anthropic({
+    apiKey: env.anthropicApiKey,
+    maxRetries: MAX_ATTEMPTS - 1,
+    timeout: 60_000,
+  });
 
   async complete(options: CompleteOptions): Promise<CompleteResult> {
+    const messages = fitMessages(options.system, options.messages);
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: options.maxTokens ?? 2048,
@@ -66,7 +83,7 @@ class AnthropicProvider implements AiProvider {
       // question needs; effort keeps routine summaries cheap.
       thinking: { type: "adaptive" },
       output_config: { effort: options.effort ?? "low" },
-      messages: options.messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
     });
 
     const text = response.content
@@ -85,13 +102,17 @@ class AnthropicProvider implements AiProvider {
   }
 
   async *stream(options: CompleteOptions): AsyncIterable<string> {
+    const messages = fitMessages(options.system, options.messages);
     const stream = this.client.messages.stream({
       model: this.model,
-      max_tokens: options.maxTokens ?? 4096,
+      // 2048, not 4096. The old default was double the largest cap any caller
+      // actually passes, so a caller that forgot to pass one silently doubled
+      // the output ceiling the cost model is built on.
+      max_tokens: options.maxTokens ?? 2048,
       system: options.system,
       thinking: { type: "adaptive" },
       output_config: { effort: options.effort ?? "low" },
-      messages: options.messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
     });
 
     for await (const event of stream) {
@@ -107,15 +128,22 @@ class AnthropicProvider implements AiProvider {
 class OpenAiProvider implements AiProvider {
   readonly id = "openai" as const;
   readonly model = env.openaiModel;
-  private client = new OpenAI({ apiKey: env.openaiApiKey });
+  // Same attempt bound as the Anthropic client, for the same reason: the SDK
+  // default is 2 retries, and every attempt is billed.
+  private client = new OpenAI({
+    apiKey: env.openaiApiKey,
+    maxRetries: MAX_ATTEMPTS - 1,
+    timeout: 60_000,
+  });
 
   async complete(options: CompleteOptions): Promise<CompleteResult> {
+    const budgeted = fitMessages(options.system, options.messages);
     const response = await this.client.chat.completions.create({
       model: this.model,
       max_tokens: options.maxTokens ?? 2048,
       messages: [
         { role: "system", content: options.system },
-        ...options.messages.map((m) => ({ role: m.role, content: m.content })),
+        ...budgeted.map((m) => ({ role: m.role, content: m.content })),
       ],
       ...(options.jsonSchema ? { response_format: { type: "json_object" as const } } : {}),
     });
@@ -130,13 +158,14 @@ class OpenAiProvider implements AiProvider {
   }
 
   async *stream(options: CompleteOptions): AsyncIterable<string> {
+    const budgeted = fitMessages(options.system, options.messages);
     const stream = await this.client.chat.completions.create({
       model: this.model,
-      max_tokens: options.maxTokens ?? 4096,
+      max_tokens: options.maxTokens ?? 2048,
       stream: true,
       messages: [
         { role: "system", content: options.system },
-        ...options.messages.map((m) => ({ role: m.role, content: m.content })),
+        ...budgeted.map((m) => ({ role: m.role, content: m.content })),
       ],
     });
 

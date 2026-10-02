@@ -3,7 +3,10 @@ import "server-only";
 import { db } from "@/lib/db";
 import { currentPeriod } from "@/lib/dates";
 import { AppError } from "@/lib/errors";
-import { LIMIT_NOUN, PLANS, PlanLimitError, UNLIMITED, limitFor, planFor, type LimitKey, type PlanId } from "@/lib/plans";
+import {
+  AiAllowanceError, LIMIT_NOUN, PLANS, PlanLimitError, UNLIMITED,
+  limitFor, planFor, type LimitKey, type PlanId,
+} from "@/lib/plans";
 import type { Actor, WorkspaceActor } from "@/lib/auth/access";
 import { withTenantContext } from "@/lib/tenant-db";
 
@@ -135,6 +138,97 @@ export async function recordUsage(userId: string, metric: string, amount = 1): P
     create: { userId, metric, period, count: amount },
     update: { count: { increment: amount } },
   });
+}
+
+/**
+ * Claims one metered AI request, atomically, or refuses.
+ *
+ * ## Why this is not `assertWithinLimit` followed by `recordUsage`
+ *
+ * That pair is a read, a decision, and a write — three steps with gaps. Two
+ * requests arriving together both read a count of 29 against a limit of 30, both
+ * conclude they are within it, and both proceed. The allowance is a spending
+ * limit on a paid API, so the gap is not a counting curiosity: it is the
+ * difference between a bounded bill and an unbounded one, and it widens with
+ * concurrency exactly when a user is most likely to be firing several questions
+ * at once.
+ *
+ * The check and the increment are therefore one statement. `ON CONFLICT ... DO
+ * UPDATE ... WHERE` is evaluated against the locked existing row, so a losing
+ * concurrent writer updates nothing and gets no row back. No rows returned means
+ * the allowance is spent. PostgreSQL and SQLite both implement this form, which
+ * is why it is raw SQL rather than two Prisma calls.
+ *
+ * ## Why it reserves rather than records afterwards
+ *
+ * Reserving before the call means a request that is abandoned mid-flight has
+ * still been paid for, which is the truth — an abandoned HTTP request to a model
+ * provider is billed. Recording afterwards undercounts precisely the expensive
+ * cases: a timeout, a dropped stream, a retried attempt.
+ *
+ * `UsageCounter` is deliberately outside RLS (see prisma/postgres/002), so this
+ * needs no tenant context and cannot be made to return the wrong row by one.
+ *
+ * @returns true when the request may proceed and has been counted.
+ */
+export async function reserveAiRequest(
+  userId: string,
+  limit: number,
+  metric = "ai_requests",
+): Promise<boolean> {
+  if (limit === UNLIMITED) {
+    await recordUsage(userId, metric);
+    return true;
+  }
+  if (limit <= 0) return false;
+
+  const period = currentPeriod();
+  const id = `usage_${userId}_${metric}_${period}`;
+
+  const rows = await db.$queryRaw<{ count: number }[]>`
+    INSERT INTO "UsageCounter" ("id", "userId", "metric", "period", "count", "updatedAt")
+    VALUES (${id}, ${userId}, ${metric}, ${period}, 1, CURRENT_TIMESTAMP)
+    ON CONFLICT ("userId", "metric", "period") DO UPDATE
+      SET "count" = "UsageCounter"."count" + 1,
+          "updatedAt" = CURRENT_TIMESTAMP
+      WHERE "UsageCounter"."count" < ${limit}
+    RETURNING "count"
+  `;
+
+  return rows.length > 0;
+}
+
+/**
+ * Hands one reserved request back.
+ *
+ * Used only where it is certain no provider call was made — a capability refusal
+ * decided after the reservation. Never on an error from the provider itself,
+ * because that request was billed whatever it returned.
+ */
+export async function releaseAiRequest(userId: string, metric = "ai_requests"): Promise<void> {
+  const period = currentPeriod();
+  await db.$executeRaw`
+    UPDATE "UsageCounter"
+       SET "count" = "count" - 1, "updatedAt" = CURRENT_TIMESTAMP
+     WHERE "userId" = ${userId} AND "metric" = ${metric}
+       AND "period" = ${period} AND "count" > 0
+  `;
+}
+
+/**
+ * Reserves a metered request for this actor against their plan allowance, or
+ * throws AiAllowanceError.
+ *
+ * Call this only when a *paid* provider is about to be used. The built-in engine
+ * must not pass through here: it makes no external request, so metering it spends
+ * an allowance nobody was billed for and then the exhaustion removes a feature
+ * that costs nothing to serve.
+ */
+export async function reserveAiOrThrow(actor: Actor | WorkspaceActor): Promise<void> {
+  const plan = planFor(actor.identity.plan);
+  const limit = plan.limits.aiRequestsPerMonth;
+  const ok = await reserveAiRequest(actor.identity.id, limit);
+  if (!ok) throw new AiAllowanceError(limit, plan.id);
 }
 
 /**

@@ -102,8 +102,11 @@ function asOwner<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 before(async () => {
-  A = await createTenant("MemberWrite");
-  B = await createTenant("MemberWriteOther");
+  // Invitations consume seats, and Free allows one person. This suite is about
+  // the database refusing an inconsistent membership write, not about the seat
+  // ceiling, so it runs with room.
+  A = await createTenant("MemberWrite", { plan: "pro" });
+  B = await createTenant("MemberWriteOther", { plan: "pro" });
 
   const rows = await observer.workspaceMember.findMany({
     where: { workspaceId: A.workspaceId },

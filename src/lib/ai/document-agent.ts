@@ -1,5 +1,7 @@
 import "server-only";
 
+import { contextBudgetFor } from "@/lib/ai/prompt-budget";
+
 import { SYSTEM_PROMPTS, withContext } from "@/lib/ai/prompts";
 import { getProviderForWorkspace, isModelBacked } from "@/lib/ai/provider";
 import type { AiProvider } from "@/lib/ai/provider";
@@ -111,11 +113,55 @@ export async function resolveDocumentProvider(
   return { provider, capable: isModelBacked(provider) };
 }
 
-/** The context block. Provenance is included as a label the model may read but not cite. */
-function contextFor(passages: readonly RetrievedPassage[]): string {
-  return passages
-    .map((p) => `[passage ${p.ordinal}]\n${p.text}`)
-    .join("\n\n---\n\n");
+/**
+ * The context block. Provenance is included as a label the model may read but
+ * not cite.
+ *
+ * This is the largest input any metered path assembles, and until now the only
+ * thing bounding it was the product of two constants in other files:
+ * MAX_CONTEXT_PASSAGES in retrieve.ts times MAX_CHARS in chunk.ts — six times
+ * 3,200, so 19,200 characters of document text per request, with nothing saying
+ * so and nothing noticing if either constant moved. Input tokens are billed, so
+ * that was an implicit cost ceiling held together by coincidence.
+ *
+ * The budget is now explicit and applied here. Passages are added whole, in
+ * relevance order, until the next one would not fit; a passage is never cut in
+ * half, because half a passage can be cited as if it were the whole of what the
+ * document says on the point. Dropped passages are logged and still appear in
+ * the citations, because the application retrieved them and the reader is
+ * entitled to know which pages were considered.
+ */
+function contextFor(passages: readonly RetrievedPassage[], questionChars: number): string {
+  const budget = contextBudgetFor(questionChars);
+  const SEPARATOR = "\n\n---\n\n";
+
+  const kept: string[] = [];
+  let used = 0;
+  let dropped = 0;
+
+  for (const p of passages) {
+    const block = `[passage ${p.ordinal}]\n${p.text}`;
+    const cost = block.length + (kept.length > 0 ? SEPARATOR.length : 0);
+    // Always keep the first passage: it is the best match, and a request with no
+    // evidence at all would be answered from nothing.
+    if (kept.length > 0 && used + cost > budget) {
+      dropped += 1;
+      continue;
+    }
+    kept.push(block);
+    used += cost;
+  }
+
+  if (dropped > 0) {
+    log.info("document passages dropped for budget", {
+      kept: kept.length,
+      dropped,
+      chars: used,
+      budget,
+    });
+  }
+
+  return kept.join(SEPARATOR);
 }
 
 export type DocumentAnswerRequest = {
@@ -171,7 +217,7 @@ export async function* answerFromDocument(
     // The same untrusted-data boundary every other context uses: document text
     // goes inside <crm_context>, and stripDelimiters removes anything in it
     // that could forge a closing tag.
-    messages: [{ role: "user", content: withContext(request.question, contextFor(passages)) }],
+    messages: [{ role: "user", content: withContext(request.question, contextFor(passages, request.question.length)) }],
   })) {
     yield chunk;
   }

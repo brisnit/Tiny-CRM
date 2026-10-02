@@ -110,6 +110,12 @@ export const POLICIES = {
   },
   upload: { limit: 30, windowMs: HOUR, label: "uploads", per: { user: 30, workspace: 100 } },
 
+  // Creating a Checkout or Customer Portal session. Each one is an outbound call
+  // to Stripe, so this bounds what a signed-in account can make us spend on
+  // Stripe's API as well as what it can make Stripe do. Deliberately low: a
+  // person subscribes or opens their invoices a handful of times, never twenty.
+  billing: { limit: 6, windowMs: MINUTE, label: "billing requests", per: { user: 6 } },
+
   // --- Unauthenticated surfaces --------------------------------------------
   webhook: { limit: 600, windowMs: MINUTE, label: "webhook deliveries", per: { ip: 600 } },
 } as const satisfies Record<string, Policy>;

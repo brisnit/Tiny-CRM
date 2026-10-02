@@ -71,13 +71,8 @@ async function answerAboutDocument(input: {
     await import("@/lib/ai/document-agent");
   const { restrictedIdsFor } = await import("@/lib/auth/access");
   const { withTenantContext } = await import("@/lib/tenant-db");
-  const { assertWithinLimit, recordUsage } = await import("@/lib/entitlements");
+  const { reserveAiOrThrow } = await import("@/lib/entitlements");
   const actor = input.actor!;
-
-  // The same monthly entitlement the CRM agent enforces. Without this the
-  // document path would be a way around the plan's AI allowance: a paid limit
-  // that one endpoint checks and another does not is not a limit.
-  await assertWithinLimit(actor, "aiRequestsPerMonth");
 
   const scope = {
     workspaceIds: [input.workspaceId],
@@ -142,6 +137,16 @@ async function answerAboutDocument(input: {
     return new Response(providerUnavailableAnswer(fileName), { status: 200, headers: textHeaders });
   }
 
+  /**
+   * The allowance is claimed here, after both refusals and before the stream.
+   *
+   * Both refusals above cost nothing — one resolves no provider at all, the
+   * other resolves one and declines to use it — so neither may spend the
+   * allowance. This is also the last point at which refusing is still clean: a
+   * ReadableStream that has begun cannot turn into a 402.
+   */
+  await reserveAiOrThrow(actor);
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -155,10 +160,6 @@ async function answerAboutDocument(input: {
         })) {
           controller.enqueue(encoder.encode(chunk));
         }
-        // Recorded only when a provider was actually called. A refusal costs
-        // nothing, so it does not spend the allowance; the rate limiter is what
-        // bounds a caller asking unanswerable questions in a loop.
-        await recordUsage(actor.identity.id, "ai_requests");
       } catch (raw) {
         const error = toAppError(raw);
         if (error.category === "internal") {

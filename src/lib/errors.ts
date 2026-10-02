@@ -1,4 +1,6 @@
 import { ZodError } from "zod";
+
+import { AiAllowanceError, PlanLimitError } from "@/lib/plans";
 /**
  * Structured application errors.
  *
@@ -16,6 +18,13 @@ export type ErrorCategory =
   | "conflict"
   | "rate_limited"
   | "plan_limit"
+  /**
+   * The monthly metered-AI allowance is spent. Distinct from `plan_limit`:
+   * nothing is over capacity, the deterministic engine still answers, and the
+   * allowance refills on the 1st. Same 402 as plan_limit — the HTTP semantics
+   * are identical, the copy and the offered remedy are not.
+   */
+  | "ai_allowance"
   | "internal";
 
 const STATUS: Record<ErrorCategory, number> = {
@@ -26,6 +35,7 @@ const STATUS: Record<ErrorCategory, number> = {
   conflict: 409,
   rate_limited: 429,
   plan_limit: 402,
+  ai_allowance: 402,
   internal: 500,
 };
 
@@ -88,6 +98,27 @@ export function toAppError(error: unknown): AppError {
 
   // Framework control flow (redirect, notFound) must propagate untouched.
   if (error && typeof error === "object" && "digest" in error) throw error;
+
+  /**
+   * Plan outcomes are not server faults.
+   *
+   * `failure()` in src/lib/actions/base.ts already recognised these, but route
+   * handlers map errors through *here* — so a route that hit a plan limit fell
+   * through to "internal" and returned a 500 with a generic message, hiding the
+   * one thing the caller could act on. That is the same shape as the production
+   * incident recorded in tests/integration/ai-enhancement-boundary.test.ts, where
+   * an exhausted AI allowance took down /home and every deal page; the server
+   * components were fixed and the routes were not.
+   *
+   * Imported lazily-by-name rather than at the top of the file only to keep the
+   * error module free of a dependency on pricing; the classes are plain Errors.
+   */
+  if (error instanceof AiAllowanceError) {
+    return new AppError("ai_allowance", error.message);
+  }
+  if (error instanceof PlanLimitError) {
+    return new AppError("plan_limit", error.message);
+  }
 
   // A schema rejection is the caller's input being wrong, not the server
   // failing. Without this it fell through to "internal": /api/search?q=%

@@ -25,7 +25,7 @@ const OBJECTS = [
   { icon: Landmark, label: "Opportunities", copy: "RFPs and grants with deadlines, requirements and a go / no-go call." },
   { icon: CheckSquare, label: "Tasks", copy: "The next action on anything, in one list you can actually finish." },
   { icon: CalendarDays, label: "Calendar", copy: "Meetings attached to the work they belong to." },
-  { icon: Workflow, label: "Automations", copy: "When a deal hits Proposal, the follow-up task creates itself." },
+  { icon: Workflow, label: "Insights", copy: "Relationship scores, deal momentum and project health, computed as you work." },
 ];
 
 const QUESTIONS = [
@@ -52,15 +52,19 @@ const FAQ = [
   },
   {
     q: "Do I need an AI API key?",
-    a: "No. Relationship scores, deal momentum, project health, duplicate detection and the hygiene checks are all computed by the app itself and work with no key. Add a Claude or OpenAI key and Tiny AI can also answer open-ended questions in its own words.",
+    a: "No. Relationship scores, deal momentum, project health, duplicate detection and the hygiene checks are all computed by the app itself. Open-ended answers are included in your plan as a monthly allowance of model answers — nothing to configure.",
   },
   {
     q: "What happens when I hit the free limits?",
     a: "Nothing breaks and nothing is deleted. You are told which limit you have reached and can upgrade when it is worth it. Free is a real plan, not a countdown.",
   },
   {
-    q: "Is the lifetime plan really forever?",
-    a: "Yes — one payment of $250 for the full product and all future updates, with no renewal. It works out to roughly 18 months of Pro.",
+    q: "What is the difference between Plus and Pro?",
+    a: "Room, and people. Plus gives you 3 workspaces with 3 people in each, 2,000 contacts, and file attachments on any record. Pro raises every limit — 10 workspaces, 10 people each, 5,000 contacts — and doubles the monthly Tiny AI allowance.",
+  },
+  {
+    q: "What counts against the Tiny AI allowance?",
+    a: "Only answers written by a language model. Relationship scores, deal momentum, project health, duplicate detection, the hygiene checks and the daily brief are computed by the app itself — unlimited on every plan, and they keep working after the allowance runs out. It resets on the 1st.",
   },
 ];
 
@@ -113,7 +117,7 @@ export default async function MarketingPage() {
             </div>
 
             <p className="mt-4 text-[12px] text-faint">
-              Free forever for your first few clients · $14/month · or $250 once, for good
+              Free forever for your first few clients · $10/month · $20 for more room and people
             </p>
           </div>
 
@@ -292,7 +296,7 @@ export default async function MarketingPage() {
               Priced like a tool, not a platform
             </h2>
             <p className="mt-3 text-[14px] leading-relaxed text-muted">
-              Start free. Pay $14 a month when it earns it. Or pay once and never think about it again.
+              Start free. $10 a month when it earns it, $20 when you need more room and more people.
             </p>
           </div>
 
@@ -359,6 +363,11 @@ export default async function MarketingPage() {
           <div className="flex items-center gap-4 text-[12px] text-faint">
             <a href="#pricing" className="transition-colors hover:text-muted">Pricing</a>
             <a href="#faq" className="transition-colors hover:text-muted">FAQ</a>
+            {/* Stripe requires a reachable privacy policy and terms of service
+                before a live Customer Portal can be launched. Worth linking
+                regardless of that. */}
+            <Link href="/privacy" className="transition-colors hover:text-muted">Privacy</Link>
+            <Link href="/terms" className="transition-colors hover:text-muted">Terms</Link>
             <Link href="/login" className="transition-colors hover:text-muted">Sign in</Link>
           </div>
         </div>

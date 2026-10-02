@@ -48,8 +48,12 @@ function uniqueEmail(label: string) {
 
 describe("workspace invitations", () => {
   before(async () => {
-    A = await createTenant("InviteAlpha");
-    B = await createTenant("InviteBeta");
+    // Seats are enforced per workspace from the owner's plan, and Free allows
+    // exactly one person. These suites are about the invitation lifecycle, not
+    // about the seat ceiling, so they run on a plan with room; the ceiling has
+    // its own tests in tests/integration/seats.test.ts.
+    A = await createTenant("InviteAlpha", { plan: "pro" });
+    B = await createTenant("InviteBeta", { plan: "pro" });
   });
 
   after(async () => {
@@ -64,6 +68,25 @@ describe("workspace invitations", () => {
     // than by loosening the policy.
     for (const id of [A.ownerId, B.ownerId, A.memberId, A.workspaceId, B.workspaceId]) {
       await resetRateLimit("mutation", { user: id, workspace: id, global: id });
+    }
+
+    // Seats are a real per-workspace ceiling now, and outstanding invitations
+    // count towards it when issuing. Twenty-odd tests inviting into one workspace
+    // would otherwise exhaust it partway through the file and fail every test
+    // after that — for a reason none of them is about.
+    //
+    // This resets the seat position rather than raising the ceiling: each test
+    // starts from the three members the fixture creates and no pending
+    // invitations, which is the state each test actually assumes. The ceiling
+    // itself is proven in tests/integration/seats.test.ts.
+    for (const workspace of [A, B]) {
+      await db.workspaceInvitation.deleteMany({ where: { workspaceId: workspace.workspaceId } });
+      await db.workspaceMember.deleteMany({
+        where: {
+          workspaceId: workspace.workspaceId,
+          userId: { notIn: [workspace.ownerId, workspace.memberId, workspace.viewerId] },
+        },
+      });
     }
   });
 
