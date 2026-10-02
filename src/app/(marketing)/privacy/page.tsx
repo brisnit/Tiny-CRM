@@ -126,7 +126,21 @@ export default function PrivacyPage() {
               <tr className="border-b border-hairline/60">
                 <td className="py-2 pr-4 text-body">Neon</td>
                 <td className="py-2 pr-4">PostgreSQL database</td>
-                <td className="py-2"><NeedsDetail>Neon region</NeedsDetail></td>
+                {/*
+                  Read from the endpoint the plan/usage audit connected to:
+                  ep-aged-smoke-arfenoc5.c-4.us-west-2.aws.neon.tech — so the
+                  region is evidence, not assumption, and matches Vercel's pdx1.
+
+                  Two limits on that evidence, which is why the page is still a
+                  draft. The host establishes the region of *that endpoint*, not
+                  that it belongs to the production branch — every Neon branch has
+                  its own endpoint, so this needs confirming in the Neon console.
+                  And the host carries no `-pooler` segment, meaning the audit used
+                  the direct endpoint while the application most likely uses the
+                  pooled one; both reach the same branch, but the two strings will
+                  not be identical when compared.
+                */}
+                <td className="py-2">US West (Oregon)</td>
               </tr>
               <tr className="border-b border-hairline/60">
                 <td className="py-2 pr-4 text-body">Cloudflare R2</td>
