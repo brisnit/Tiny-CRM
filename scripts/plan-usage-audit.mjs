@@ -328,34 +328,101 @@ async function main() {
     if (aiRows.rows.length === 0) {
       console.log("  no AI usage recorded in any period");
     } else {
-      const PLAN_AI_LIMIT = {
-        free: 10, plus: 30, pro: 60,
-        legacy_pro: 1000, legacy_lifetime: 2000,
-        lifetime: 2000,
+      /**
+       * AI limits by era, because a stored count must be judged against the
+       * limits that were in force when it was written.
+       *
+       * The first version compared every row against *today's* limits and
+       * therefore accused September of anomalies: a Free account with exactly 25
+       * requests had simply used its whole allowance, because Free was 25 then
+       * and is 10 now. Judging history by a later rule is how a correct number
+       * gets reported as evidence of a problem.
+       *
+       * Metering differed too. Until the pricing release, the check and the
+       * increment were separate calls — `assertWithinLimit` then `recordUsage` —
+       * so two concurrent requests could both pass the read and both record.
+       * Counts slightly above a limit are therefore *expected* from that era and
+       * bounded by the per-user AI rate limit, which is 20 a minute. The current
+       * path claims atomically and cannot overshoot at all.
+       */
+      const ERAS = {
+        legacy: {
+          label: "pre-pricing",
+          limits: { free: 25, pro: 1000, lifetime: 2000 },
+          // The old read-then-write pair could overshoot under concurrency.
+          tolerance: 20,
+        },
+        current: {
+          label: "Free/Plus/Pro",
+          limits: { free: 10, plus: 30, pro: 60, legacy_pro: 1000, legacy_lifetime: 2000 },
+          // reserveAiRequest is one atomic statement; overshoot is impossible.
+          tolerance: 0,
+        },
       };
-      console.log(`  ${"account".padEnd(34)} ${"plan".padEnd(16)} ${"period".padEnd(9)} count  limit  verdict`);
+
+      /**
+       * The first period in which the new pricing was serving, as "YYYY-MM".
+       *
+       * `null` means it has not deployed yet, so every period is judged by the
+       * legacy limits — which is correct today. **Set this when the pricing
+       * release goes out**, or this audit will keep grading new data by old rules.
+       */
+      const NEW_PRICING_EFFECTIVE_PERIOD = null;
+
+      const eraFor = (period) =>
+        NEW_PRICING_EFFECTIVE_PERIOD && period >= NEW_PRICING_EFFECTIVE_PERIOD
+          ? ERAS.current
+          : ERAS.legacy;
+
+      console.log(
+        NEW_PRICING_EFFECTIVE_PERIOD
+          ? `  periods from ${NEW_PRICING_EFFECTIVE_PERIOD} judged by the ${ERAS.current.label} limits; ` +
+              `earlier periods by ${ERAS.legacy.label} (Free 25, Pro 1000, Lifetime 2000)\n`
+          : "  the new pricing has not deployed, so every period is judged by the pre-pricing\n" +
+              "  limits in force when it was written: Free 25, Pro 1000, Lifetime 2000\n",
+      );
+      console.log(`  ${"account".padEnd(32)} ${"plan".padEnd(16)} ${"period".padEnd(9)} count  limit  verdict`);
+
+      const verdictFor = (row) => {
+        const era = eraFor(row.period);
+        const limit = era.limits[row.plan];
+        if (typeof limit !== "number") return { limit: null, text: "plan not priced in this era", flag: false };
+        if (row.count <= limit) {
+          return {
+            limit,
+            text: row.count === limit ? "allowance fully used — valid" : "within the allowance",
+            flag: false,
+          };
+        }
+        if (row.count <= limit + era.tolerance) {
+          return { limit, text: `over by ${row.count - limit}, within the old race tolerance`, flag: false };
+        }
+        return {
+          limit,
+          text: "IMPOSSIBLE under the metering of its era — investigate",
+          flag: true,
+        };
+      };
+
       for (const r of aiRows.rows) {
-        const limit = PLAN_AI_LIMIT[r.plan];
-        const impossible = typeof limit === "number" && r.count > limit;
-        const verdict = impossible
-          ? "EXCEEDS the enforceable limit — not from the metering path"
-          : "consistent with metering";
+        const v = verdictFor(r);
         console.log(
-          `  ${String(r.email).slice(0, 33).padEnd(34)} ${String(r.plan).padEnd(16)} ` +
-            `${String(r.period).padEnd(9)} ${String(r.count).padStart(5)}  ${String(limit ?? "?").padStart(5)}  ${verdict}`,
+          `  ${String(r.email).slice(0, 31).padEnd(32)} ${String(r.plan).padEnd(16)} ` +
+            `${String(r.period).padEnd(9)} ${String(r.count).padStart(5)}  ${String(v.limit ?? "?").padStart(5)}  ${v.text}`,
         );
       }
 
-      const suspicious = aiRows.rows.filter((r) => {
-        const limit = PLAN_AI_LIMIT[r.plan];
-        return typeof limit === "number" && r.count > limit;
-      });
+      const suspicious = aiRows.rows.filter((r) => verdictFor(r).flag);
       if (suspicious.length > 0) {
         console.log();
         console.log("  " + "!".repeat(70));
-        console.log(`  ${suspicious.length} row(s) hold a count the application could not have produced.`);
-        console.log("  Treat these as test or manual data until proven otherwise. Corroborate");
-        console.log("  against the provider's own usage dashboard before calling any of it spend.");
+        console.log(`  ${suspicious.length} row(s) hold a count no metering path of their era could produce.`);
+        for (const r of suspicious) {
+          console.log(`    ${r.email}  ${r.period}  count=${r.count}`);
+        }
+        console.log("  These are not evidence of spend. Investigate them with");
+        console.log("  scripts/investigate-usage-anomaly.mjs, and corroborate any figure you");
+        console.log("  intend to treat as a bill against the provider's own usage dashboard.");
         console.log("  " + "!".repeat(70));
       }
     }
