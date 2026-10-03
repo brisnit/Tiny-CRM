@@ -127,16 +127,21 @@ export default function PrivacyPage() {
                 <td className="py-2 pr-4 text-body">Neon</td>
                 <td className="py-2 pr-4">PostgreSQL database</td>
                 {/*
-                  Confirmed twice over. The plan/usage audit connected to
-                  ep-aged-smoke-arfenoc5.c-4.us-west-2.aws.neon.tech, which gives the
-                  region of that endpoint; and the Neon console reports the project's
-                  default branch as `production` in AWS US West 2 (Oregon). The two
-                  agree, and both match Vercel's pdx1.
+                  The region is confirmed from the Neon console: the Tiny CRM project is in
+                  AWS US West 2 (Oregon), and a Neon project has one region, so every branch
+                  in it is in that region. It matches Vercel's pdx1.
                 
-                  The host carries no `-pooler` segment, so the audit used the direct
-                  endpoint while the application most likely uses the pooled one. Both
-                  reach the same branch; the two strings are simply not identical when
-                  compared.
+                  What is NOT yet confirmed is which branch the deployed application talks to.
+                  The console reports the *default* branch as `production`; the plan/usage
+                  audit connected to ep-aged-smoke-arfenoc5.c-4.us-west-2.aws.neon.tech, and
+                  an endpoint id does not name its branch. The audit host also carries no
+                  `-pooler` segment while the application most likely uses the pooled
+                  endpoint, so the two strings will differ even when they agree.
+                
+                  Closing it means comparing the host in Vercel's production DATABASE_URL
+                  against the production branch's endpoint host in Neon. Until that is done,
+                  the region here is sound but nothing should be inferred about which branch
+                  any earlier audit actually read.
                 */}
                 <td className="py-2">US West (Oregon) — AWS us-west-2</td>
               </tr>

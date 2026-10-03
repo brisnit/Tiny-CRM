@@ -83,6 +83,7 @@ Verified behaviour:
 | Workspace deletion | Scheduled, **7-day** cancellable grace period, then cascades | `WORKSPACE_DELETION_GRACE_DAYS` |
 | Account closure | **Does not exist in the product** | no `user.delete`, no route |
 | Point-in-time recovery | **6 hours** — Neon free-plan history retention | Neon console; `docs/NEON-RECOVERY-DRILL.md` |
+| Independent off-provider copy | **None.** Branching is copy-on-write inside one project | `docs/NEON-RECOVERY-DRILL.md`; proposal in `docs/BACKUP-PROPOSAL.md` |
 
 Audit retention (indefinite) and security-alert retention (365 days after
 acknowledgement) are stated as two separate rules on the page, because they are

@@ -128,7 +128,15 @@ Each is a prerequisite, not a caveat:
    hours is unrecoverable at the database level, and there is no independent copy
    at all. What the provider keeps beyond that window is still unestablished, so a
    deletion clause must not be worded as if the window were an erasure period.
-5. **Confirm Resend's processing region** (Annex B).
+5. ~~**Confirm Resend's processing region**~~ — resolved from Resend's own
+   documentation: account data, email metadata, logs and API records are stored
+   in the **United States** whatever sending region is selected.
+6. **Compare the deployed database endpoint with the production branch.** The
+   region is settled, but an endpoint id does not name its branch, and the
+   plan/usage audit used a direct (non-pooled) host while the application most
+   likely uses the pooled one. Until the host in Vercel's production
+   `DATABASE_URL` is compared with the production branch's endpoint host in Neon,
+   nothing should be inferred about which branch any earlier audit read.
 
 ---
 
@@ -149,7 +157,7 @@ CRM. **[COUNSEL]** — whether that needs addressing explicitly.
 | Subprocessor | Purpose | Location | Basis |
 |---|---|---|---|
 | Vercel | Application hosting | US West (Oregon) | Verified: `vercel.json` pins `regions: ["pdx1"]` |
-| Neon | PostgreSQL database | AWS `us-west-2`, US West (Oregon) | Verified twice: the audited endpoint host, and the Neon console reporting the default branch `production` in AWS US West 2 |
+| Neon | PostgreSQL database | AWS `us-west-2`, US West (Oregon) | Region confirmed from the Neon console (a project has one region, so every branch is in it). **Which branch the deployed app uses is not yet confirmed** — see gap 6 |
 | Cloudflare R2 | Uploaded file storage, bucket `tiny-crm-documents` | Western North America (WNAM) | Cloudflare's own label. R2 hints name a broad area, not a country |
 | Resend | Transactional email only | **Not confirmed** | Verified from message headers: DKIM `s=resend` on `d=tinycrm.biz`, Message-ID domain `rsend.tinycrm.biz` |
 | Amazon SES | Email delivery beneath Resend | **Not confirmed** | Resend's own subprocessor, not contracted with directly. Observed sending host `smtp-out.amazonses.com` |
