@@ -131,7 +131,8 @@ repo secrets, every run is logged and attributable, and failures are visible
 without building anything. It needs two **new, narrower** credentials rather than
 reuse of the app's:
 
-- a **read-only** Postgres role on the production branch, for `pg_dump`;
+- a read-only Postgres role **with `BYPASSRLS`** on the production branch, for
+  `pg_dump` — the attribute is not optional, see *Verified* below;
 - an R2 token scoped **read-only to the one bucket**.
 
 The app's own credentials are read-write. A backup job never needs to write to
@@ -194,15 +195,21 @@ The drill, reusing what already exists rather than writing it again.
 
 1. Fetch the newest archive. **Decrypt it** — from the password manager, by hand,
    the way it would happen in an incident.
-2. Restore into a scratch database. Apply the **14 PostgreSQL-only policy files**
-   in `prisma/postgres/`; `pg_dump` carries tables and data, and RLS policies are
-   applied separately here — a restore that skips them comes back with tenant
-   isolation missing and looks fine.
+2. **Create the `tinycrm_app` role, then restore.** That order is the whole of it.
+   `pg_dump` carries the policies, the RLS flags, the functions, the indexes and
+   the grants; it does **not** carry the role, because roles are cluster-global.
+   Restoring with the role absent exits 1, keeps going, and silently drops every
+   privilege — see *Verified* below. The 14 files in `prisma/postgres/` do **not**
+   need reapplying.
 3. Compare row counts and the fingerprint against `manifest.json`. Run the
    referential-integrity check.
-4. Pull a sample of file objects, decrypt, and verify each against its manifest
+4. **Assert the security posture, not just the data.** Policy count, the count of
+   tables with RLS forced, and `relacl` on `AuditLog`. Then behaviourally, as
+   `tinycrm_app`: no workspace context returns zero rows; a context returns only
+   that workspace's rows; `UPDATE` and `DELETE` on `AuditLog` are refused.
+5. Pull a sample of file objects, decrypt, and verify each against its manifest
    digest.
-5. Record the result, with timings.
+6. Record the result, with timings.
 
 Cadence: **once before launch**, then **monthly**. A drill nobody runs is
 paperwork; schedule it in the same workflow and let a failure be loud.
@@ -210,6 +217,114 @@ paperwork; schedule it in the same workflow and let a failure be loud.
 Known limitation, stated rather than discovered later: this exercises the
 *archive*. It does not exercise Neon's point-in-time recovery, which the existing
 drill covers separately.
+
+---
+
+## Verified
+
+The two paragraphs above were originally written from assumption, and one of them
+was wrong. Both were then tested on a real PostgreSQL 17.10 cluster with the full
+schema — 11 migrations, all 14 SQL files, 56 policies, 44 tables with RLS enabled
+and forced, 12 `app_*` functions, 219 indexes — and a two-workspace fixture.
+`pg_dump`/`pg_restore` 18.6.
+
+### 1. A dump taken correctly carries the whole security posture
+
+Counted in the emitted SQL, against the live catalogue:
+
+| Object | In the database | In the dump |
+|---|---|---|
+| `CREATE POLICY` | 56 | **56** |
+| `ENABLE ROW LEVEL SECURITY` | 44 | **44** |
+| `FORCE ROW LEVEL SECURITY` | 44 | **44** |
+| `app_*` functions | 12 | **12** |
+| Indexes | 219 | **219** after restore |
+| Tables with an ACL for `tinycrm_app` | 53 | **53** |
+| `CREATE ROLE` | 1 role | **0** |
+
+So the earlier instruction to reapply all 14 files by hand was wrong. The policy
+files are *how the database got that way*; they are not needed to put it back.
+
+### 2. What is missing is the role, and its absence is quiet
+
+Restoring the same dump into a cluster where `tinycrm_app` did not exist:
+`pg_restore` **exit 1, 56 errors, all `role "tinycrm_app" does not exist`** — and
+it continued. The result had the full schema, all 56 policies, RLS forced on all
+44 tables, all 219 indexes and all 3 fixture rows, with **`relacl` NULL on every
+table**: zero privileges for the application role, and the `AuditLog` append-only
+revoke gone with the rest.
+
+That is the failure mode to design against. It is not a restore that fails; it is
+a restore that looks complete, passes a row-count check, and cannot be used —
+with the append-only guarantee missing.
+
+### 3. The least-privilege instinct breaks the dump
+
+This is the correction that matters, because the wrong choice is the one that
+looks responsible. `tinycrm_app` is `NOBYPASSRLS` by design, and every tenant
+table is `FORCE ROW LEVEL SECURITY`.
+
+| Dumping role | Result |
+|---|---|
+| Owner / superuser | exit 0, 254,973 bytes |
+| Read-only, **`BYPASSRLS`** | **exit 0, 262,059 bytes — restores to an identical posture** |
+| Read-only, `NOBYPASSRLS` | **exit 1** — `query would be affected by row-level security policy for table "Activity"` |
+| `tinycrm_app` | **exit 1** — same error |
+| `tinycrm_app` + `--enable-row-security` | **exit 1** — `function app_workspace_ids() does not exist`, because `pg_dump` runs with a restricted `search_path` the policy's function cannot resolve under |
+
+Two consequences:
+
+- A backup role needs `BYPASSRLS`, or table ownership. A plain read-only role
+  cannot back this database up at all. Granting `SELECT` is not enough when RLS is
+  forced.
+- **`--enable-row-security` must never be used here.** Its documented behaviour is
+  to dump only the rows the role can see. Under deny-by-default that is *zero
+  rows*, and the only reason this attempt failed loudly rather than silently was
+  an unrelated `search_path` problem. A silently empty backup is the worst
+  outcome in this document.
+
+### 4. Every failing run left a partial file behind
+
+| Run | Exit | File left on disk |
+|---|---|---|
+| `tinycrm_app` | 1 | 252,156 bytes |
+| Read-only `NOBYPASSRLS` | 1 | 259,242 bytes |
+
+A truncated dump within 3% of a good one's size. Any size or existence check
+passes it. **The job must gate on the exit code and delete the artefact on
+failure**, and the manifest's digest is what makes a truncated upload detectable
+afterwards.
+
+### 5. The restored database preserves tenant isolation and role permissions
+
+Restored from the read-only `BYPASSRLS` dump, then exercised as `tinycrm_app`:
+
+| Check | Result |
+|---|---|
+| No workspace context | **0 of 3** contacts visible |
+| Context `w_a` | exactly `c_a1, c_a2` |
+| Context `w_b` | exactly `c_b1` |
+| Context `w_a, w_b` | all three |
+| `AuditLog` `relacl` | `tinycrm_app=ar/tinycrm` — INSERT + SELECT, identical to the original |
+| `UPDATE "AuditLog"` | `ERROR: permission denied for table AuditLog` |
+| `DELETE "AuditLog"` | `ERROR: permission denied for table AuditLog` |
+| `app_claim_jobs`, `app_workspace_ids` | executable |
+
+Deny-by-default survives the round trip, scoping is exact, and the append-only
+audit log is still append-only.
+
+### Still to confirm on the provider
+
+Locally the dump role was created with `CREATE ROLE … BYPASSRLS` by a superuser.
+**Neon does not give you superuser**, so whether a `BYPASSRLS` role can be created
+there — or whether `neon_superuser` already carries it — has to be checked on the
+provider before this is built. If neither is possible, the dump has to run as the
+owner of the tables, and that is a different credential with more power than a
+backup job should ideally hold. It is the open question in this proposal.
+
+Tooling note: `pg_dump` is not on this machine by default — the embedded
+PostgreSQL package ships only `initdb`, `pg_ctl` and `postgres`. These runs used
+Homebrew `libpq` 18.6.
 
 ### 8. Cost
 
@@ -281,3 +396,9 @@ aws s3 ls --recursive --summarize \
 - **A digest column on `FileAsset`.** The manifest removes the need for backup
   purposes. A stored column would additionally let the *application* detect
   drift — a different feature, needing a migration.
+- **Whether the restore drill belongs in CI.** The security assertions in step 4
+  are the ones that decay silently, and they are cheap: CI already provisions a
+  PostgreSQL cluster with all 14 SQL files applied, so a dump → restore →
+  assert-posture cycle would fit the existing *Backup and restore* job. That would
+  catch a future migration that adds a table without RLS, which no current test
+  does from the restore side.
