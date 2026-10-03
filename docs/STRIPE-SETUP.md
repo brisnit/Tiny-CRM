@@ -231,6 +231,25 @@ paying account silently losing access.
 this change, and aliasing it would hand unlimited records to every future Pro
 subscriber. That is why `pro` needs the migration rather than an alias.
 
+## 5b. Set the release month before shipping
+
+`PRICING_CUTOVER_PERIOD` in `src/lib/plans.ts` must name the `yyyy-MM` period the
+release actually ships in, because Free's AI allowance drops from 25 to 10 and a
+usage counter is keyed by calendar month. Without it, an account that used 18
+answers under the old published ceiling is refused for the rest of the month the
+moment this deploys. See "The release-month grandfather" in docs/AI-COST-MODEL.md
+for the design and its cost.
+
+**If the release slips into the next month, update the constant.** A stale value
+is not silent: `instrumentation.ts` warns at boot when the period is in the past
+("the grandfather has expired on its own") or in the future ("Free accounts are
+on the new allowance now"), and the boot line carries `aiCutover: <period>`. Read
+that line on the first production boot after the release and confirm it matches
+the current month.
+
+Nothing needs switching off afterwards — it lapses with the month. The stale-value
+warning is the signal to delete the constant and its branch.
+
 ## 6. Verify in test mode
 
 With the test key live on the deployment:

@@ -127,6 +127,61 @@ needs a small schema change, which is why it is recorded here rather than
 implemented alongside the pricing work. Until it exists, the aggregate is bounded
 only by the number of accounts.
 
+## The release-month grandfather
+
+Free goes from **25** answers a month to **10**. Every other Free ceiling goes
+*up* in the same release — contacts 50 → 100, companies 25 → 50, deals 15 → 25,
+opportunities 5 → 10, projects 3 → 5, tasks 100 → 200 — so the AI allowance is
+the only thing an existing Free account loses.
+
+A usage counter is keyed by calendar month (`currentPeriod()` → `yyyy-MM`).
+Shipping on the 15th would therefore measure requests already made under the old
+published ceiling against the new one: an account at 18 would be refused for the
+rest of the month, having done nothing but use the product as advertised.
+
+`PRICING_CUTOVER_PERIOD` in `src/lib/plans.ts` names the period in which the new
+allowances first apply, and `aiAllowanceFor(plan, period)` returns Free's old
+allowance for that one period only. Three properties make it safe rather than
+merely generous:
+
+- **Self-expiring.** It is keyed to a period, not an instant, so it lapses when
+  the month does. There is no flag to remember, no second deploy to undo it, and
+  no window in which an entitlement is removed and then restored.
+- **One source of truth.** Enforcement (`reserveAiOrThrow`), the capability check
+  (`canUseAi`) and both places that display a gauge all read `aiAllowanceFor`. A
+  test fails if any file reads `plan.limits.aiRequestsPerMonth` directly, because
+  a displayed ceiling that disagrees with the enforced one is a defect this
+  codebase has already shipped once.
+- **Free only.** Plus (30) and Pro (60) are above the old Free figure and the
+  legacy plans keep their own larger ceilings, so no other plan can be worse off.
+  Mutation testing caught that the existing plan set cannot *observe* this guard —
+  `max(30, 25)` is 30 either way — so it is asserted against a hypothetical paid
+  plan priced below 25 instead.
+
+### What it costs
+
+Per Free account that spends the full old allowance, the extra 15 answers cost
+at most **$2.30** at the worst-case per-request ceiling and about **$0.39** at
+the typical figure, both from `worstRequestCeilingUsd` / `typicalRequestUsd` on
+`claude-opus-5`. The total is 15 × that × *the number of Free accounts that would
+otherwise have been refused* — a number only the production usage audit can give,
+since it is not every Free account but the few that pass 10 in a month.
+
+One deliberate over-inclusion: a Free account **created during** the cutover
+month also gets 25, because the enforcement path reads the period rather than the
+account's age. Narrowing it to accounts that predate the release would mean
+reading `User.createdAt` on a hot path for a bound already in the low tens of
+dollars. The looser rule is the cheaper correct-enough one, and it is stated here
+rather than discovered.
+
+### Turning it off
+
+Nothing to do: it expires with the month. The boot line carries
+`aiCutover: <period>` so the state is visible, and `instrumentation.ts` warns
+once the constant is in the past — that warning is the signal to delete the
+constant, `PRE_STRIPE_FREE_AI_ALLOWANCE`, `aiAllowanceFor`'s cutover branch and
+this section.
+
 ## Legacy allowances
 
 `legacy_pro` and `legacy_lifetime` preserve 1,000 and 2,000 monthly requests

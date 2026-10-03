@@ -5,7 +5,7 @@ import { currentPeriod } from "@/lib/dates";
 import { AppError } from "@/lib/errors";
 import {
   AiAllowanceError, LIMIT_NOUN, PLANS, PlanLimitError, UNLIMITED,
-  limitFor, planFor, type LimitKey, type PlanId,
+  aiAllowanceFor, limitFor, planFor, type LimitKey, type PlanId,
 } from "@/lib/plans";
 import type { Actor, WorkspaceActor } from "@/lib/auth/access";
 import { withTenantContext } from "@/lib/tenant-db";
@@ -37,7 +37,12 @@ export async function getEntitlements(actor: Actor): Promise<Entitlements> {
   const usage = await getPlanUsage(actor);
 
   const within = (key: LimitKey) => {
-    const limit = plan.limits[key];
+    // The AI allowance is the one limit that can differ from the plan's standing
+    // figure, during the pricing cutover period. Reading `plan.limits` directly
+    // here would grey out Tiny AI for an account the reservation path would in
+    // fact have served.
+    const limit =
+      key === "aiRequestsPerMonth" ? aiAllowanceFor(plan, currentPeriod()) : plan.limits[key];
     return limit === UNLIMITED || usage[key] < limit;
   };
 
@@ -226,7 +231,11 @@ export async function releaseAiRequest(userId: string, metric = "ai_requests"): 
  */
 export async function reserveAiOrThrow(actor: Actor | WorkspaceActor): Promise<void> {
   const plan = planFor(actor.identity.plan);
-  const limit = plan.limits.aiRequestsPerMonth;
+  // The effective allowance, not the plan's standing one: during the pricing
+  // cutover period a Free account is measured against the allowance it accrued
+  // the month under. The error carries the same number, so the message a user
+  // sees is the number that refused them.
+  const limit = aiAllowanceFor(plan, currentPeriod());
   const ok = await reserveAiRequest(actor.identity.id, limit);
   if (!ok) throw new AiAllowanceError(limit, plan.id);
 }

@@ -165,7 +165,14 @@ export default function PrivacyPage() {
               <tr className="border-b border-hairline/60">
                 <td className="py-2 pr-4 text-body">Stripe</td>
                 <td className="py-2 pr-4">Payment processing, if you subscribe</td>
-                <td className="py-2"><NeedsDetail>per Stripe&apos;s terms</NeedsDetail></td>
+                {/*
+                  From Stripe's own published privacy policy and DPA: the contracting
+                  entity is Stripe, LLC, personal data is transferred to data centres in
+                  the United States, and EEA/UK/Swiss transfers are received under the
+                  Data Privacy Framework. Stripe operates localised storage for certain
+                  regulatory regimes (India is the documented case), hence "primarily".
+                */}
+                <td className="py-2">United States (Stripe, LLC), primarily</td>
               </tr>
               <tr>
                 {/*
@@ -183,7 +190,15 @@ export default function PrivacyPage() {
                 */}
                 <td className="py-2 pr-4 text-body">Resend</td>
                 <td className="py-2 pr-4">Transactional email only — verification, password reset, invitations</td>
-                <td className="py-2"><NeedsDetail>provider region</NeedsDetail></td>
+                {/*
+                  Resolved from Resend's own documentation rather than left unconfirmed.
+                  Their regions page states that "all account data, including email
+                  metadata, logs, and API records, is stored in the United States", and
+                  that region selection "controls where your emails are routed and sent
+                  from. It does not control where customer data is stored." Which of the
+                  four sending regions this domain uses therefore changes routing only.
+                */}
+                <td className="py-2">United States (storage)</td>
               </tr>
             </tbody>
           </table>
@@ -192,6 +207,12 @@ export default function PrivacyPage() {
           Resend delivers through <strong>Amazon SES</strong>, which is Resend&apos;s own
           subprocessor rather than a service we contract with directly. Transactional email
           carries your name, your email address and a link — never CRM record contents.
+        </p>
+        <p>
+          Resend stores account data, email metadata and delivery logs in the United
+          States whatever sending region is selected; the sending region affects only
+          where a message is dispatched from. Resend publishes its own subprocessor list
+          and gives at least 14 days&apos; notice before changing it.
         </p>
         <p>
           Whether international transfer terms are required for your jurisdiction is{" "}

@@ -5,9 +5,17 @@ import { Progress } from "@/components/ui/controls";
 import { Badge } from "@/components/ui/badge";
 import { PlanPicker } from "@/components/app/plan-picker";
 import { requireActor } from "@/lib/auth/access";
+import { currentPeriod } from "@/lib/dates";
 import { getPlanUsage } from "@/lib/entitlements";
 import {
-  ENFORCED_LIMITS, LIMIT_NOUN, LIMIT_SCOPE, UNLIMITED, advertisedFeatures, planFor, type LimitKey,
+  ENFORCED_LIMITS,
+  LIMIT_NOUN,
+  LIMIT_SCOPE,
+  UNLIMITED,
+  advertisedFeatures,
+  aiAllowanceFor,
+  planFor,
+  type LimitKey,
 } from "@/lib/plans";
 import { advertisedFlags } from "@/lib/documents/gate";
 import { db } from "@/lib/db";
@@ -42,7 +50,9 @@ export default async function BillingSettings({
   // Resolved globally, like the public pricing page: a capability still behind
   // its rollout flag is not listed as something this plan includes.
   const enabledFlags = await advertisedFlags();
-  const aiLimit = plan.limits.aiRequestsPerMonth;
+  // Effective, not standing — see aiAllowanceFor. The gauge and the enforcement
+  // path must never print different ceilings.
+  const aiLimit = aiAllowanceFor(plan, currentPeriod());
   const aiUsed = usage.aiRequestsPerMonth;
   const aiPct = aiLimit === UNLIMITED ? 0 : Math.min(100, Math.round((aiUsed / aiLimit) * 100));
 

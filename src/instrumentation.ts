@@ -34,6 +34,35 @@ export async function register() {
     log.warn("configuration warning", { warning });
   }
 
+  // The pricing cutover grandfather is deliberately temporary: it raises Free's
+  // AI allowance back to its pre-release figure for one usage period, so a
+  // mid-month release cannot refuse an account for requests it made under the
+  // old published ceiling. Being temporary, it must not rot unnoticed — a
+  // constant that no longer matches the calendar is reported here rather than
+  // discovered later from a support question.
+  {
+    const { PRICING_CUTOVER_PERIOD, PRE_STRIPE_FREE_AI_ALLOWANCE, PLANS } =
+      await import("@/lib/plans");
+    const { currentPeriod } = await import("@/lib/dates");
+    const now = currentPeriod();
+    if (PRICING_CUTOVER_PERIOD !== null && PRICING_CUTOVER_PERIOD < now) {
+      log.warn("configuration warning", {
+        warning:
+          `PRICING_CUTOVER_PERIOD is ${PRICING_CUTOVER_PERIOD}, before the current period ` +
+          `${now}. The Free AI grandfather has expired on its own and affects nothing; ` +
+          `the constant can be deleted.`,
+      });
+    } else if (PRICING_CUTOVER_PERIOD !== null && PRICING_CUTOVER_PERIOD > now) {
+      log.warn("configuration warning", {
+        warning:
+          `PRICING_CUTOVER_PERIOD is ${PRICING_CUTOVER_PERIOD}, a future period. Free ` +
+          `accounts are on the new allowance of ${PLANS.free.limits.aiRequestsPerMonth} ` +
+          `now, not ${PRE_STRIPE_FREE_AI_ALLOWANCE}. If the release ships this month, ` +
+          `set it to ${now}.`,
+      });
+    }
+  }
+
   log.info("tiny crm starting", {
     env: env.nodeEnv,
     release: env.release,
@@ -62,6 +91,11 @@ export async function register() {
      * separate variable that could disagree with it.
      */
     stripe: stripeMode() ?? "unconfigured",
+    /**
+     * Which usage period, if any, still enforces the pre-release Free AI
+     * allowance. "off" once the grandfather is gone, which is the steady state.
+     */
+    aiCutover: (await import("@/lib/plans")).PRICING_CUTOVER_PERIOD ?? "off",
   });
 
   const { reportObservabilityStatus } = await import("@/lib/observability");

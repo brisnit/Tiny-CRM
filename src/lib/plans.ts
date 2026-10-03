@@ -377,6 +377,68 @@ export function planFor(id: string | null | undefined): Plan {
   return PLANS[resolved as PlanId] ?? PLANS.free;
 }
 
+/**
+ * The Free AI allowance as it stood before this release.
+ *
+ * Deployed `main` gives Free 25 model answers a month; this release gives it 10,
+ * derived in docs/AI-COST-MODEL.md from the bounds that are actually enforced and
+ * the model's price. Every *other* Free limit went up — contacts 50 → 100,
+ * companies 25 → 50, deals 15 → 25, opportunities 5 → 10, projects 3 → 5,
+ * tasks 100 → 200 — so the AI allowance is the only ceiling an existing Free
+ * account loses, and the only one that needs protecting through the cutover.
+ */
+export const PRE_STRIPE_FREE_AI_ALLOWANCE = 25;
+
+/**
+ * The usage period in which the new allowances first apply, as the `yyyy-MM` key
+ * that `UsageCounter` is partitioned by. Set to the month the release ships.
+ *
+ * ## Why one month, and why a period rather than a date
+ *
+ * A usage counter is keyed by calendar month, so a Free account's October count
+ * was accrued under October's published rules. Shipping on the 15th would measure
+ * those 18 accrued requests against a new ceiling of 10 and refuse the account
+ * for the rest of the month — a user who did nothing wrong, blocked by a release
+ * note they never saw. From the 1st of the following month the counter starts at
+ * zero against the new allowance, which nobody can be retroactively over.
+ *
+ * So the exposure is exactly one period wide, and keying the grandfather to the
+ * period rather than to an instant makes it **self-expiring**: no flag to
+ * remember, no second deploy to undo it, and no window in which an entitlement is
+ * removed and then restored.
+ *
+ * Set to `null` to disable it. A stale or future value is reported by
+ * `productionWarnings()` rather than left to rot silently.
+ */
+export const PRICING_CUTOVER_PERIOD: string | null = "2026-10";
+
+/**
+ * The AI allowance actually enforced for this plan in this usage period.
+ *
+ * Every reader — enforcement, the capability check, and both places that display
+ * a number to the user — must go through this rather than reading
+ * `plan.limits.aiRequestsPerMonth` directly, because a displayed ceiling that
+ * disagrees with the enforced one is the defect this codebase already shipped
+ * once on the marketing page.
+ *
+ * Deliberately scoped to Free. Plus (30) and Pro (60) are both above the old Free
+ * allowance, and the legacy plans keep their own larger ceilings through
+ * `PRE_STRIPE_PLAN_ALIASES`, so no other plan can be worse off.
+ */
+export function aiAllowanceFor(plan: Plan, period: string): number {
+  const standing = plan.limits.aiRequestsPerMonth;
+  if (plan.id !== "free") return standing;
+  if (PRICING_CUTOVER_PERIOD === null || period !== PRICING_CUTOVER_PERIOD) return standing;
+  // `max` rather than a bare substitution: if the standing allowance is ever
+  // raised above the old one, this must not quietly lower it.
+  return Math.max(standing, PRE_STRIPE_FREE_AI_ALLOWANCE);
+}
+
+/** True while the grandfather above is affecting what is enforced. */
+export function isCutoverPeriod(period: string): boolean {
+  return PRICING_CUTOVER_PERIOD !== null && period === PRICING_CUTOVER_PERIOD;
+}
+
 export function isPaid(id: string | null | undefined) {
   return planFor(id).id !== "free";
 }

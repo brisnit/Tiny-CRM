@@ -180,3 +180,69 @@ describe("a spent allowance is a product outcome, not a server fault", () => {
     );
   });
 });
+
+describe("the pricing cutover grandfather, through the real reservation path", () => {
+  // Its own tenant: the suite above disconnects in its `after`, and reusing its
+  // fixture here failed on a foreign key against a user that had been cleaned up.
+  let C: Tenant;
+
+  before(async () => {
+    C = await createTenant("Cutover", { plan: "free" });
+  });
+
+  after(async () => {
+    await cleanupTenants([C]);
+    await db.$disconnect();
+  });
+
+  /**
+   * The arithmetic is pinned in tests/unit/ai-cutover-allowance.test.ts. What this
+   * adds is the end-to-end claim: a Free account inside the cutover period really
+   * does get served its 11th request, against the live `UsageCounter` row and the
+   * same `reserveAiOrThrow` the chat route calls.
+   *
+   * It is skipped outside the cutover period rather than faked into it, because
+   * `reserveAiOrThrow` reads the clock. Skipping is honest: the test is meaningful
+   * exactly during the release month, which is when it matters, and it goes quiet
+   * on its own afterwards along with the code it covers.
+   */
+  test("a Free account is served past the new ceiling during the cutover period", async (t) => {
+    const { currentPeriod } = await import("../../src/lib/dates");
+    const { isCutoverPeriod, PLANS, PRE_STRIPE_FREE_AI_ALLOWANCE, aiAllowanceFor, planFor } =
+      await import("../../src/lib/plans");
+
+    if (!isCutoverPeriod(currentPeriod())) {
+      t.skip(`not the cutover period (${currentPeriod()}) — the grandfather is inactive`);
+      return;
+    }
+
+    const { reserveAiOrThrow } = await import("../../src/lib/entitlements");
+    const { AiAllowanceError } = await import("../../src/lib/plans");
+
+    await resetUsage(C.ownerId);
+    // Only the two fields reserveAiOrThrow reads. A full Actor would drag in
+    // authorization plumbing this assertion does not depend on.
+    const actor = { identity: { id: C.ownerId, plan: "free" } } as never;
+
+    const standing = PLANS.free.limits.aiRequestsPerMonth;
+    const effective = aiAllowanceFor(planFor("free"), currentPeriod());
+    assert.equal(effective, PRE_STRIPE_FREE_AI_ALLOWANCE);
+    assert.ok(effective > standing, "the grandfather must be a raise, or this proves nothing");
+
+    for (let i = 0; i < effective; i += 1) {
+      await reserveAiOrThrow(actor);
+    }
+    assert.equal(await usageFor(C.ownerId), effective);
+
+    await assert.rejects(
+      () => reserveAiOrThrow(actor),
+      (error: unknown) => {
+        assert.ok(error instanceof AiAllowanceError);
+        assert.equal(error.limit, effective, "the error reports the ceiling that refused it");
+        return true;
+      },
+      "the old allowance is still a ceiling — the grandfather raises it, it does not remove it",
+    );
+    assert.equal(await usageFor(C.ownerId), effective, "a refused claim increments nothing");
+  });
+});
