@@ -267,21 +267,81 @@ export default function PrivacyPage() {
       </Section>
 
       <Section id="retention" heading="8. Retention">
-        <ul className="list-disc space-y-1 pl-5">
-          <li>Deleted records go to Trash and remain recoverable by you; they are not purged automatically.</li>
-          <li>Deleting a workspace is scheduled rather than immediate: the workspace becomes read-only for a grace period, so an accidental or hostile deletion can be reversed before anything is destroyed.</li>
-          <li>Expired sessions, used authentication tokens and rate-limit counters are purged automatically.</li>
-          <li>Audit and security records are kept deliberately, because their value is in covering a period you may need to ask about later.</li>
-        </ul>
         <p>
-          A published maximum retention period after account closure, and the retention term for
-          audit records, are <NeedsDetail>a business decision</NeedsDetail>.
+          <strong>This describes how the service behaves today.</strong> It is a statement of the
+          current implementation, read from the code, and not a commitment to keep anything for any
+          particular length of time. Where something is kept indefinitely that is said plainly below
+          rather than implied away by a general deletion sentence.
+        </p>
+
+        <p className="font-medium text-body">Deleted automatically, on a daily sweep</p>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>Expired sessions, and authentication tokens once they have been used or have expired.</li>
+          <li>Completed background jobs, 30 days after they finish.</li>
+          <li>Expired idempotency keys, and rate-limit counters.</li>
+          <li>
+            Security alerts, <strong>365 days after they are acknowledged</strong>. An
+            unacknowledged alert is unfinished work and is kept however old it is. This is separate
+            from the audit log below, which the sweep does not touch.
+          </li>
+        </ul>
+
+        <p className="font-medium text-body">Not deleted automatically</p>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            <strong>Your business records</strong> — contacts, companies, deals, projects,
+            opportunities, tasks, notes, files — are kept until you delete them. Nothing in the
+            service removes them on a timer.
+          </li>
+          <li>
+            <strong>Records you delete go to Trash and stay there.</strong> They remain recoverable
+            by you, and no job empties the Trash, so in practice they are kept indefinitely.
+          </li>
+          <li>
+            <strong>Audit records are kept indefinitely</strong> and are deleted by no part of the
+            service. For a security log that is defensible — its value is in covering a period you
+            may need to ask about later — but it is described here as what happens, not offered as a
+            term.
+          </li>
+        </ul>
+
+        <p className="font-medium text-body">Deleting a workspace</p>
+        <p>
+          Workspace deletion is scheduled rather than immediate. The workspace becomes read-only for
+          a <strong>7-day</strong> grace period during which the deletion can be cancelled, so an
+          accidental or hostile deletion can be reversed before anything is destroyed. After the
+          grace period it is carried out and cascades to that workspace&apos;s records.
+        </p>
+
+        <p className="font-medium text-body">Closing an account</p>
+        <p>
+          There is currently <strong>no way to close an account from inside the product</strong>, so
+          no retention period after closure is being published. Saying that is more useful than
+          printing a period the software cannot carry out. A closure request can be sent to{" "}
+          <a href="mailto:privacy@tinycrm.biz" className="text-brand-600 hover:underline dark:text-brand-400">
+            privacy@tinycrm.biz
+          </a>{" "}
+          in the meantime. Self-service closure — including the case where you own workspaces that
+          other people are members of, whose data must not be destroyed with yours — is tracked work.
+        </p>
+
+        <p>
+          How long a <strong>backup</strong> is kept is a setting of our database provider rather
+          than of this application, and that window is{" "}
+          <NeedsDetail>unconfirmed — not yet read from the provider</NeedsDetail>. No backup
+          retention period is stated here until it has been.
         </p>
       </Section>
 
       <Section id="choices" heading="9. Your choices">
         <ul className="list-disc space-y-1 pl-5">
-          <li>Export everything you have entered to CSV, at any time, without asking us.</li>
+          <li>
+            Export your records as CSV, at any time, without asking us. Six exports exist today —{" "}
+            <strong>contacts, companies, deals, projects, opportunities and tasks</strong> — each up
+            to 50,000 rows and covering records that are not in the Trash. Timeline notes, activity
+            history, uploaded files, tags and custom field values are <em>not</em> part of an export
+            yet; a complete export is tracked work.
+          </li>
           <li>Turn AI off per workspace, and keep every deterministic feature.</li>
           <li>Review and revoke sessions; enable two-factor authentication.</li>
           <li>Delete records, or a whole workspace.</li>
@@ -317,9 +377,11 @@ export default function PrivacyPage() {
 
       <Section id="changes" heading="12. Changes and contact">
         <p>
-          If this notice changes materially we will say so in the product rather than relying on you
-          to re-read it. The notification method and notice period are{" "}
-          <NeedsDetail>a business decision</NeedsDetail>.
+          If this notice changes materially we will give at least{" "}
+          <strong>30 days&apos; notice by email to your account address</strong> rather than relying
+          on you to re-read it. Email is named deliberately: there is no in-product announcement
+          mechanism, and a notice commitment that depends on one that does not exist would not be
+          kept.
         </p>
         <p>
           Artifact Digital LLC, 178 N. Cuyamaca St., El Cajon, CA 92020, United States. Contact:{" "}

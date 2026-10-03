@@ -9,6 +9,10 @@ customer's contacts because a counter expired is indistinguishable from data
 loss. Anything a customer typed is removed only when they ask, or under a
 published policy they have agreed to.
 
+The published, customer-facing version of this is section 8 of the privacy
+notice; the decisions behind that wording are recorded in
+`docs/COMMERCIAL-POLICIES.md`.
+
 Status column meanings:
 
 - **ENFORCED** — code does this today, on the sweep run by `/api/cron/jobs?sweep=1`

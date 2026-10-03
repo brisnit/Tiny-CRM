@@ -92,8 +92,12 @@ export default function TermsPage() {
           more until you are back under it.
         </p>
         <p>
-          Prices and limits may change. How much notice is given before a change affects an existing
-          subscriber is <NeedsDetail>a business decision</NeedsDetail>.
+          Prices and limits may change. Before a change applies to an existing subscription we will
+          give at least <strong>30 days&apos; notice by email to your account address</strong>, and
+          you can cancel before it takes effect — see{" "}
+          <Link href="#changes" className="text-brand-600 hover:underline dark:text-brand-400">
+            section 11
+          </Link>.
         </p>
       </Section>
 
@@ -107,15 +111,35 @@ export default function TermsPage() {
           <li>Changing plan mid-period is prorated by Stripe.</li>
         </ul>
         <p>
-          Our refund policy is <NeedsDetail>a business decision</NeedsDetail>. Any applicable sales
-          tax or VAT handling is <NeedsDetail>for legal review</NeedsDetail>.
+          <strong>Cancellation.</strong> If you cancel, no refund or credit is issued for unused
+          time. Your plan continues until the end of the period you have already paid for, and the
+          account then moves to Free.
+        </p>
+        <p>
+          <strong>Changing plan mid-period is prorated, and the direction matters.</strong> A
+          downgrade produces a credit for the time you did not use at the higher rate. An upgrade
+          produces an additional charge for the remainder of the period. In both cases the
+          adjustment appears on your <em>next invoice</em> rather than being charged or refunded
+          immediately.
+        </p>
+        <p>
+          If you were charged in error, contact us and we will refund it.
+        </p>
+        <p>
+          Any applicable sales tax or VAT handling is <NeedsDetail>for legal review</NeedsDetail>.
         </p>
       </Section>
 
       <Section id="your-data" heading="5. Your data">
         <ul className="list-disc space-y-1 pl-5">
           <li>Your content remains yours. We claim no ownership of it.</li>
-          <li>You can export everything you have entered to CSV at any time, without asking us, including after cancelling.</li>
+          <li>
+            You can export your records as CSV at any time, without asking us, including after
+            cancelling. Six exports exist today — contacts, companies, deals, projects,
+            opportunities and tasks — each up to 50,000 rows. Timeline notes, activity history,
+            uploaded files, tags and custom field values are not yet part of an export; see the
+            privacy notice.
+          </li>
           <li>Your content is not used to train any machine-learning model.</li>
           <li>How we handle your data is described in the <Link href="/privacy" className="text-brand-600 hover:underline dark:text-brand-400">privacy notice</Link>, which forms part of these terms.</li>
         </ul>
@@ -156,8 +180,9 @@ export default function TermsPage() {
           your own exports is sensible, and export is always available to you.
         </p>
         <p>
-          If an availability commitment is to be offered, it is{" "}
-          <NeedsDetail>a business decision</NeedsDetail>.
+          No availability commitment is offered. That is a deliberate choice rather than an
+          omission: a single-region deployment without an on-call rota should not promise a number,
+          and saying so plainly is more useful than silence.
         </p>
       </Section>
 
@@ -171,20 +196,31 @@ export default function TermsPage() {
 
       <Section id="termination" heading="10. Ending the agreement">
         <ul className="list-disc space-y-1 pl-5">
-          <li>You may stop using the service and delete your account at any time.</li>
-          <li>Deleting a workspace is scheduled rather than immediate, so it can be reversed during a grace period before anything is destroyed.</li>
-          <li>Export your data before closing your account; afterwards we cannot recover it for you.</li>
+          <li>You may stop using the service at any time, and cancel a paid plan yourself from billing settings.</li>
+          <li>You can delete individual records, and whole workspaces. Deleting a workspace is scheduled rather than immediate, so it can be reversed during a 7-day grace period before anything is destroyed.</li>
+          <li>
+            <strong>Closing an account is not yet possible from inside the product.</strong> Until it
+            is, a closure request can be sent to{" "}
+            <a href="mailto:privacy@tinycrm.biz" className="text-brand-600 hover:underline dark:text-brand-400">
+              privacy@tinycrm.biz
+            </a>. We would rather say this than describe a button that does not exist.
+          </li>
+          <li>Export your data before you stop using the service. What an export covers, and what it does not, is set out in the privacy notice.</li>
         </ul>
         <p>
-          The retention period for any residual data after closure is{" "}
-          <NeedsDetail>a business decision</NeedsDetail>.
+          What is retained after you stop using the service, and for how long, is described in{" "}
+          <Link href="/privacy#retention" className="text-brand-600 hover:underline dark:text-brand-400">
+            section 8 of the privacy notice
+          </Link>{" "}
+          — as the service behaves today, rather than as a promised maximum period.
         </p>
       </Section>
 
       <Section id="changes" heading="11. Changes, law and contact">
         <p>
-          If these terms change materially we will say so in the product. The notice period is{" "}
-          <NeedsDetail>a business decision</NeedsDetail>.
+          We will give at least <strong>30 days&apos; notice by email to your account address</strong>{" "}
+          before a price increase or a material change to these terms applies to an existing
+          subscription. You can cancel before it takes effect.
         </p>
         <p>
           Governing law and the courts with jurisdiction are{" "}
