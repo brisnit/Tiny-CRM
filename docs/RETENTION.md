@@ -107,6 +107,12 @@ of them:
 | Operational logs | 90 days |
 | Backups | 7–30 days of point-in-time recovery |
 
+**The actual window today is 6 hours**, not 7–30 days: Neon's free-plan history
+retention, confirmed in the console and recorded in docs/NEON-RECOVERY-DRILL.md.
+The row above is a recommendation, and the gap between it and reality is the
+point — data destroyed on a Friday and noticed on Monday cannot be recovered at
+the database level. A paid Neon plan is what closes it.
+
 **Backups are the exception nobody expects.** Deleting a record from the live
 database does not remove it from backups taken before the deletion. It ages out
 of them at the backup retention period. Any erasure commitment made to a

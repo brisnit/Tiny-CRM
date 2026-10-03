@@ -175,9 +175,11 @@ export default function TermsPage() {
 
       <Section id="availability" heading="8. Availability">
         <p>
-          The service is provided as-is, with no uptime commitment and no service-level agreement. We
-          take backups and have tested restoring them, but offer no recovery-time guarantee. Keeping
-          your own exports is sensible, and export is always available to you.
+          The service is provided as-is, with no uptime commitment and no service-level agreement. Database recovery
+          has been tested, but it recovers from a mistake inside the database within a 6-hour
+          window and is held by the same provider in the same project — it is not an independent
+          backup, and we offer no recovery-time guarantee. Keeping your own exports is therefore
+          sensible, and export is always available to you.
         </p>
         <p>
           No availability commitment is offered. That is a deliberate choice rather than an

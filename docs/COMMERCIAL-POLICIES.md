@@ -44,7 +44,10 @@ Written into: terms § 3 and § 11, privacy § 12.
 
 **No availability commitment and no SLA**, stated as a deliberate choice: a
 single-region deployment without an on-call rota should not publish a number.
-Backups exist and have been restore-tested; no recovery-time guarantee.
+Database recovery has been tested, but it is 6 hours of in-project point-in-time
+recovery rather than an independent backup, and no recovery-time guarantee is
+offered. The earlier wording ("backups exist and have been restore-tested")
+overstated it and has been corrected on both pages.
 
 Written into: terms § 8, privacy § 10.
 
@@ -79,16 +82,24 @@ Verified behaviour:
 | Customer business records | Kept until the customer deletes them | `sweep()` comment |
 | Workspace deletion | Scheduled, **7-day** cancellable grace period, then cascades | `WORKSPACE_DELETION_GRACE_DAYS` |
 | Account closure | **Does not exist in the product** | no `user.delete`, no route |
-| Backups | A provider setting, **not read** | — |
+| Point-in-time recovery | **6 hours** — Neon free-plan history retention | Neon console; `docs/NEON-RECOVERY-DRILL.md` |
 
 Audit retention (indefinite) and security-alert retention (365 days after
 acknowledgement) are stated as two separate rules on the page, because they are
 two separate rules in the code.
 
-**Backup retention remains unresolved** and is the only gap marker left in that
-section. `scripts/backup-test.mjs` proves a backup can be restored; it says
-nothing about how long one is kept. No number appears anywhere until the Neon
-setting has been read.
+**The recovery window is now known: 6 hours.** It is recorded as a *point-in-time
+recovery window* and deliberately not as proof that deleted data disappears after
+six hours — those are different claims, and only the first is supported. What the
+provider keeps in its own storage layers beyond that window remains the one gap
+marker in privacy § 8.
+
+Two things that number changes. First, it was **already in the repository** at
+`docs/NEON-RECOVERY-DRILL.md:18` while being treated here as unread — a
+propagation failure, not a missing fact. Second, the same drill records that **no
+independent copy exists**: Neon branching is copy-on-write inside one project, so
+it covers an application mistake and not account loss or provider failure, and an
+export held elsewhere is a control that is not in place.
 
 The export claim was also corrected here. "Export everything as CSV" was false.
 Six exports exist — contacts, companies, deals, projects, opportunities, tasks —
@@ -124,8 +135,10 @@ These are consequences of the above, not caveats on it. None is started.
    taking those members' data with it. Closure must transfer ownership or refuse
    while other members remain.
 3. **Retention controls.** Enforce `TRASH_RETENTION_DAYS` or keep describing
-   trash as indefinite; decide an audit-log term deliberately; read and record
-   the Neon backup window.
+   trash as indefinite; decide an audit-log term deliberately. The recovery
+   window is now known (6 hours) — what is open is whether to pay for a longer
+   one, whether to hold an independent export elsewhere, and what the provider
+   keeps beyond the window.
 4. **A reliable notice process.** The 30-day email commitment in item 2 now
    depends on one. There is no announcement mechanism and no way to mail all
    subscribers from the product; today it would be done by hand.

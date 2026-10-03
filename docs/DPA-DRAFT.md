@@ -85,9 +85,13 @@ N days") **cannot be honoured by the current implementation**:
 - **Audit records are never purged.** `auditLog.delete` appears nowhere in the
   codebase, and the retention sweep does not touch that table. The application's
   database role is deliberately denied `UPDATE` and `DELETE` on it.
-- **Backup retention is a Neon setting**, not an application one, and has not been
-  read. `scripts/backup-test.mjs` proves a backup can be *restored*; it says
-  nothing about how long one is *kept*.
+- **Point-in-time recovery is 6 hours** — Neon free-plan history retention,
+  confirmed in the console. That is a *recovery* window and not a deletion
+  guarantee: it does not establish that a deleted record is gone from the
+  provider's storage layers after six hours, and no clause should imply it does.
+  Note also that no independent copy exists: Neon branching is copy-on-write
+  within the same project, so it recovers from an application mistake and not
+  from account loss or a provider failure (docs/NEON-RECOVERY-DRILL.md).
 
 What **is** implemented and can be promised:
 
@@ -119,8 +123,11 @@ Each is a prerequisite, not a caveat:
 2. **Enforce trash retention**, or describe trash accurately as indefinite.
 3. **Decide audit retention.** Indefinite is defensible for a security log, but it
    must be stated rather than implied away by a general deletion clause.
-4. **Read and record the Neon backup retention window** before any number appears
-   in a contract.
+4. **Decide whether 6 hours of recovery is acceptable to contract on.** The window
+   is now known rather than unread, and it is short: a deletion noticed after six
+   hours is unrecoverable at the database level, and there is no independent copy
+   at all. What the provider keeps beyond that window is still unestablished, so a
+   deletion clause must not be worded as if the window were an erasure period.
 5. **Confirm Resend's processing region** (Annex B).
 
 ---
@@ -142,7 +149,7 @@ CRM. **[COUNSEL]** — whether that needs addressing explicitly.
 | Subprocessor | Purpose | Location | Basis |
 |---|---|---|---|
 | Vercel | Application hosting | US West (Oregon) | Verified: `vercel.json` pins `regions: ["pdx1"]` |
-| Neon | PostgreSQL database | AWS `us-west-2`, US West (Oregon) | Verified from the audited endpoint host. **Production-branch identity not yet confirmed** |
+| Neon | PostgreSQL database | AWS `us-west-2`, US West (Oregon) | Verified twice: the audited endpoint host, and the Neon console reporting the default branch `production` in AWS US West 2 |
 | Cloudflare R2 | Uploaded file storage, bucket `tiny-crm-documents` | Western North America (WNAM) | Cloudflare's own label. R2 hints name a broad area, not a country |
 | Resend | Transactional email only | **Not confirmed** | Verified from message headers: DKIM `s=resend` on `d=tinycrm.biz`, Message-ID domain `rsend.tinycrm.biz` |
 | Amazon SES | Email delivery beneath Resend | **Not confirmed** | Resend's own subprocessor, not contracted with directly. Observed sending host `smtp-out.amazonses.com` |
@@ -207,4 +214,4 @@ invocations observed in a 48-hour production window):
 | Audit log | Kept indefinitely; never deleted by any code path |
 | Customer business records | Kept until the controller deletes them |
 | Deleted workspaces | Executed after a 7-day grace period, cancellable during it |
-| Backups | Governed by Neon's retention setting, which has not been read |
+| Point-in-time recovery | **6 hours** (Neon free-plan history retention, confirmed in the console). A recovery window, not an erasure period. No independent copy exists |

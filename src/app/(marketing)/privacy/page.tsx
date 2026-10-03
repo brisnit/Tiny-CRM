@@ -127,20 +127,18 @@ export default function PrivacyPage() {
                 <td className="py-2 pr-4 text-body">Neon</td>
                 <td className="py-2 pr-4">PostgreSQL database</td>
                 {/*
-                  Read from the endpoint the plan/usage audit connected to:
-                  ep-aged-smoke-arfenoc5.c-4.us-west-2.aws.neon.tech — so the
-                  region is evidence, not assumption, and matches Vercel's pdx1.
-
-                  Two limits on that evidence, which is why the page is still a
-                  draft. The host establishes the region of *that endpoint*, not
-                  that it belongs to the production branch — every Neon branch has
-                  its own endpoint, so this needs confirming in the Neon console.
-                  And the host carries no `-pooler` segment, meaning the audit used
-                  the direct endpoint while the application most likely uses the
-                  pooled one; both reach the same branch, but the two strings will
-                  not be identical when compared.
+                  Confirmed twice over. The plan/usage audit connected to
+                  ep-aged-smoke-arfenoc5.c-4.us-west-2.aws.neon.tech, which gives the
+                  region of that endpoint; and the Neon console reports the project's
+                  default branch as `production` in AWS US West 2 (Oregon). The two
+                  agree, and both match Vercel's pdx1.
+                
+                  The host carries no `-pooler` segment, so the audit used the direct
+                  endpoint while the application most likely uses the pooled one. Both
+                  reach the same branch; the two strings are simply not identical when
+                  compared.
                 */}
-                <td className="py-2">US West (Oregon)</td>
+                <td className="py-2">US West (Oregon) — AWS us-west-2</td>
               </tr>
               <tr className="border-b border-hairline/60">
                 <td className="py-2 pr-4 text-body">Cloudflare R2</td>
@@ -346,11 +344,24 @@ export default function PrivacyPage() {
           other people are members of, whose data must not be destroyed with yours — is tracked work.
         </p>
 
+        <p className="font-medium text-body">Point-in-time recovery</p>
         <p>
-          How long a <strong>backup</strong> is kept is a setting of our database provider rather
-          than of this application, and that window is{" "}
-          <NeedsDetail>unconfirmed — not yet read from the provider</NeedsDetail>. No backup
-          retention period is stated here until it has been.
+          Our database provider keeps a <strong>6-hour history retention window</strong>, which is
+          the period the database can be restored to an earlier moment within. Practically that is
+          the window in which an accidental or destructive change can be undone at the database
+          level: noticed inside six hours it can be recovered from, and after that it cannot.
+        </p>
+        <p>
+          <strong>That number is a recovery window, not a deletion guarantee.</strong> It does not
+          mean data is erased six hours after you delete it, and nothing here should be read as a
+          claim that every copy of a deleted record is gone by then. What the provider keeps in its
+          own storage layers beyond the recovery window is{" "}
+          <NeedsDetail>not established by the recovery window, and not yet confirmed</NeedsDetail>.
+        </p>
+        <p>
+          Recovery at the <em>application</em> level is deliberately longer, and is what you would
+          normally rely on: deleted records stay in Trash, and a workspace deletion is reversible
+          for seven days. Those are described above and do not depend on the six-hour window.
         </p>
       </Section>
 
@@ -388,7 +399,22 @@ export default function PrivacyPage() {
           <li>No certification is claimed — not SOC 2, not ISO 27001, not HIPAA.</li>
           <li>No zero-retention guarantee from any AI provider.</li>
           <li>No uptime or availability commitment.</li>
-          <li>Backups exist and have been restore-tested, but no recovery-time guarantee is offered.</li>
+          {/*
+            This bullet used to read "backups exist and have been restore-tested",
+            which overstated it. docs/NEON-RECOVERY-DRILL.md records what was
+            actually exercised: branching from a historical timestamp, copy-on-write
+            *within* the same project, inside a 6-hour window. That recovers from an
+            application mistake. It is not an independent copy, and there is no
+            export stored elsewhere.
+          */}
+          <li>
+            <strong>No independent backup is claimed.</strong> Database recovery has been tested,
+            but what it recovers from is a mistake inside the database within a 6-hour window — it
+            is a copy held by the same provider in the same project, not a separate copy held
+            elsewhere. Account loss or a provider failure is not covered by it. Keeping your own
+            exports is therefore worth doing, and export is always available to you.
+          </li>
+          <li>No recovery-time guarantee is offered.</li>
         </ul>
       </Section>
 
