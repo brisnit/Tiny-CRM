@@ -368,11 +368,14 @@ export default async function MarketingPage() {
                 should not be published, so this release ships pricing without
                 them. They are kept in docs/legal/ — see its README.
             
-                This is a prerequisite for live billing rather than a cosmetic
-                gap: Stripe wants a reachable privacy policy and terms of service
-                before a live Customer Portal can be launched. Confirm that when
-                setting the portal up — it decides whether these pages have to
-                ship before billing goes live. */}
+                An earlier version of this comment claimed Stripe requires a
+                reachable privacy policy and terms of service before a live
+                Customer Portal can be launched. That was checked against
+                Stripe's documentation and is wrong: the portal configuration
+                lists the terms-of-service link as "Required? No", and the
+                create-configuration API makes `business_profile` optional with
+                both URLs defaulting to null. Hosted Checkout requires neither.
+                So publishing these pages does not gate live billing. */}
             <Link href="/login" className="transition-colors hover:text-muted">Sign in</Link>
           </div>
         </div>

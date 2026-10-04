@@ -21,16 +21,30 @@ decisions (whether a DPA is offered; the suspension notice period and appeal
 route), one is a fact still to confirm (what the database provider retains beyond
 the 6-hour recovery window), and ten need counsel.
 
-## This blocks live billing, not just the pages
+## This does *not* block live billing — corrected
 
-Stripe wants a reachable privacy policy and terms of service before a live
-Customer Portal can be launched. That requirement is the reason the footer linked
-them in the first place. **Confirm it when setting the live portal up**, because
-if it holds, these pages have to ship before billing can go live — which makes
-restoring them a prerequisite of step 4 in the release plan, not a follow-up.
+An earlier version of this file said Stripe requires a reachable privacy policy
+and terms of service before a live Customer Portal can be launched, and treated
+restoring these pages as a prerequisite for activating billing. **That was wrong**,
+and it was checked rather than assumed:
 
-Nothing in the test-mode flow needs them; the sandbox portal was configured and
-verified without them.
+- Stripe's portal configuration documentation lists **Terms of service link —
+  "Required? No"**, and says that if you enter nothing the portal falls back to
+  the terms of service set in public account details. It lists no privacy-policy
+  field at all.
+- The create-configuration API reference marks `business_profile` **optional** —
+  only `features` is required — and shows `privacy_policy_url` and
+  `terms_of_service_url` defaulting to `null`, with no live-mode distinction.
+- Hosted Checkout's documentation imposes no privacy or terms requirement either;
+  what it needs is an activated account.
+
+So these pages are held back for the reason stated above — their own banner — and
+for no Stripe reason. The two decisions still open on them do not gate billing
+activation.
+
+One consequence worth knowing: with the pages unpublished and no ToS URL in
+public account details, the portal simply shows no terms link. That is permitted,
+not a misconfiguration.
 
 ## What is accurate in them, and what is not
 
