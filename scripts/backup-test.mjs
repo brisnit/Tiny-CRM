@@ -436,9 +436,10 @@ async function main() {
     );
   }
 
-  // Leave the SQLite datasource as we found it.
-  execFileSync("node", ["scripts/use-provider.mjs", "sqlite"], { cwd: ROOT, stdio: "ignore" });
-  execFileSync("npx", ["prisma", "generate"], { cwd: ROOT, stdio: "ignore" });
+  // Leave the SQLite datasource and client as we found them. Deliberately the
+  // same function the error and signal paths use, rather than a second copy of
+  // the same two commands — the copies are how they came to disagree.
+  restoreSqlite();
   rmSync(BACKUP_DIR, { recursive: true, force: true });
 }
 
@@ -451,8 +452,21 @@ function restoreSqlite() {
   restored = true;
   try {
     execFileSync("node", ["scripts/use-provider.mjs", "sqlite"], { cwd: ROOT, stdio: "ignore" });
+    // The generated client has to come back too, and this is the half that was
+    // missing. `applySchema` runs `prisma generate` against postgresql, so
+    // putting back only the datasource leaves a PostgreSQL client against a
+    // SQLite schema — and then every database-backed test fails with "The Driver
+    // Adapter @prisma/adapter-better-sqlite3, based on sqlite, is not compatible
+    // with the provider postgres", which says nothing about the test that failed.
+    //
+    // The success path always did both. The error and signal paths did not, so an
+    // interrupted or throwing run left the checkout in that state.
+    execFileSync("npx", ["prisma", "generate"], { cwd: ROOT, stdio: "ignore" });
   } catch {
-    console.error("Could not restore the SQLite datasource — run `node scripts/use-provider.mjs sqlite`.");
+    console.error(
+      "Could not restore the SQLite datasource and client — run " +
+        "`node scripts/use-provider.mjs sqlite && npx prisma generate`.",
+    );
   }
 }
 
