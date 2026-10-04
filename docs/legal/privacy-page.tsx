@@ -1,4 +1,4 @@
-import { DraftBanner, LegalPage, NeedsDetail, Section } from "@/components/marketing/legal";
+import { DraftBanner, LegalPage, NeedsDetail, Section } from "./legal";
 
 export const metadata = {
   title: "Privacy",

@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { DraftBanner, LegalPage, NeedsDetail, Section } from "@/components/marketing/legal";
+import { DraftBanner, LegalPage, NeedsDetail, Section } from "./legal";
 import { PLANS, PLAN_ORDER } from "@/lib/plans";
 
 export const metadata = {

@@ -363,11 +363,16 @@ export default async function MarketingPage() {
           <div className="flex items-center gap-4 text-[12px] text-faint">
             <a href="#pricing" className="transition-colors hover:text-muted">Pricing</a>
             <a href="#faq" className="transition-colors hover:text-muted">FAQ</a>
-            {/* Stripe requires a reachable privacy policy and terms of service
-                before a live Customer Portal can be launched. Worth linking
-                regardless of that. */}
-            <Link href="/privacy" className="transition-colors hover:text-muted">Privacy</Link>
-            <Link href="/terms" className="transition-colors hover:text-muted">Terms</Link>
+            {/* No Privacy or Terms link in this release. The drafts are real and
+                checked against the code, but they still carry a banner saying they
+                should not be published, so this release ships pricing without
+                them. They are kept in docs/legal/ — see its README.
+            
+                This is a prerequisite for live billing rather than a cosmetic
+                gap: Stripe wants a reachable privacy policy and terms of service
+                before a live Customer Portal can be launched. Confirm that when
+                setting the portal up — it decides whether these pages have to
+                ship before billing goes live. */}
             <Link href="/login" className="transition-colors hover:text-muted">Sign in</Link>
           </div>
         </div>
