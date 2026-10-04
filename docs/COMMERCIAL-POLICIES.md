@@ -144,6 +144,26 @@ These are consequences of the above, not caveats on it. None is started.
    depends on one. There is no announcement mechanism and no way to mail all
    subscribers from the product; today it would be done by hand.
 
+## Prerequisite before any audit figure is relied on
+
+Every number quoted from `scripts/plan-usage-audit.mjs` — how many accounts would
+lose access, how many Free accounts exceed the old allowance, what the release-month
+grandfather costs — is a reading of whichever Neon branch the connection string
+reached. **That branch has not been confirmed to be production.**
+
+The region is settled: the Neon console reports the project in AWS US West 2
+(Oregon), and a project has one region. What is unsettled is branch identity. An
+endpoint id does not name its branch, and the audited host
+(`ep-aged-smoke-arfenoc5…`) carried no `-pooler` segment while the application
+most likely uses the pooled endpoint.
+
+Closing it is one comparison: the host in Vercel's production `DATABASE_URL`
+against the production branch's endpoint host in Neon. Until those match, audit
+output is evidence about *a* database and not about production — so this is a
+prerequisite for trusting the audit, not an optional backup-related task. It is
+recorded as gap 6 in `docs/DPA-DRAFT.md` and stated at the top of the audit
+script itself.
+
 ## Still for counsel
 
 Governing law and jurisdiction, the controller/processor split, the warranty

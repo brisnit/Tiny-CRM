@@ -393,7 +393,11 @@ Neon's own `pg_dump` guidance adds one requirement worth carrying into the desig
 Which is also a reminder that the application's `DATABASE_URL` is probably the
 pooled endpoint, so the backup job needs a different host string. That connects to
 the open question about which branch the deployed app talks to, recorded as gap 6
-in `docs/DPA-DRAFT.md`.
+in `docs/DPA-DRAFT.md`. That comparison is **not** a backup task: it is the
+prerequisite for trusting anything the plan/usage audit reported, and it is
+recorded as such in `docs/COMMERCIAL-POLICIES.md` and at the top of
+`scripts/plan-usage-audit.mjs`. It surfaced here only because Neon's advice to
+avoid a pooled connection for `pg_dump` points at the same unresolved host.
 
 Neon's migration documentation contains **no guidance about row-level security at
 all**, so none of the above is something a reader of their docs would be warned

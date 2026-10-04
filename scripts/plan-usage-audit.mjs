@@ -9,6 +9,22 @@
  * account already stores, the first thing the account owner meets after the
  * deploy is a refusal.
  *
+ * ## Prerequisite: confirm you are reading production
+ *
+ * This script reports on whatever branch the connection string points at, and a
+ * Neon endpoint id does not name its branch. The console reports the project's
+ * *default* branch as `production`; that is not the same statement as "the host
+ * in Vercel's production DATABASE_URL belongs to that branch", and the audited
+ * host carried no `-pooler` segment while the application most likely uses the
+ * pooled endpoint.
+ *
+ * So before any figure from this script is used to decide anything — who loses
+ * access, how many accounts exceed an allowance, what the grandfather costs —
+ * compare the host in Vercel's production `DATABASE_URL` against the production
+ * branch's endpoint host in Neon. Until that matches, the output is a reading of
+ * *some* branch and the numbers carry no authority. It is a prerequisite for
+ * trusting this audit, not a tidy-up task.
+ *
  * Safety properties, all of them deliberate:
  *
  *   1. **Read-only by the database, not by convention.** Everything runs inside
