@@ -30,6 +30,7 @@
     "db:differences": "tsx scripts/db-differences.ts",
     "db:seed:test": "tsx prisma/seed/test-seed.ts",
     "test:backup": "node scripts/backup-test.mjs",
+    "test:backup:roundtrip": "node scripts/backup-roundtrip-pg.mjs",
     "worker": "NODE_OPTIONS=\"--require ./scripts/allow-server-modules.cjs\" tsx scripts/worker.ts",
     "audit:deps": "node scripts/dependency-audit.mjs",
     "verify:hosted": "node scripts/verify-hosted.mjs"

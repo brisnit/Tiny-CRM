@@ -131,8 +131,9 @@ repo secrets, every run is logged and attributable, and failures are visible
 without building anything. It needs two **new, narrower** credentials rather than
 reuse of the app's:
 
-- a read-only Postgres role **with `BYPASSRLS`** on the production branch, for
-  `pg_dump` — the attribute is not optional, see *Verified* below;
+- a Postgres role carrying **`BYPASSRLS`** on the production branch, for
+  `pg_dump`. Not a new least-privilege role: one cannot be created on Neon, and
+  ownership does not substitute. See *Verified* §6;
 - an R2 token scoped **read-only to the one bucket**.
 
 The app's own credentials are read-write. A backup job never needs to write to
@@ -313,14 +314,120 @@ Restored from the read-only `BYPASSRLS` dump, then exercised as `tinycrm_app`:
 Deny-by-default survives the round trip, scoping is exact, and the append-only
 audit log is still append-only.
 
-### Still to confirm on the provider
+### 6. Permissions on Neon, from the providers' own documentation
 
-Locally the dump role was created with `CREATE ROLE … BYPASSRLS` by a superuser.
-**Neon does not give you superuser**, so whether a `BYPASSRLS` role can be created
-there — or whether `neon_superuser` already carries it — has to be checked on the
-provider before this is built. If neither is possible, the dump has to run as the
-owner of the tables, and that is a different credential with more power than a
-backup job should ideally hold. It is the open question in this proposal.
+Two things were checked here rather than assumed, and the first corrects a
+sentence in an earlier draft of this document.
+
+**Table ownership does not help.** PostgreSQL's documentation is explicit:
+
+> "Superusers and roles with the `BYPASSRLS` attribute always bypass the row
+> security system when accessing a table. Table owners normally bypass row
+> security as well, though a table owner can choose to be subject to row security
+> with `ALTER TABLE ... FORCE ROW LEVEL SECURITY`."
+
+`FORCE ROW LEVEL SECURITY` is exactly what `002_row_level_security.sql` sets on
+all 44 tenant tables, and the reason it is set is that the owner must not be an
+exception. So "`BYPASSRLS`, or table ownership" was wrong: under FORCE, **only a
+superuser or a `BYPASSRLS` role can produce a complete dump.** The local
+experiment did not catch this, because the owner there was also the cluster
+superuser — two attributes in one role, and the wrong one got the credit.
+
+The same page settles the dump flag:
+
+> "By default, `pg_dump` will set `row_security` to `off`, to ensure that all data
+> is dumped from the table. If the user does not have sufficient privileges to
+> bypass row security, then an error is thrown." `--enable-row-security`
+> "instructs `pg_dump` to set `row_security` to `on` instead of the default `off`,
+> allowing the user to dump the parts of the contents of the table that they have
+> access to."
+
+"The parts … that they have access to", under deny-by-default, is nothing.
+
+**What Neon provides.** From Neon's own documentation:
+
+| Fact | Consequence here |
+|---|---|
+| `neon_superuser` includes **`BYPASSRLS`** — "This attribute is only included in `neon_superuser` roles in projects created after the August 15, 2023 release" | The capability exists on this project, which was created in 2026 |
+| `neon_superuser` does **not** have `SUPERUSER`, and is `NOLOGIN` | You never connect as it directly |
+| Roles created via the Neon Console, CLI or API receive `neon_superuser` membership; roles created with plain SQL get only basic public-schema privileges | The console-created role is the one with a chance of working |
+| `neon_superuser` "cannot run `ALTER OWNER` statements" | Ownership cannot be reassigned to a backup role anyway |
+| PostgreSQL: "`CREATEROLE` does not confer the ability to grant or revoke the `BYPASSRLS` privilege", and a `BYPASSRLS` role is created "as a superuser" | **A new `BYPASSRLS` role cannot be minted on Neon.** `neon_superuser` has `CREATEROLE` but not `SUPERUSER` |
+
+So the design changes: there is no separate least-privilege backup role to create.
+The dump must run as a role that already carries `BYPASSRLS` through
+`neon_superuser` — which the existing Neon-created role does.
+
+**The one thing documentation cannot settle.** `BYPASSRLS` is a role *attribute*.
+Neon's documentation says a console-created role gets `neon_superuser`
+*membership*, and PostgreSQL's page describes `BYPASSRLS` as a privilege while
+stating only that "a role inherits the privileges of roles it is a member of, by
+default" — it does not say whether this particular attribute takes effect through
+membership or only when set directly on the connecting role. That distinction
+decides whether the existing role can back this database up, and no page consulted
+answers it.
+
+It is settled by a read-only probe, which creates nothing and changes no
+permission. Against the production branch, as the role the backup would use:
+
+```sql
+-- 1. Does the connecting role carry it directly, or reach it by membership?
+SELECT current_user, rolbypassrls, rolsuper FROM pg_roles WHERE rolname = current_user;
+SELECT pg_has_role(current_user, 'neon_superuser', 'USAGE') AS in_neon_superuser;
+
+-- 2. The decisive one: this is the exact mechanism pg_dump uses.
+--    A count means the dump will succeed. An error means it will not.
+SET row_security = off;
+SELECT count(*) FROM "Contact";
+```
+
+If step 2 returns a number, `pg_dump` will produce a complete dump as that role.
+If it raises `query would be affected by row-level security policy`, it will not,
+and the only remaining options are a Neon paid tier, a logical-replication reader,
+or export through the application rather than the database.
+
+Neon's own `pg_dump` guidance adds one requirement worth carrying into the design:
+
+> "Avoid using `pg_dump` over a pooled connection string" — use an unpooled one.
+
+Which is also a reminder that the application's `DATABASE_URL` is probably the
+pooled endpoint, so the backup job needs a different host string. That connects to
+the open question about which branch the deployed app talks to, recorded as gap 6
+in `docs/DPA-DRAFT.md`.
+
+Neon's migration documentation contains **no guidance about row-level security at
+all**, so none of the above is something a reader of their docs would be warned
+about.
+
+### What now runs in CI
+
+`scripts/backup-roundtrip-pg.mjs`, added to the existing *Backup and restore* job,
+so the properties above stop depending on anyone remembering them. It does a real
+`pg_dump` → `pg_restore` into an empty database and then asserts, in order:
+
+1. a tripwire that `FORCE ROW LEVEL SECURITY` is actually binding — without it
+   every isolation assertion below would pass on a database that had no RLS at
+   all;
+2. `pg_dump` exit status, deleting the artefact if it failed;
+3. `pg_restore` exit status **and** stderr, because the role-absent case exits
+   non-zero having restored nearly everything;
+4. policy count, RLS enabled and forced counts, `app_*` function count, index
+   count, the number of tables granting the app role, and `AuditLog`'s `relacl`,
+   each identical between source and restore;
+5. isolation as the application role: no context sees nothing, each workspace sees
+   only its own rows, both sees both;
+6. `UPDATE` and `DELETE` on `AuditLog` refused, `SELECT` still permitted,
+   `app_claim_jobs` still executable.
+
+It changes no roles: it borrows the application identity with `SET ROLE`, which
+binds RLS and table privileges exactly as a real connection would.
+
+Mutation-tested, because assertions that cannot fail are worse than none:
+restoring with `--no-acl` fails it on `tables_granting_app 53 → 0` and on the
+`AuditLog` ACL — the role-absent failure mode exactly; pointing `pg_dump` at a
+missing database fails it on the exit status and reports the partial file
+deleted; and clearing `FORCE ROW LEVEL SECURITY` on one table fails the step-1
+tripwire.
 
 Tooling note: `pg_dump` is not on this machine by default — the embedded
 PostgreSQL package ships only `initdb`, `pg_ctl` and `postgres`. These runs used
@@ -388,6 +495,9 @@ aws s3 ls --recursive --summarize \
    commitment.
 6. **Whether to also buy a longer PITR window** (Neon Launch, 7 days). Different
    problem, complementary, and it removes the egress constraint.
+7. **What to do if the `row_security = off` probe in §6 fails.** The fallbacks are
+   a Neon paid tier, a logical-replication reader, or exporting through the
+   application instead of the database — all more work than this proposal assumes.
 
 ## Not in this proposal, and worth deciding separately
 
