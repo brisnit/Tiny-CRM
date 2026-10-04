@@ -78,7 +78,11 @@ async function seedUserAndWorkspaces() {
       name: "Bris Whitaker",
       jobTitle: "Founder",
       passwordHash,
-      plan: "lifetime",
+      // `legacy_lifetime`, not `lifetime`: the pre-Stripe plan ids were renamed
+      // when Free/Plus/Pro shipped, and planFor() resolves an unrecognised value
+      // to Free — so seeding the old string silently gave the demo owner a free
+      // account with none of the entitlements the seed is meant to demonstrate.
+      plan: "legacy_lifetime",
       onboardedAt: daysAgo(240),
       lastSeenAt: NOW,
       createdAt: daysAgo(240),

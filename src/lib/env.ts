@@ -111,6 +111,32 @@ export const env = {
   /** Shared secret a billing provider signs its webhooks with. */
   billingWebhookSecret: optional("BILLING_WEBHOOK_SECRET"),
 
+  /**
+   * Stripe. Server-side only — every one of these is read here and never
+   * forwarded to the browser. Hosted Checkout and the Customer Portal are both
+   * server-created redirects, so there is no publishable key and no client SDK:
+   * nothing Stripe-related is in the bundle, which
+   * tests/security/client-bundle.test.ts asserts.
+   *
+   * The mode is not configured; it is *derived* from the key prefix by
+   * `stripeMode` below. A separate STRIPE_MODE variable could disagree with the
+   * key, and the failure mode of that disagreement is charging a real card while
+   * believing you are in test mode.
+   */
+  stripeSecretKey: optional("STRIPE_SECRET_KEY"),
+  stripeWebhookSecret: optional("STRIPE_WEBHOOK_SECRET"),
+  /** Recurring monthly price ids. Not secret, but environment-specific. */
+  stripePricePlus: optional("STRIPE_PRICE_PLUS"),
+  stripePricePro: optional("STRIPE_PRICE_PRO"),
+
+  /**
+   * Which Vercel environment this is: production, preview or development.
+   * Supplied by the platform. Needed because "is this production" and "may this
+   * hold live payment credentials" are different questions — a preview
+   * deployment is not production and must never be able to charge a card.
+   */
+  vercelEnv: optional("VERCEL_ENV"),
+
   // Shared secret for /api/cron/jobs. On a platform with no long-lived process
   // this endpoint *is* the worker, so an unset value means the outbox silently
   // stops draining — see the production warning below.
@@ -165,6 +191,33 @@ export const env = {
 } as const;
 
 export const isPostgres = /^postgres(ql)?:\/\//.test(env.databaseUrl);
+
+/**
+ * Which Stripe mode the configured key belongs to, read from the key itself.
+ *
+ * `null` means no key is configured, which is a valid state: billing is simply
+ * unavailable and the UI says so rather than offering a checkout that cannot
+ * complete.
+ */
+export function stripeMode(): "test" | "live" | null {
+  const key = env.stripeSecretKey;
+  if (!key) return null;
+  if (key.startsWith("sk_live_") || key.startsWith("rk_live_")) return "live";
+  if (key.startsWith("sk_test_") || key.startsWith("rk_test_")) return "test";
+  // An unrecognised prefix is treated as live. Guessing "test" here would be
+  // the dangerous direction: it would permit the key in a preview deployment.
+  return "live";
+}
+
+/** True when a real card can be charged with the current configuration. */
+export function stripeIsLive(): boolean {
+  return stripeMode() === "live";
+}
+
+/** True when checkout and the portal can actually be used. */
+export function stripeConfigured(): boolean {
+  return Boolean(env.stripeSecretKey && env.stripeWebhookSecret);
+}
 
 export class ConfigurationError extends Error {
   constructor(readonly problems: string[]) {
@@ -256,6 +309,34 @@ export function assertProductionEnv(): void {
     problems.push("TINYCRM_TEST_IDENTITY is set. The test identity hook must never be enabled outside tests.");
   }
 
+  // A live Stripe key charges real cards. A preview deployment is built from an
+  // arbitrary branch, is reachable by anyone with the URL, and exists to try
+  // changes out — the one place a payment credential must never be. This is
+  // fatal rather than a warning because the damage is somebody's money, and
+  // because the correct configuration (test keys in Preview) is no harder to
+  // set up than the wrong one.
+  //
+  // Note this is checked under isProduction only because assertProductionEnv
+  // returns early otherwise; `assertStripeEnvironment` below is what runs for
+  // preview builds, and src/instrumentation.ts calls both.
+  if (env.stripeSecretKey && !env.stripeWebhookSecret) {
+    problems.push(
+      "STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is not. Without the signing " +
+        "secret no subscription event can be verified, so a paid plan could never be " +
+        "granted — and an unverified endpoint must not be trusted to grant one.",
+    );
+  }
+
+  if (env.stripeSecretKey && stripeIsLive()) {
+    if (!env.stripePricePlus || !env.stripePricePro) {
+      problems.push(
+        "A live Stripe key is configured but STRIPE_PRICE_PLUS or STRIPE_PRICE_PRO is " +
+          "missing. Live billing with an unresolvable price fails at checkout, after the " +
+          "customer has committed.",
+      );
+    }
+  }
+
   if (env.storageDriver === "s3" && !env.storageBucket) {
     problems.push("STORAGE_DRIVER=s3 but STORAGE_BUCKET is not set.");
   }
@@ -315,6 +396,27 @@ export function usingSharedRateLimitStore(): boolean {
 }
 
 /** Non-fatal configuration observations, surfaced at startup. */
+/**
+ * Refuses to start any deployment holding payment credentials it must not hold.
+ *
+ * Separate from `assertProductionEnv` because that function returns early
+ * outside production, and the case this guards is specifically a **preview**
+ * deployment. Called from src/instrumentation.ts for every environment.
+ */
+export function assertStripeEnvironment(): void {
+  const problems: string[] = [];
+
+  if (env.vercelEnv === "preview" && stripeIsLive()) {
+    problems.push(
+      "A live Stripe key is configured on a PREVIEW deployment. Preview builds come " +
+        "from arbitrary branches and must never be able to charge a real card. Scope " +
+        "the live key to Production only, and give Preview a test-mode key.",
+    );
+  }
+
+  if (problems.length > 0) throw new ConfigurationError(problems);
+}
+
 export function productionWarnings(): string[] {
   const warnings: string[] = [];
 

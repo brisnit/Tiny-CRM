@@ -151,8 +151,10 @@ async function setFlag(workspaceId: string, key: string, enabled: boolean) {
 }
 
 before(async () => {
-  A = await createTenant("DocRetrieveA");
-  B = await createTenant("DocRetrieveB");
+  // Pro: document reading is plan-gated as well as flag-gated. See
+  // requireDocumentQaEntitlement in src/lib/documents/gate.ts.
+  A = await createTenant("DocRetrieveA", { plan: "pro" });
+  B = await createTenant("DocRetrieveB", { plan: "pro" });
 
   id.grantedProject = A.projectId;
   id.ungrantedProject = (await observer.project.create({

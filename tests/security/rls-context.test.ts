@@ -102,6 +102,12 @@ const EXCEPTIONS: Record<string, string> = {
     "outside a context. Establishing its own would be wrong here: the job " +
     "runner has already earned the workspace, and a module that opens a " +
     "context for itself grants itself the scope it should be verifying",
+  "src/lib/documents/gate.ts":
+    "documentQaEntitled reads the workspace OWNER's plan, which is a property of " +
+    "the workspace rather than a view of it: the capability belongs to the " +
+    "workspace and the owner is who pays for it. Reading the caller's plan " +
+    "instead would refuse a Free member of a Pro workspace and admit a Pro " +
+    "member of a Free one. Returns a boolean, never a row",
   "src/lib/documents/read.ts":
     "every export begins with requireDocumentIntelligence(), which asserts a " +
     "tenant context before any read, for the same reason as ingest.ts",

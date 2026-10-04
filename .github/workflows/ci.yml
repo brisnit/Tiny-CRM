@@ -253,6 +253,37 @@ jobs:
         env:
           PGPORT: 5432
 
+      # pg_dump refuses a server newer than itself, and the runner image ships a
+      # client a major behind the service container above. Pinned to the service's
+      # own major so the pair is exact rather than whatever the image happens to
+      # carry this month.
+      - name: Install the matching PostgreSQL client
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          KEY=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          REPO="https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main"
+          echo "deb [signed-by=$KEY] $REPO" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          pg_dump --version
+
+      # The round trip above is a logical COPY dump, which proves the rows
+      # survive. This one is a real pg_dump/pg_restore and asserts the things that
+      # live in the catalogue rather than in the rows: the policies, the RLS
+      # flags, and the grants that make the audit log append-only. A restore can
+      # return every byte of customer data with tenant isolation missing and pass
+      # a count-based check, which is the failure this is here to catch.
+      #
+      # Fails on any pg_dump error, any pg_restore error, any difference in the
+      # object counts or ACLs, or any isolation check. It changes no roles — it
+      # borrows the application role with SET ROLE.
+      - name: pg_dump round trip, with tenant isolation and audit permissions
+        run: npm run test:backup:roundtrip
+        env:
+          PGPORT: 5432
+
   # ---------------------------------------------------------------------------
   # Production build, the configuration gate in both directions, and the CSP.
   # ---------------------------------------------------------------------------

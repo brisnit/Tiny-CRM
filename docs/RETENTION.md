@@ -9,6 +9,10 @@ customer's contacts because a counter expired is indistinguishable from data
 loss. Anything a customer typed is removed only when they ask, or under a
 published policy they have agreed to.
 
+The published, customer-facing version of this is section 8 of the privacy
+notice; the decisions behind that wording are recorded in
+`docs/COMMERCIAL-POLICIES.md`.
+
 Status column meanings:
 
 - **ENFORCED** — code does this today, on the sweep run by `/api/cron/jobs?sweep=1`
@@ -102,6 +106,12 @@ of them:
 | Sessions & tokens | 30 days past expiry |
 | Operational logs | 90 days |
 | Backups | 7–30 days of point-in-time recovery |
+
+**The actual window today is 6 hours**, not 7–30 days: Neon's free-plan history
+retention, confirmed in the console and recorded in docs/NEON-RECOVERY-DRILL.md.
+The row above is a recommendation, and the gap between it and reality is the
+point — data destroyed on a Friday and noticed on Monday cannot be recovered at
+the database level. A paid Neon plan is what closes it.
 
 **Backups are the exception nobody expects.** Deleting a record from the live
 database does not remove it from backups taken before the deletion. It ages out

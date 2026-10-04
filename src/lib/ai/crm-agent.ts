@@ -1,10 +1,10 @@
 import "server-only";
 
 import { db } from "@/lib/db";
-import { getProviderForWorkspace } from "@/lib/ai/provider";
+import { getProviderForWorkspace, isModelBacked } from "@/lib/ai/provider";
 import { SYSTEM_PROMPTS, withContext } from "@/lib/ai/prompts";
 import { buildRecordContext, buildWorkspaceSnapshot, type ContextScope } from "@/lib/ai/context";
-import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
+import { reserveAiOrThrow } from "@/lib/entitlements";
 import type { Actor } from "@/lib/auth/access";
 import type { AiMessage } from "@/lib/ai/provider";
 import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
@@ -29,8 +29,6 @@ export type AgentRequest = {
 };
 
 export async function* askTinyAi(request: AgentRequest): AsyncIterable<string> {
-  await assertWithinLimit(request.actor, "aiRequestsPerMonth");
-
   const context = request.focus
     ? await buildRecordContext(request.scope, request.focus.type, request.focus.id)
     : await buildWorkspaceSnapshot(request.scope, { limit: 14 });
@@ -50,6 +48,25 @@ export async function* askTinyAi(request: AgentRequest): AsyncIterable<string> {
     { role: "user", content: withContext(request.question, context?.text ?? "No records in scope.") },
   ];
 
+  /**
+   * The allowance is claimed here: after the provider is known, before the first
+   * token is yielded.
+   *
+   * **After**, because only a paid provider spends it. The built-in engine is a
+   * local computation over scores this application already has; charging it
+   * against a monthly quota spent an allowance nobody was billed for, and the
+   * exhaustion then removed Home and the record panels for a user whose usage
+   * had cost nothing. src/lib/ai/summaries.ts already drew this distinction and
+   * this path did not.
+   *
+   * **Before the first yield**, because a generator that has started streaming
+   * cannot cleanly refuse: the route has already committed a 200 and a body.
+   * Throwing here reaches the caller before any of that.
+   */
+  if (isModelBacked(provider)) {
+    await reserveAiOrThrow(request.actor);
+  }
+
   let full = "";
   for await (const chunk of provider.stream({
     purpose: "agent",
@@ -61,8 +78,6 @@ export async function* askTinyAi(request: AgentRequest): AsyncIterable<string> {
     full += chunk;
     yield chunk;
   }
-
-  await recordUsage(request.actor.identity.id, "ai_requests");
 
   if (request.threadId) {
     // Scoped individually rather than by wrapping the generator: a generator
