@@ -219,8 +219,15 @@ export default function PrivacyPage() {
         </p>
         <p>
           Whether international transfer terms are required for your jurisdiction is{" "}
-          <NeedsDetail>for legal review</NeedsDetail>. Whether a data processing agreement is
-          offered, and on what terms, is <NeedsDetail>a business decision</NeedsDetail>.
+          <NeedsDetail>for legal review</NeedsDetail>.
+        </p>
+        <p>
+          <strong>We do not currently offer a data processing agreement.</strong> If you need one,
+          write to{" "}
+          <a href="mailto:privacy@tinycrm.biz" className="text-brand-600 hover:underline dark:text-brand-400">
+            privacy@tinycrm.biz
+          </a>{" "}
+          and we will tell you where that stands rather than sending a template.
         </p>
       </Section>
 
@@ -263,11 +270,28 @@ export default function PrivacyPage() {
           Only requests that actually reach a paid model count against your monthly allowance. The
           built-in engine is unmetered on every plan, including Free.
         </p>
+        {/*
+          Previously marked "for legal review" in full. The factual half is published
+          by the provider and is quoted here; only the contractual half is a vendor
+          question. Anthropic's commercial retention policy states that "we
+          automatically delete inputs and outputs on our backend within 30 days of
+          receipt or generation", with exceptions for services whose retention the
+          customer controls, custom agreements such as zero data retention, Usage
+          Policy enforcement and legal compliance. Their API data-retention page
+          states that "Retained data is never used for model training without your
+          express permission", and that flagged content may be retained up to 2 years.
+        */}
         <p>
-          <strong>We make no claim that the AI provider retains nothing.</strong> Whether prompts are
-          retained, and for how long, is governed by our contract with that provider. If that matters
-          to you, set the workspace to <em>Disabled</em> — the deterministic features are unaffected.
-          The exact retention position is <NeedsDetail>for legal review</NeedsDetail>.
+          <strong>We hold no zero-retention agreement with the AI provider.</strong> Under the
+          provider&apos;s published policy, prompts and responses are deleted from their systems
+          within <strong>30 days</strong> of being received or generated, and retained data is not
+          used to train models without express permission. Content their automated safety systems
+          flag can be kept longer — up to two years. If that matters to you, set the workspace to{" "}
+          <em>Disabled</em>: nothing is transmitted and every deterministic feature keeps working.
+        </p>
+        <p>
+          Those are the provider&apos;s published terms rather than a commitment we are making on
+          their behalf, and we have not negotiated anything different.
         </p>
       </Section>
 
@@ -358,10 +382,28 @@ export default function PrivacyPage() {
         </p>
         <p>
           <strong>That number is a recovery window, not a deletion guarantee.</strong> It does not
-          mean data is erased six hours after you delete it, and nothing here should be read as a
-          claim that every copy of a deleted record is gone by then. What the provider keeps in its
-          own storage layers beyond the recovery window is{" "}
-          <NeedsDetail>not established by the recovery window, and not yet confirmed</NeedsDetail>.
+          mean data is erased six hours after you delete it.
+        </p>
+        {/*
+          Verified from Neon's published security overview, which states that
+          "Customer data backups are stored in cloud object storage, such as Amazon
+          S3 and Azure Blob Storage, with versioning enabled, allowing recovery from
+          accidental deletions or modifications", and that this data "is encrypted
+          using server-side encryption (SSE) and is retained for 30 days".
+
+          That 30 days is the provider's own backup retention and is a different
+          number from our 6-hour history window. Both are stated, because the honest
+          consequence is the one a reader would otherwise get wrong: a record you
+          delete can persist in the provider's backups for up to 30 days even though
+          we can only restore the database to a point within the last 6 hours.
+        */}
+        <p>
+          Separately from that window, our database provider keeps its own encrypted backups in
+          cloud object storage and <strong>retains them for 30 days</strong>. So a record you delete
+          is removed from the live database immediately, and can still exist in the provider&apos;s
+          backups for up to 30 days afterwards, until it ages out. We cannot reach into those
+          backups to remove an individual record, and no erasure commitment we make can be faster
+          than that window.
         </p>
         <p>
           Recovery at the <em>application</em> level is deliberately longer, and is what you would

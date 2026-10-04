@@ -157,9 +157,28 @@ export default function TermsPage() {
           <li>Probe, scan or load-test the service without written permission.</li>
           <li>Resell or sublicense the service without an agreement with us.</li>
         </ul>
+        {/*
+          Approved wording, not a placeholder. Two things keep it honest about what
+          the product can actually do: `deactivatedAt` is enforced on every request
+          — login, session context, password reset and email verification — so a
+          suspension takes effect immediately even against a valid session token;
+          but nothing in src/ or scripts/ writes it, so suspending is a manual
+          operation and the notice below is an email sent by hand. Neither is
+          described here as automatic, and nothing promises a timescale the one
+          operator cannot meet.
+        */}
         <p>
-          We may suspend an account that puts the service or other customers at risk. Notice periods
-          and any appeal route are <NeedsDetail>a business decision</NeedsDetail>.
+          <strong>Suspension.</strong> If an account puts the service or other customers at risk —
+          through abuse, an attempt to reach another account or workspace, or anything unlawful — we
+          may suspend it <strong>immediately and without advance notice</strong>. We will email the
+          account address explaining the reason, where we are legally permitted to say.
+        </p>
+        <p>
+          <strong>Appeals.</strong> Write to{" "}
+          <a href="mailto:privacy@tinycrm.biz" className="text-brand-600 hover:underline dark:text-brand-400">
+            privacy@tinycrm.biz
+          </a>. We aim to respond within five business days. Suspension is not deletion: your records
+          are not removed, and a suspension that we got wrong is reversible.
         </p>
       </Section>
 
