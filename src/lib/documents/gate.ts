@@ -88,6 +88,90 @@ export async function requireDocumentIntelligence(workspaceId: string): Promise<
   for (const flag of DOCUMENT_INTELLIGENCE_FLAGS) {
     await requireFlag(flag, workspaceId);
   }
+  await requireDocumentQaEntitlement(workspaceId);
+}
+
+/**
+ * The fourth gate: is this workspace's owner on a plan that includes document
+ * question answering?
+ *
+ * Separate from the three flags because it answers a different question. A flag
+ * says "is this capability built and rolled out here"; the plan says "has this
+ * account paid for it". Conflating them would mean either selling something that
+ * is still dark, or handing a paid capability to every workspace the moment the
+ * flag flips — and the flag is an operator rollout control that gets flipped for
+ * one workspace at a time.
+ *
+ * Read from the **workspace owner's** plan, like seats, because the capability
+ * belongs to the workspace and the owner is who pays for it. Reading the
+ * caller's plan instead would let a Free member of a Pro workspace be refused,
+ * and a Pro member of a Free workspace succeed.
+ */
+export async function requireDocumentQaEntitlement(workspaceId: string): Promise<void> {
+  if (await documentQaEntitled(workspaceId)) return;
+  throw new AppError(
+    "plan_limit",
+    "Asking questions about documents is a Pro feature. Everything already uploaded stays " +
+      "where it is, and you can still download it.",
+  );
+}
+
+/**
+ * Whether document question answering may be *advertised* yet.
+ *
+ * Deliberately the only place outside this module that resolves `documentAi` for
+ * copy, so the tripwire in tests/security/document-flag-context.test.ts keeps
+ * holding: one reader, one set of reasons.
+ *
+ * Read **globally**, with no workspace, and that is the whole point. The pricing
+ * page is public and has no workspace; the billing page describes an
+ * account-level plan. A workspace-scoped read would be wrong here in both
+ * directions — it would let one workspace's override change what everyone is
+ * promised, and a public page must not be able to read a tenant's flag row at
+ * all. Because it is global there is no workspace override to be silently
+ * filtered by RLS, which is the hazard the rest of this module exists to prevent,
+ * so this is the one flag read that needs no tenant context.
+ *
+ * Advertising and enabling move together: the same switch that turns the
+ * capability on is the one that starts promising it.
+ */
+export async function documentQaAdvertised(): Promise<boolean> {
+  return isEnabled("documentAi", null);
+}
+
+/**
+ * The flags whose gated pricing copy may be shown right now.
+ *
+ * Returned as a list so a pricing surface never has to name a flag itself — it
+ * passes this straight to `advertisedFeatures`. That keeps the tripwire above
+ * meaningful: exactly one module in the codebase names `documentAi`, and it is
+ * the one that explains what reading it safely requires.
+ */
+export async function advertisedFlags(): Promise<string[]> {
+  const flags: string[] = [];
+  if (await documentQaAdvertised()) flags.push("documentAi");
+  return flags;
+}
+
+/** The plan half of the document-QA gate, as a question. */
+export async function documentQaEntitled(workspaceId: string): Promise<boolean> {
+  const { db } = await import("@/lib/db");
+  const { planGrants } = await import("@/lib/plans");
+
+  // `Workspace` is under row-level security, so this read needs the workspace in
+  // context. Every caller is already inside one — assertTenantContext above has
+  // just insisted on it — so this does not open its own: a gate that establishes
+  // its own authority is not a gate.
+  const workspace = await db.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { owner: { select: { plan: true } } },
+  });
+
+  // A workspace that is not visible from this context is not entitled. Failing
+  // closed is right here: the alternative is granting a paid capability because a
+  // read came back empty.
+  if (!workspace) return false;
+  return planGrants(workspace.owner.plan, "documentQa");
 }
 
 /**
@@ -100,5 +184,5 @@ export async function documentIntelligenceEnabled(workspaceId: string): Promise<
   for (const flag of DOCUMENT_INTELLIGENCE_FLAGS) {
     if (!(await isEnabled(flag, workspaceId))) return false;
   }
-  return true;
+  return documentQaEntitled(workspaceId);
 }

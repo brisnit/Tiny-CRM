@@ -5,6 +5,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { rootDb } from "@/lib/db";
 import { isPostgres } from "@/lib/env";
 import { log } from "@/lib/logger";
+import { assertSeatAvailable } from "@/lib/billing/seats";
 import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
 import { resolveAnchors, describeAnchors } from "@/lib/auth/anchors";
 import { parseStoredScope, scopeModeError, scopeModeSchema } from "@/lib/validation/scope";
@@ -107,6 +108,13 @@ export type IssueInput = {
  * Runs inside the workspace's tenant context, so RLS gates the write.
  */
 export async function issueInvitation(input: IssueInput): Promise<IssuedInvitation> {
+  // Seats are the one per-workspace limit, governed by the workspace owner's
+  // plan. Checked here so the refusal reaches the person filling in the invite
+  // form; the authoritative check is at acceptance, where the member row is
+  // actually created. Outstanding invitations count towards the ceiling here —
+  // see assertSeatAvailable for why they must not at acceptance.
+  await assertSeatAvailable(input.workspaceId, { countPending: true });
+
   const token = randomBytes(32).toString("base64url");
   const tokenHash = hashInvitationToken(token);
   const email = normaliseEmail(input.email);
@@ -414,6 +422,18 @@ async function grantMembership(
         where: { workspaceId: invitation.workspaceId, userId: user.id },
         select: { id: true },
       });
+
+      // The seat check that matters. An invitation can be issued, forwarded and
+      // accepted much later, by which time the workspace may be full or its
+      // owner may have downgraded — so the count at issue time proves nothing
+      // about the count now.
+      //
+      // Skipped when the membership already exists: re-accepting an invitation
+      // for someone already in the workspace consumes no new seat, and refusing
+      // it would strand a person who clicked an old link twice.
+      if (!existing) {
+        await assertSeatAvailable(invitation.workspaceId);
+      }
 
       // The membership is created *before* the invitation is stamped, and the
       // order is not cosmetic. `member_bootstrap_self_only` admits this INSERT

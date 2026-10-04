@@ -354,7 +354,10 @@ curl -sI https://your-domain/deals   # expect 307 -> /login
 | `SENTRY_DSN` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `LOG_DRAIN_URL` | Recommended | Without any, exceptions go to logs only |
 | `AI_ENTERPRISE_AGREEMENT` | Only if true | Never inferred. "Private model only" workspaces fail closed until set |
 | `REQUIRE_MALWARE_SCAN` | If uploads are enabled | Fails uploads closed until a scanner exists |
-| `BILLING_WEBHOOK_SECRET` | If selling plans | Without it, no plan change can be applied |
+| `BILLING_WEBHOOK_SECRET` | If selling plans | Without it, no plan change can be applied by the generic webhook |
+| `STRIPE_SECRET_KEY` | If selling plans | Absent → checkout and the portal are unavailable and the UI says so. A **live** key on a Preview deployment is a boot failure |
+| `STRIPE_WEBHOOK_SECRET` | With `STRIPE_SECRET_KEY` | Boot fails if the key is set without it: an unverified endpoint must not grant paid access |
+| `STRIPE_PRICE_PLUS` / `STRIPE_PRICE_PRO` | With a live key | From `node scripts/stripe-sync-prices.mjs`. Mode-specific; a live price id is invisible to a test key |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | If AI is enabled | Absent → the offline engine; no CRM content leaves the deployment |
 | `AI_PROVIDER` | No | `anthropic` (default) \| `openai` \| `offline` |
 | `DATABASE_POOL_MAX` | No | Default 10 per instance |

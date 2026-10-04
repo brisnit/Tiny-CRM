@@ -46,6 +46,12 @@ async function owner(label: string) {
       passwordHash: await bcrypt.hash(PASSWORD, 4),
       emailVerifiedAt: new Date(),
       onboardedAt: new Date(),
+      // Seats are enforced per workspace from the OWNER's plan, and Free allows
+      // exactly one person — which the owner already occupies, so every invitation
+      // in this file would be refused on a default account. These tests are about
+      // the invitation lifecycle in a browser, not about the seat ceiling; that has
+      // its own coverage in tests/integration/seats.test.ts.
+      plan: "pro",
     },
     select: { id: true },
   });

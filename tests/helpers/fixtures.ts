@@ -90,7 +90,24 @@ async function withFixtureContext<T>(
   }, { timeout: 30_000 });
 }
 
-export async function createTenant(label: string): Promise<Tenant> {
+/**
+ * Options for a tenant fixture.
+ *
+ * `plan` sets the **owner's** plan, which is what governs the two per-workspace
+ * entitlements: seats, and whether documents may be read. Both are genuinely
+ * plan-gated now, so a suite exercising invitations or document intelligence has
+ * to say which plan it is testing on rather than inheriting Free and asserting
+ * against a refusal it did not intend.
+ *
+ * Defaults to `free`, so a suite that does not care still exercises the tightest
+ * limits — which is the right default for a limit.
+ */
+export type TenantOptions = {
+  plan?: "free" | "plus" | "pro" | "legacy_pro" | "legacy_lifetime";
+};
+
+export async function createTenant(label: string, options: TenantOptions = {}): Promise<Tenant> {
+  const plan = options.plan ?? "free";
   const password = await bcrypt.hash("correct-horse-battery", 4);
 
   // Verified by default: an unverified account cannot export, invite or connect
@@ -102,6 +119,9 @@ export async function createTenant(label: string): Promise<Tenant> {
     data: {
       email: `${unique(`${label}-owner`)}@test.local`, name: `${label} Owner`,
       passwordHash: password, emailVerifiedAt: verified,
+      // The owner's plan governs seats and document-reading for every workspace
+      // they own.
+      plan,
     },
   });
   const member = await db.user.create({

@@ -61,6 +61,12 @@ describe("client bundle", () => {
     const forbidden = [
       "AUTH_SECRET", "DATABASE_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
       "BILLING_WEBHOOK_SECRET", "RATE_LIMIT_REDIS_URL", "TINYCRM_TEST_IDENTITY",
+      // Stripe is server-side in full. Hosted Checkout and the Customer Portal
+      // are server-created redirects, so there is no publishable key and no
+      // Stripe.js — a reference to any of these in a client module means the
+      // integration has been rebuilt the wrong way round.
+      "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
+      "STRIPE_PRICE_PLUS", "STRIPE_PRICE_PRO",
     ];
 
     for (const file of clientModules) {

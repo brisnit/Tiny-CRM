@@ -6,8 +6,8 @@ import { db } from "@/lib/db";
 import { getProvider, getProviderForWorkspace } from "@/lib/ai/provider";
 import { SYSTEM_PROMPTS, withContext } from "@/lib/ai/prompts";
 import { buildRecordContext, buildWorkspaceSnapshot, type ContextScope } from "@/lib/ai/context";
-import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
-import { PlanLimitError } from "@/lib/plans";
+import { reserveAiOrThrow } from "@/lib/entitlements";
+import { AiAllowanceError, PlanLimitError } from "@/lib/plans";
 import { log } from "@/lib/logger";
 import type { Actor } from "@/lib/auth/access";
 import { withTenantContext } from "@/lib/tenant-db";
@@ -48,9 +48,13 @@ const AI_TIMEOUT_MS = 12_000;
 type Degraded = { body: string; cached: false; model: null; generatedAt: Date; degraded: true };
 
 function degrade(error: unknown): Degraded {
+  // The allowance case is separated from every other failure because the user
+  // can act on it and nothing is broken: built-in insights still work and the
+  // allowance refills. AiAllowanceError is what reserveAiOrThrow raises;
+  // PlanLimitError is kept for any other limit that reaches here.
   const body =
-    error instanceof PlanLimitError
-      ? "Tiny AI has used this month's allowance on your plan, so there is no fresh summary right now. Nothing else on this page is affected."
+    error instanceof AiAllowanceError || error instanceof PlanLimitError
+      ? "Tiny AI has used this month's model allowance on your plan, so there is no fresh summary right now. Built-in insights are unaffected, and the allowance resets on the 1st."
       : "Tiny AI could not write a summary just now. Everything else on this page is up to date.";
   return { body, cached: false, model: null, generatedAt: new Date(), degraded: true };
 }
@@ -109,7 +113,7 @@ export async function getRecordSummary(
       // over: it exhausted an allowance nobody was billed for, and then the
       // exhaustion took the page down.
       const metered = provider.id !== "offline";
-      if (metered) await assertWithinLimit(actor, "aiRequestsPerMonth");
+      if (metered) await reserveAiOrThrow(actor);
 
       const result = await withTimeout(
         provider.complete({
@@ -122,7 +126,6 @@ export async function getRecordSummary(
         AI_TIMEOUT_MS,
       );
 
-      if (metered) await recordUsage(actor.identity.id, "ai_requests");
 
       const workspaceId = options.workspaceId || (await resolveWorkspaceId(entityType, entityId));
       if (!workspaceId) return { body: result.text, cached: false, model: result.model, generatedAt: new Date() };
@@ -147,7 +150,7 @@ export async function getRecordSummary(
       if (options.surfaceErrors) throw error;
       log.warn("record summary unavailable", {
         entityType,
-        reason: error instanceof PlanLimitError ? "plan_limit" : "error",
+        reason: error instanceof AiAllowanceError ? "ai_allowance" : error instanceof PlanLimitError ? "plan_limit" : "error",
       });
       return degrade(error);
     }
@@ -202,7 +205,7 @@ export async function getDailyBrief(
     try {
       // See getRecordSummary: the local engine is not a metered request.
       const metered = provider.id !== "offline";
-      if (metered) await assertWithinLimit(actor, "aiRequestsPerMonth");
+      if (metered) await reserveAiOrThrow(actor);
 
       const result = await withTimeout(
         provider.complete({
@@ -223,7 +226,6 @@ export async function getDailyBrief(
         AI_TIMEOUT_MS,
       );
 
-      if (metered) await recordUsage(actor.identity.id, "ai_requests");
 
       const workspaceId = scope.workspaceIds[0];
       if (workspaceId) {
@@ -256,7 +258,7 @@ export async function getDailyBrief(
       // /home is the screen a signed-in person lands on. It renders without a
       // brief far more gracefully than it renders a 500.
       log.warn("daily brief unavailable", {
-        reason: error instanceof PlanLimitError ? "plan_limit" : "error",
+        reason: error instanceof AiAllowanceError ? "ai_allowance" : error instanceof PlanLimitError ? "plan_limit" : "error",
       });
       return degrade(error);
     }

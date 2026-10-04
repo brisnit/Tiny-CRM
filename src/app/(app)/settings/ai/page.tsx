@@ -6,7 +6,8 @@ import { Progress } from "@/components/ui/controls";
 import { requireActor } from "@/lib/auth/access";
 import { getPlanUsage } from "@/lib/entitlements";
 import { describeProvider, isModelBacked } from "@/lib/ai/provider";
-import { planFor, UNLIMITED } from "@/lib/plans";
+import { currentPeriod } from "@/lib/dates";
+import { UNLIMITED, aiAllowanceFor, planFor } from "@/lib/plans";
 
 export const metadata = { title: "Tiny AI" };
 
@@ -28,7 +29,10 @@ export default async function AiSettings() {
   const modelBacked = isModelBacked();
   const plan = planFor(actor.identity.plan);
 
-  const limit = plan.limits.aiRequestsPerMonth;
+  // Effective, not standing: during the pricing cutover period a Free account is
+  // enforced against the old allowance, and this gauge must show the same number
+  // the reservation path will use.
+  const limit = aiAllowanceFor(plan, currentPeriod());
   const pct = limit === UNLIMITED ? 0 : Math.min(100, Math.round((usage.aiRequestsPerMonth / limit) * 100));
 
   return (
@@ -56,8 +60,9 @@ export default async function AiSettings() {
           </p>
           {modelBacked ? (
             <p className="text-[12.5px] leading-relaxed text-muted">
-              Requests go to your own API account, so there is no AI surcharge on your subscription. Context is
-              scoped to the workspaces you can see and capped before it is sent.
+              Model answers count against your monthly plan allowance; built-in insights never do. Context is
+              scoped to the workspaces you can see and capped before it is sent, so a request cannot grow
+              without bound.
             </p>
           ) : (
             <>

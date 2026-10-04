@@ -15,7 +15,7 @@ import {
   requireActor, requireRecordAccess, requireWorkspaceAccess,
   type Actor, type ScopedModel, type WorkspaceActor, restrictedIdsFor } from "@/lib/auth/access";
 import type { Permission } from "@/lib/auth/permissions";
-import { PlanLimitError } from "@/lib/plans";
+import { AiAllowanceError, PlanLimitError } from "@/lib/plans";
 import type { Prisma } from "@/generated/prisma/client";
 
 /**
@@ -184,6 +184,19 @@ async function execute<T>(run: () => Promise<T>): Promise<ActionResult<T>> {
 
 /** Converts anything thrown into a safe, categorised, logged result. */
 function failure<T>(raw: unknown, requestId: string, started: number): ActionResult<T> {
+  // A spent AI allowance is a product outcome too, and a distinct one: nothing
+  // is over capacity, a monthly allowance ran out, and the deterministic engine
+  // still answers. Given its own category so the UI can offer the right thing.
+  if (raw instanceof AiAllowanceError) {
+    return {
+      ok: false,
+      error: raw.message,
+      category: "ai_allowance",
+      requestId,
+      meta: { limit: raw.limit, plan: raw.plan },
+    };
+  }
+
   // Plan limits are a product outcome, not a failure — their message is useful.
   if (raw instanceof PlanLimitError) {
     return {

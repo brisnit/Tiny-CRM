@@ -130,7 +130,10 @@ async function setGate(key: string, enabled: boolean) {
 }
 
 before(async () => {
-  A = await createTenant("DocIngest");
+  // Document intelligence is a Pro capability as well as a flagged one: the
+  // flag says whether it is built and rolled out here, the plan says whether
+  // the account paid for it. Both must pass, so this fixture is on Pro.
+  A = await createTenant("DocIngest", { plan: "pro" });
 });
 
 after(async () => {

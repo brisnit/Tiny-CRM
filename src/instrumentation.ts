@@ -13,11 +13,16 @@ export async function register() {
   // Only the Node runtime can read the full environment or reach the database.
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
-  const { assertProductionEnv, productionWarnings, env, isProduction } = await import("@/lib/env");
+  const {
+    assertProductionEnv, assertStripeEnvironment, productionWarnings, env, isProduction, stripeMode,
+  } = await import("@/lib/env");
   const { log } = await import("@/lib/logger");
 
   try {
     assertProductionEnv();
+    // Runs in every environment, unlike the gate above. The case it guards is a
+    // live payment credential on a preview deployment.
+    assertStripeEnvironment();
   } catch (error) {
     // Printed rather than logged: the logger's own configuration may be part of
     // what is wrong, and this must be legible in a deploy log.
@@ -29,6 +34,35 @@ export async function register() {
     log.warn("configuration warning", { warning });
   }
 
+  // The pricing cutover grandfather is deliberately temporary: it raises Free's
+  // AI allowance back to its pre-release figure for one usage period, so a
+  // mid-month release cannot refuse an account for requests it made under the
+  // old published ceiling. Being temporary, it must not rot unnoticed — a
+  // constant that no longer matches the calendar is reported here rather than
+  // discovered later from a support question.
+  {
+    const { PRICING_CUTOVER_PERIOD, PRE_STRIPE_FREE_AI_ALLOWANCE, PLANS } =
+      await import("@/lib/plans");
+    const { currentPeriod } = await import("@/lib/dates");
+    const now = currentPeriod();
+    if (PRICING_CUTOVER_PERIOD !== null && PRICING_CUTOVER_PERIOD < now) {
+      log.warn("configuration warning", {
+        warning:
+          `PRICING_CUTOVER_PERIOD is ${PRICING_CUTOVER_PERIOD}, before the current period ` +
+          `${now}. The Free AI grandfather has expired on its own and affects nothing; ` +
+          `the constant can be deleted.`,
+      });
+    } else if (PRICING_CUTOVER_PERIOD !== null && PRICING_CUTOVER_PERIOD > now) {
+      log.warn("configuration warning", {
+        warning:
+          `PRICING_CUTOVER_PERIOD is ${PRICING_CUTOVER_PERIOD}, a future period. Free ` +
+          `accounts are on the new allowance of ${PLANS.free.limits.aiRequestsPerMonth} ` +
+          `now, not ${PRE_STRIPE_FREE_AI_ALLOWANCE}. If the release ships this month, ` +
+          `set it to ${now}.`,
+      });
+    }
+  }
+
   log.info("tiny crm starting", {
     env: env.nodeEnv,
     release: env.release,
@@ -36,28 +70,32 @@ export async function register() {
     aiProvider: env.aiProvider,
     demoAuth: env.allowDemoAuth,
     /**
-     * TEMPORARY DIAGNOSTIC — remove once the provider question is settled.
+     * Whether a usable Anthropic credential reached this runtime.
      *
-     * Production resolves `providerProfile()` to `offline` even though
-     * ANTHROPIC_API_KEY is configured in Vercel and appears in this
-     * deployment's own environment manifest. Everything observable from
-     * outside — the Vercel API, the CLI, deployment metadata, runtime logs and
-     * the source — has been exhausted without separating three possibilities:
-     * the stored value is blank, the value arrives and our resolution is wrong,
-     * or the platform manifests the name without delivering it.
+     * Kept after the diagnostic it began as, because it answered a question that
+     * cost a release to ask: production manifested ANTHROPIC_API_KEY but
+     * delivered an empty value, so the provider resolved to the built-in engine
+     * and a document answer arrived with correct citations and wrong content.
+     * One boolean on the boot line is what distinguishes "no key configured"
+     * from "key configured but blank" without another deploy.
      *
-     * Two booleans separate them, and reveal nothing else. Not the value, not a
-     * prefix or suffix, not a length, not a hash, not a character class —
-     * nothing from which any part of the secret could be recovered.
-     *
-     * The names deliberately avoid "key" and "apiKey": `redact()` in
-     * src/lib/logger.ts scrubs fields matching /api[-_]?key/i, which would
-     * replace these with "[redacted]" and waste the deployment. That is not
-     * hypothetical — it is exactly what happened to the `passages` field, which
-     * matched /pass(word|hash)?/ and reported "[redacted]" in production.
+     * Reveals nothing recoverable: not the value, a prefix, a suffix, a length, a
+     * hash or a character class. The field name deliberately avoids "key" and
+     * "apiKey" because `redact()` in src/lib/logger.ts scrubs
+     * /api[-_]?key/i and would replace it with "[redacted]".
      */
-    anthropicConfigured: "ANTHROPIC_API_KEY" in process.env,
-    anthropicNonEmpty: (process.env.ANTHROPIC_API_KEY ?? "").trim().length > 0,
+    anthropicUsable: (process.env.ANTHROPIC_API_KEY ?? "").trim().length > 0,
+    /**
+     * Which Stripe mode this deployment can transact in: "test", "live", or null
+     * when billing is not configured. Derived from the key prefix, never from a
+     * separate variable that could disagree with it.
+     */
+    stripe: stripeMode() ?? "unconfigured",
+    /**
+     * Which usage period, if any, still enforces the pre-release Free AI
+     * allowance. "off" once the grandfather is gone, which is the steady state.
+     */
+    aiCutover: (await import("@/lib/plans")).PRICING_CUTOVER_PERIOD ?? "off",
   });
 
   const { reportObservabilityStatus } = await import("@/lib/observability");

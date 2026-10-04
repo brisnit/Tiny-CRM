@@ -148,13 +148,19 @@ describe("AI failures degrade instead of breaking the page", () => {
     for (const fn of ["getRecordSummary", "getDailyBrief"]) {
       const body = source.slice(source.indexOf(`export async function ${fn}`));
       const providerAt = body.search(/const provider = /);
-      const assertAt = body.search(/assertWithinLimit\(/);
-      assert.ok(providerAt > -1 && assertAt > -1, `${fn}: could not locate provider/limit lines`);
+      // `reserveAiRequest` replaced the read-then-write `assertWithinLimit` /
+      // `recordUsage` pair: the check and the increment are now one atomic
+      // statement, because two concurrent requests could both pass a read-only
+      // check and both call a paid API. The ordering property this test asserts
+      // is unchanged — the provider must be chosen first, so the built-in engine
+      // is never charged.
+      const reserveAt = body.search(/reserveAiOrThrow\(/);
+      assert.ok(providerAt > -1 && reserveAt > -1, `${fn}: could not locate provider/reservation lines`);
       assert.ok(
-        providerAt < assertAt,
-        `${fn} checks the allowance before choosing a provider, so the offline engine is charged`,
+        providerAt < reserveAt,
+        `${fn} claims the allowance before choosing a provider, so the offline engine is charged`,
       );
-      assert.match(body.slice(0, assertAt + 400), /metered/, `${fn} does not gate the allowance on a metered provider`);
+      assert.match(body.slice(0, reserveAt + 400), /metered/, `${fn} does not gate the allowance on a metered provider`);
     }
   });
 

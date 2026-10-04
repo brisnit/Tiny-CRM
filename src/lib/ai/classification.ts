@@ -4,7 +4,7 @@ import { contains, db } from "@/lib/db";
 import { getProvider, isModelBacked } from "@/lib/ai/provider";
 import { SYSTEM_PROMPTS, withContext } from "@/lib/ai/prompts";
 import { parseJson } from "@/lib/json";
-import { assertWithinLimit, recordUsage } from "@/lib/entitlements";
+import { reserveAiOrThrow } from "@/lib/entitlements";
 import { restrictedIdsFor, type Actor } from "@/lib/auth/access";
 import { withTenantContext } from "@/lib/tenant-db";
 
@@ -170,7 +170,10 @@ export async function classifyText(
 }
 
 async function extractWithModel(actor: Actor, text: string): Promise<RawExtraction> {
-  await assertWithinLimit(actor, "aiRequestsPerMonth");
+  // Reached only when the caller has already established that a model-backed
+  // provider may be used (see the `mayTransmit && isModelBacked()` gate above),
+  // so every call through here is a paid one and claims the allowance.
+  await reserveAiOrThrow(actor);
   const provider = getProvider();
   const result = await provider.complete({
     purpose: "classification",
@@ -192,7 +195,6 @@ async function extractWithModel(actor: Actor, text: string): Promise<RawExtracti
       },
     ],
   });
-  await recordUsage(actor.identity.id, "ai_requests");
 
   // Models occasionally wrap JSON in a fence despite instructions.
   const cleaned = result.text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();

@@ -40,6 +40,14 @@ const ALLOWED: Record<string, string> = {
   "src/lib/workspaces/provision.ts":
     "bootstrap: no grants exist, and the membership that would carry a scope is being created",
 
+  // --- Billing counts, which are properties of a workspace -----------------
+  "src/lib/billing/seats.ts":
+    "seatUsage counts members and outstanding invitations against the OWNER's " +
+    "plan. Counting only what a restricted member can see would under-report and " +
+    "let them invite past the ceiling, so a check whose job is to say no would " +
+    "start saying yes. No row is returned to a caller — these are counts. Same " +
+    "deliberate choice as getPlanUsage in src/lib/entitlements.ts",
+
   // --- Person-scoped AI storage --------------------------------------------
   "src/lib/ai/crm-agent.ts": "AiThread and AiMessage are person-scoped by S7, not record-scoped",
 

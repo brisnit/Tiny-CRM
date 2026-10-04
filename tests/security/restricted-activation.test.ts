@@ -87,6 +87,34 @@ async function issueRestricted(options: {
   return issued.token;
 }
 
+/**
+ * Frees seats taken by earlier tests in this file.
+ *
+ * Seats are enforced per workspace from the owner's plan, and this file accepts a
+ * fresh invitation in most of its tests — so by the end it holds more members
+ * than any sold plan permits. This is **opt-in rather than a `beforeEach`** on
+ * purpose: several describe blocks activate a restricted member once and then
+ * assert their reach across the following tests, so clearing memberships between
+ * every test breaks the sequences the suite is built on. Only the tests that
+ * actually run out of room call it.
+ *
+ * Removes the per-test strays minted by makeUser() and keeps everything the suite
+ * shares: the fixture's three members plus `invitee` and `secondInvitee`.
+ */
+async function freeSeats(workspace: Tenant = A) {
+  await observer.workspaceMember.deleteMany({
+    where: {
+      workspaceId: workspace.workspaceId,
+      userId: {
+        notIn: [
+          workspace.ownerId, workspace.memberId, workspace.viewerId,
+          invitee.id, secondInvitee.id,
+        ],
+      },
+    },
+  });
+}
+
 /** Accepts through the real server action, as the invited person. */
 async function accept(token: string, userId: string) {
   const { acceptInvitation } = await import("../../src/lib/actions/team");
@@ -127,8 +155,12 @@ async function makeUser(label: string): Promise<{ id: string; email: string }> {
 }
 
 before(async () => {
-  A = await createTenant("ActivateAlpha");
-  B = await createTenant("ActivateBeta");
+  // Restricted invitations are still invitations, so they consume seats — and
+  // Free allows exactly one person. This suite is about record-level scope, not
+  // about the seat ceiling, so it runs on a plan with room; the ceiling has its
+  // own tests in tests/integration/seats.test.ts.
+  A = await createTenant("ActivateAlpha", { plan: "pro" });
+  B = await createTenant("ActivateBeta", { plan: "pro" });
 
   const ws = A.workspaceId;
   id.offeredOpp = (
@@ -199,6 +231,22 @@ beforeEach(async () => {
   for (const user of [A.ownerId, A.memberId, A.viewerId, invitee.id, secondInvitee.id, B.ownerId]) {
     await resetRateLimit("mutation", { user, workspace: A.workspaceId, global: user });
     await resetRateLimit("mutation", { user, workspace: user, global: user });
+  }
+
+  // Only *unaccepted* invitations are cleared here, and no memberships are
+  // touched. Outstanding invitations are what inflate the seat count when
+  // issuing, and a file that invites in almost every test accumulates them until
+  // even a generous ceiling refuses. Memberships must survive: several blocks
+  // activate a restricted member and then assert their reach across the tests
+  // that follow. The tests that genuinely run out of member room call
+  // `freeSeats()` explicitly.
+  //
+  // `observer`, not `db`: the fixture client is unscoped, whereas `db` is the
+  // RLS-aware proxy and would delete nothing outside a tenant context.
+  for (const workspace of [A, B]) {
+    await observer.workspaceInvitation.deleteMany({
+      where: { workspaceId: workspace.workspaceId, acceptedAt: null },
+    });
   }
 });
 
@@ -909,6 +957,8 @@ describe("what a grant outlives", () => {
   });
 
   test("a removed member who rejoins does not inherit their old access", pgOnly ?? {}, async () => {
+    // This test needs member room: the file has accumulated memberships by now.
+    await freeSeats();
     // The consequence of the previous test, through real paths end to end.
     // Someone leaves the company, is later re-invited to one new pursuit, and
     // silently regains everything they held before.
@@ -1432,6 +1482,8 @@ describe("two administrators at once", () => {
    */
 
   test("two simultaneous acceptances join once and grant once", pgOnly ?? {}, async () => {
+    // This test needs member room: the file has accumulated memberships by now.
+    await freeSeats();
     const user = await makeUser("race-accept");
     const token = await issueRestricted({
       email: user.email,
