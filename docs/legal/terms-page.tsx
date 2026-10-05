@@ -125,8 +125,34 @@ export default function TermsPage() {
         <p>
           If you were charged in error, contact us and we will refund it.
         </p>
+        {/*
+          Written from verified behaviour, not intent. An earlier proposal said tax
+          "is added at checkout and shown before you pay" — that was false. Our
+          `checkout.sessions.create` call in src/lib/billing/stripe.ts passes
+          neither `automatic_tax` nor any tax rate, and Stripe's reference makes
+          `automatic_tax` optional: a session created without it returns
+          `automatic_tax: { enabled: false }` and `amount_tax: 0`. The Dashboard's
+          automatic-tax setting governs Dashboard-created transactions, not
+          API-created sessions. Confirmed empirically by the first live purchase,
+          which charged exactly $10.00 with no tax line.
+
+          Separately, the account has no California tax registration, so even with
+          automatic tax enabled Stripe would calculate zero for a California
+          customer. Both paths lead to the same present fact: nothing is collected.
+
+          What remains a legal question is narrower than the old marker implied —
+          not "how is tax handled" but "is there a registration or collection
+          obligation anywhere", which is not ours to answer.
+        */}
         <p>
-          Any applicable sales tax or VAT handling is <NeedsDetail>for legal review</NeedsDetail>.
+          <strong>Prices are exclusive of tax, and no tax is currently added.</strong> We do not
+          calculate or collect sales tax or VAT at checkout today, so the amount you are charged is
+          the plan price shown — $10 or $20 a month. If that changes you will get the same notice as
+          any other pricing change: at least 30 days by email.
+        </p>
+        <p>
+          Whether we are required to register for, or collect, sales tax or VAT in any jurisdiction
+          is <NeedsDetail>for legal review</NeedsDetail>.
         </p>
       </Section>
 

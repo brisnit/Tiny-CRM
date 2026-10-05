@@ -160,23 +160,44 @@ jurisdictions, which can make the whole clause worth drafting differently.
 
 ---
 
-## 7. Sales tax and VAT — terms §4
+## 7. Sales tax and VAT — terms §4  *(rewritten against verified behaviour)*
 
-> Prices are stated exclusive of tax. Where we are required to charge sales tax,
-> VAT or an equivalent, it is added at checkout and shown before you pay.
+> **Prices are exclusive of tax, and no tax is currently added.** We do not
+> calculate or collect sales tax or VAT at checkout today, so the amount you are
+> charged is the plan price shown — $10 or $20 a month. If that changes you will
+> get the same notice as any other pricing change: at least 30 days by email.
 >
-> **[COUNSEL — obligations]** Whether we have a registration or collection
-> obligation anywhere, and from what threshold, is not addressed here.
+> Whether we are required to register for, or collect, sales tax or VAT in any
+> jurisdiction is **[COUNSEL]**.
 
-**Assumptions.** That Stripe Tax is not currently enabled. **This is the assumption
-most likely to be wrong by the time anyone reads this**, because enabling Stripe
-Tax is part of going live, and if it is enabled the clause should describe
-automatic calculation instead. Confirm against the live Stripe configuration
-before publishing.
+**No longer an assumption — verified.** The earlier draft of this clause said tax
+"is added at checkout and shown before you pay", and flagged "Stripe Tax is not
+enabled" as the assumption most likely to be falsified by going live. Going live
+falsified something else: the Dashboard *does* have automatic tax enabled for
+Dashboard-created transactions, but that setting does not reach API-created
+Checkout Sessions. Three independent confirmations:
 
-**Decision encoded.** Tax-exclusive pricing, shown before payment. The alternative
-— tax-inclusive — is a pricing decision as much as a legal one and would change
-what $10 and $20 mean.
+1. `createCheckoutSession` in `src/lib/billing/stripe.ts` passes neither
+   `automatic_tax` nor `tax_rates`/`default_tax_rates`.
+2. Stripe's Checkout Session reference marks `automatic_tax` **optional**, and a
+   session created without it returns `automatic_tax: { enabled: false }` with
+   `total_details.amount_tax: 0`. Opting in is explicit.
+3. The first live purchase charged exactly **$10.00**, with no tax line.
+
+And independently: the account has **no California tax registration**, so even with
+automatic tax enabled Stripe would calculate zero for a California customer. Both
+paths reach the same present fact — nothing is collected.
+
+So the clause now states the behaviour as fact, and the counsel marker is narrowed
+from "how is tax handled" to the only part that is genuinely legal: **is there a
+registration or collection obligation anywhere.**
+
+**Decision still encoded.** Tax-exclusive pricing. Tax-inclusive would be a pricing
+decision as much as a legal one and would change what $10 and $20 mean.
+
+**If automatic tax is ever enabled on our sessions, this clause becomes false** —
+it is written in the present tense on purpose, so the mismatch is visible rather
+than buried.
 
 ---
 
