@@ -195,10 +195,16 @@ async function main() {
     features,
     business_profile: {
       headline: "Tiny CRM — manage your subscription",
-      // Deliberately no privacy_policy_url or terms_of_service_url: Tiny CRM has
-      // no such pages yet, and pointing the portal at URLs that 404 is worse than
-      // omitting them. Stripe requires them before a live portal launch, so this
-      // is a prerequisite for go-live rather than an oversight.
+      // Deliberately no privacy_policy_url or terms_of_service_url: /privacy and
+      // /terms are held back and currently 404, and pointing the portal at a URL
+      // that 404s is worse than omitting it.
+      //
+      // An earlier version of this comment said Stripe requires both before a
+      // live portal launch, making it a go-live prerequisite. That is wrong.
+      // The portal configuration lists the terms-of-service link as "Required?
+      // No", and the create-configuration API marks business_profile optional
+      // with both URLs defaulting to null. Omitting them is permitted; the
+      // portal simply shows no terms link. Add them when the pages publish.
     },
   };
 
