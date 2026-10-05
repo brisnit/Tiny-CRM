@@ -63,7 +63,14 @@ async function main() {
   const expected = CATALOGUE.map((e) => e.lookupKey);
 
   for (const summary of targets) {
-    const c = await stripe.billingPortal.configurations.retrieve(summary.id);
+    // `features.subscription_update.products` is documented as "includable (not
+    // returned by default; request it with the `expand` request parameter)", so a
+    // plain retrieve omits it and an absent field proves nothing about the write.
+    // That omission is exactly what produced the misleading "switchable prices:
+    // none" summary.
+    const c = await stripe.billingPortal.configurations.retrieve(summary.id, {
+      expand: ["features.subscription_update.products"],
+    });
     console.log("\n" + "=".repeat(70));
     console.log(`configuration ${c.id}   is_default=${c.is_default}  active=${c.active}`);
     console.log("=".repeat(70));
@@ -81,7 +88,11 @@ async function main() {
     console.log(`  enabled                     ${update?.enabled}`);
     console.log(`  default_allowed_updates     ${JSON.stringify(update?.default_allowed_updates ?? null)}`);
     console.log(`  proration_behavior          ${update?.proration_behavior}`);
-    console.log(`  products present            ${entries === null ? "FIELD ABSENT OR NULL" : `${entries.length} entry/entries`}`);
+    console.log(
+      `  products present            ${
+        entries === null ? "null even with expand — genuinely unset" : `${entries.length} entry/entries`
+      }`,
+    );
 
     if (Array.isArray(entries)) {
       for (const entry of entries) {

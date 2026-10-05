@@ -214,7 +214,15 @@ async function main() {
 
   // Read back rather than trusting the write, and report the two settings that
   // decide whether the portal can do what we just asked for.
-  const verified = await stripe.billingPortal.configurations.retrieve(configuration.id);
+  // The expand matters. `features.subscription_update.products` is documented as
+  // "includable (not returned by default; request it with the `expand` request
+  // parameter)", so without this the read-back omits the field and the summary
+  // below reported "switchable prices: none" after a write that had in fact
+  // succeeded. The read-back existed to avoid trusting the write; omitting the
+  // expand made it misreport the thing it was there to check.
+  const verified = await stripe.billingPortal.configurations.retrieve(configuration.id, {
+    expand: ["features.subscription_update.products"],
+  });
   const update = verified.features.subscription_update;
 
   console.log("\n" + "=".repeat(68));
