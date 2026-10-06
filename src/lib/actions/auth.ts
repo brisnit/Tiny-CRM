@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
+import { TERMS_VERSION } from "@/lib/legal";
 import { recordAudit } from "@/lib/audit";
 import {
   PASSWORD_HASH_COST,
@@ -56,10 +57,27 @@ const zPassword = z
       "Most characters count as one, but accented letters and emoji count as several.",
   });
 
+/** One message for every way acceptance can be absent: missing, wrong type, or false. */
+const ACCEPT_TERMS_REQUIRED = "Please accept the terms of service to create an account.";
+
 const signUpSchema = z.object({
   name: zShortText.min(1, "What should we call you?"),
   email: zEmail,
   password: zPassword,
+  /**
+   * Server-side enforcement of the signup consent checkbox.
+   *
+   * `z.literal(true)` rather than a boolean: a missing field, `false`, `"off"`
+   * and `null` all fail, so the only way through is an explicit true. The
+   * checkbox's `required` attribute is a courtesy to the person filling the
+   * form; this is the control, because a client can be made to post anything.
+   *
+   * It is validated before the duplicate-email branch below, so an account is
+   * never created — and the existing-account path never runs — without it.
+   */
+  acceptedTerms: z
+    .boolean({ message: ACCEPT_TERMS_REQUIRED })
+    .refine((value) => value === true, { message: ACCEPT_TERMS_REQUIRED }),
 });
 
 export type SignUpResult = { ok: true } | { ok: false; error: string; field?: string };
@@ -133,12 +151,18 @@ export async function signUp(input: z.input<typeof signUpSchema>): Promise<SignU
     return { ok: true };
   }
 
+  // The version recorded is the one the pages display as their effective date —
+  // a single constant, so a stored acceptance can always be matched to the text
+  // that was shown. See src/lib/legal.ts.
+  const acceptedAt = new Date();
   const user = await db.user.create({
     data: {
       email,
       name,
       passwordHash: await bcrypt.hash(password, PASSWORD_HASH_COST),
       plan: "free",
+      termsAcceptedVersion: TERMS_VERSION,
+      termsAcceptedAt: acceptedAt,
     },
     select: { id: true },
   });

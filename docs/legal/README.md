@@ -1,7 +1,16 @@
-# Legal page drafts — held back from the pricing release
+# Legal pages — restored and prepared for publication
 
-These are the real `/privacy` and `/terms` pages, intact, deliberately **not
-routed**. The pricing release ships Free / Plus / Pro without them.
+**The pages are back under `src/app/(marketing)/`.** This file is kept for the
+history of why they were held back and what was checked while they were.
+
+Current state: `/privacy` and `/terms` are routed and linked from the homepage
+footer, their effective date comes from `LEGAL_EFFECTIVE_ON` in `src/lib/legal.ts`,
+and signup requires accepting the terms. They are **not merged or deployed** — PR
+#31 is still draft, pending review.
+
+Both still carry a draft banner saying they are not published and have not been
+legally certified, because that remains true until the PR merges and the open
+items in `REVIEW-NOTES.md` are closed.
 
 ## Why they are here and not under `src/app/`
 
@@ -68,27 +77,25 @@ hard-coding them, which is why it cannot quote a figure the product does not
 enforce. That binding is preserved — do not convert these to Markdown, or it is
 lost and the pages can drift from the product the way the marketing page once did.
 
-## Restoring them
+## How they were restored
 
-Three steps, and the drafts are otherwise unmodified:
+Done on 5 October 2026, as four moves plus the follow-on edits:
 
-```bash
-mkdir -p "src/app/(marketing)/privacy" "src/app/(marketing)/terms"
-git mv docs/legal/privacy-page.tsx "src/app/(marketing)/privacy/page.tsx"
-git mv docs/legal/terms-page.tsx    "src/app/(marketing)/terms/page.tsx"
-git mv docs/legal/legal.tsx          src/components/marketing/legal.tsx
+```
+src/app/(marketing)/privacy/page.tsx   <- docs/legal/privacy-page.tsx
+src/app/(marketing)/terms/page.tsx     <- docs/legal/terms-page.tsx
+src/components/marketing/legal.tsx     <- docs/legal/legal.tsx
 ```
 
-Then, in each restored page, change `from "./legal"` back to
-`from "@/components/marketing/legal"` — the one edit made when they were moved —
-and re-add the two footer links in `src/app/(marketing)/page.tsx`, where a comment
-marks the place they were removed from.
+Then: the `from "./legal"` imports went back to
+`from "@/components/marketing/legal"`, the `docs` exclusion came out of
+`tsconfig.json` (nothing under `docs/` is `.tsx` any more), and the two footer
+links returned to `src/app/(marketing)/page.tsx`.
 
 `tests/unit/ai-cutover-allowance.test.ts` keeps
 `src/app/(marketing)/terms/page.tsx` in the list of files permitted to read
-`plan.limits.aiRequestsPerMonth` directly. That entry is unused while the page
-lives here, and correct again the moment it goes back; it was left in place
-deliberately rather than removed and forgotten.
+`plan.limits.aiRequestsPerMonth` directly. That entry is correct again now the
+page is back where it was.
 
 ## Related
 

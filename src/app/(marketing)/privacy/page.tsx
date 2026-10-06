@@ -1,4 +1,5 @@
-import { DraftBanner, LegalPage, Section } from "./legal";
+import { DraftBanner, LegalPage, Section } from "@/components/marketing/legal";
+import { legalEffectiveDate } from "@/lib/legal";
 
 export const metadata = {
   title: "Privacy",
@@ -24,7 +25,7 @@ export const metadata = {
  */
 export default function PrivacyPage() {
   return (
-    <LegalPage title="Privacy notice" updated="5 October 2026" intro={<DraftBanner />}>
+    <LegalPage title="Privacy notice" updated={legalEffectiveDate()} intro={<DraftBanner />}>
       <Section id="what-this-is" heading="1. What Tiny CRM is, and why that shapes this notice">
         <p>
           Tiny CRM stores information about your contacts, companies, deals, projects and notes.

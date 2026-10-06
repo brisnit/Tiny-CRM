@@ -4,9 +4,9 @@
 `/terms`. It records what the 5 October 2026 review copy left open, plus what
 checking that copy against the repository turned up.
 
-Status: both pages are **unpublished** (both URLs return 404), there are **no
-footer links**, and PR #31 is **draft**. The pages have **not** been legally
-certified, and nothing in them says they have.
+Status: both pages are **routed and linked**, signup requires accepting the terms,
+and PR #31 is **draft** — nothing is merged or deployed. The pages have **not**
+been legally certified, and the banner on each says so.
 
 ## What was approved and is now written into the pages
 
@@ -68,24 +68,29 @@ The retention section was written from the code and from provider documentation.
 The provider's published 30-day backup retention is **not** treated as a guarantee
 that every copy of a record is erased within 30 days, and the page says so.
 
-## Contradiction found when checking the copy against the repository
+## The contradiction found earlier is now resolved
 
-One concrete conflict, flagged rather than silently resolved, because fixing it is
-a product change and was out of scope:
+The earlier note recorded that terms §1 said &ldquo;By creating an account you
+accept them&rdquo; while the signup flow presented neither document. **Fixed**, on
+authorisation:
 
-> **Terms §1 says "By creating an account you accept them." The signup flow does
-> not present or link these terms.**
+- An unchecked, `required` checkbox at signup: *&ldquo;I agree to the Terms of
+  Service and acknowledge the Privacy Notice&rdquo;*, each phrase linking to its
+  page, opened in a new tab so a half-filled form is not lost.
+- **Server-side enforcement** in `signUpSchema`. The checkbox's `required`
+  attribute stops an ordinary submit, but a client can be made to post anything,
+  so the control is the action: `acceptedTerms` must parse as a boolean and refine
+  to exactly `true`. Omitted, `false`, `null` and the string `"on"` are all
+  refused, and refusal happens before the duplicate-email branch, so no account
+  row is created either way.
+- **Recording**: `User.termsAcceptedVersion` and `User.termsAcceptedAt`, set from
+  `TERMS_VERSION` — the same constant the pages display as their effective date,
+  so a stored acceptance can always be matched to the text that was shown.
 
-Verified: `src/app/(auth)/signup/page.tsx` and `src/components/app/auth-forms.tsx`
-contain **no** reference to the terms or the privacy notice. There is no link, no
-checkbox and no acceptance step. The pages are also unrouted, so a link could not
-resolve today even if one existed.
-
-The approved wording was kept as-is. **Before publication, the signup flow needs to
-present these terms** — otherwise the contract wording describes an acceptance that
-does not happen. This is the same point the review copy raised under "confirm how
-users will be presented with and accept the terms", and it is now confirmed against
-the code rather than assumed.
+Verified in a real browser: the box is present, unchecked, and `required`; its
+links resolve to `/terms` and `/privacy`; submitting with it clear creates no
+account and stays on `/signup`; checking it creates the account with version
+`2026-10-05` and a timestamp.
 
 ## Claims in the review copy that were checked and hold
 
@@ -114,11 +119,33 @@ the page cannot quote a figure the product does not enforce.
 
 ## Remaining publication questions
 
-1. **Set an effective date** when the pages are published. The review copy asks for
-   this; the pages currently carry a revision date instead.
-2. **Present the terms at signup** — see the contradiction above.
-3. Decide items 1–5 under *Still unresolved*, or publish with them open and
-   accept that posture deliberately.
-4. Restore the routes and footer links. The three steps are in
-   `docs/legal/README.md`; the `docs` exclusion in `tsconfig.json` comes out at the
-   same time.
+1. ~~Set an effective date~~ — done. `LEGAL_EFFECTIVE_ON = "2026-10-05"` in
+   `src/lib/legal.ts` is both the published effective date and the version recorded
+   against each acceptance. **If the merge slips past 5 October, change that one
+   line**, or accounts will record a version dated before the pages went live.
+2. ~~Present the terms at signup~~ — done, see above.
+3. ~~Restore the routes and footer links~~ — done.
+4. **Decide items 1–5 under *Still unresolved*, or publish with them open** and
+   accept that posture deliberately. This is the only one left before merge.
+
+### Deployment order — the migration must go first
+
+`User.termsAcceptedVersion` and `User.termsAcceptedAt` are new columns, so this
+release is not a pure code deploy. Both columns are **nullable and additive**,
+which is what makes the safe order possible:
+
+1. **Apply the migration to production first**, from a machine with the owner URL:
+   `npm run db:use-postgres && npx prisma migrate deploy`. The PostgreSQL copy is
+   `prisma/migrations-postgres/20261005120100_terms_acceptance`.
+2. **Then merge and deploy.**
+
+That order is not a preference. `scripts/deploy-gate.mjs` compares the migrations
+the commit ships in `prisma/migrations-postgres` against the rows in
+`public."_prisma_migrations"` and **fails the build** if one is missing — so
+merging first would block the deploy rather than half-apply it. And applying first
+is harmless: the build currently serving traffic selects neither column.
+
+There is **no backfill**. Existing accounts keep `NULL`, which honestly means
+&ldquo;no acceptance was recorded&rdquo; — not &ldquo;refused&rdquo;. Inventing a
+timestamp for an account that never saw the checkbox would put a false record in
+the one place a dispute would look.

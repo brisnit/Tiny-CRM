@@ -80,6 +80,7 @@ describe("account-security entry points exist", () => {
       name: "Wiring Probe",
       email,
       password: "a-perfectly-good-password",
+      acceptedTerms: true,
     } as never);
     assert.equal(result.ok, true, `sign-up failed: ${JSON.stringify(result)}`);
 

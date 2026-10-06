@@ -1,6 +1,7 @@
 import Link from "next/link";
 
-import { DraftBanner, LegalPage, Section } from "./legal";
+import { DraftBanner, LegalPage, Section } from "@/components/marketing/legal";
+import { legalEffectiveDate } from "@/lib/legal";
 import {
   PLANS,
   PLAN_ORDER,
@@ -51,7 +52,7 @@ export default function TermsPage() {
   const limit = (value: number) => (value === UNLIMITED ? "Unlimited" : value.toLocaleString());
 
   return (
-    <LegalPage title="Terms of service" updated="5 October 2026" intro={<DraftBanner />}>
+    <LegalPage title="Terms of service" updated={legalEffectiveDate()} intro={<DraftBanner />}>
       <Section id="parties" heading="1. Who these terms are between">
         <p>
           These terms are between you and <strong>Artifact Digital LLC</strong>, 178 N. Cuyamaca St.,

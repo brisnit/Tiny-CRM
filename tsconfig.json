@@ -30,12 +30,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  // `docs` holds the /privacy and /terms drafts, held back from the pricing
-  // release (docs/legal/README.md). They are kept as real .tsx so the binding to
-  // src/lib/plans.ts survives and restoring them is a move, not a rewrite — but
-  // `typedRoutes` types every `next/link` href against the routes that exist, so
-  // a draft linking to /privacy cannot type-check while /privacy is not routed.
-  // Excluding them is what lets the drafts stay intact instead of being rewritten
-  // to plain anchors or converted to Markdown. Remove this when the pages return.
-  "exclude": ["node_modules", "docs"]
+"exclude": ["node_modules"]
 }
