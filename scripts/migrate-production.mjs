@@ -37,7 +37,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -117,6 +117,49 @@ function run(command, args, env) {
   });
 }
 
+/** The shipped PostgreSQL migrations, in the order Prisma applies them. */
+function shippedMigrations() {
+  return readdirSync(resolve(ROOT, "prisma/migrations-postgres"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+}
+
+/** The SQL a migration will run, with comments and blank lines removed. */
+function statementsOf(name) {
+  const sql = readFileSync(
+    resolve(ROOT, "prisma/migrations-postgres", name, "migration.sql"),
+    "utf8",
+  );
+  return sql
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("--"));
+}
+
+/**
+ * Shipped minus applied, read from the database.
+ *
+ * `_prisma_migrations` is absent on a database Prisma has never touched, which
+ * is not an error here — it means everything is pending.
+ */
+async function pendingMigrations(url) {
+  const client = new Client({ connectionString: url, connectionTimeoutMillis: 20_000 });
+  await client.connect();
+  try {
+    const { rows } = await client.query(
+      `SELECT migration_name FROM public."_prisma_migrations" WHERE finished_at IS NOT NULL`,
+    );
+    const applied = new Set(rows.map((row) => row.migration_name));
+    return shippedMigrations().filter((name) => !applied.has(name));
+  } catch (error) {
+    if (/does not exist/i.test(String(error?.message))) return shippedMigrations();
+    throw error;
+  } finally {
+    await client.end();
+  }
+}
+
 async function main() {
   const dryRun = process.argv.includes("--dry-run");
 
@@ -187,18 +230,40 @@ async function main() {
     run("node", ["scripts/use-provider.mjs", "postgresql"]);
     run("npx", ["prisma", "generate"], { DATABASE_URL: url, DIRECT_URL: url });
 
-    const status = (() => {
-      try {
-        return run("npx", ["prisma", "migrate", "status"], { DATABASE_URL: url, DIRECT_URL: url });
-      } catch (error) {
-        // `migrate status` exits non-zero when migrations are pending, which is
-        // the normal case here, and prints the list on stdout regardless.
-        return String(error.stdout ?? "");
+    // What is pending, computed rather than scraped.
+    //
+    // This used to filter `prisma migrate status` output for lines matching
+    // /migration|pending|following/. The migration *name* is printed on a line of
+    // its own with none of those words, so the one thing an operator needs to see
+    // was the one thing the filter dropped — a confirmation prompt that did not
+    // say what it was confirming. Diffing the shipped directory against
+    // `_prisma_migrations` is exact, and does not depend on parsing CLI prose.
+    const pending = await pendingMigrations(url);
+
+    if (pending.length === 0) {
+      console.log("\n  Nothing pending — every shipped migration is already applied.");
+      console.log("  Nothing to do.\n");
+      return;
+    }
+
+    console.log(`\n  ${pending.length} migration(s) will be applied, in this order:\n`);
+    for (const name of pending) {
+      console.log(`    ${name}`);
+      for (const statement of statementsOf(name)) {
+        console.log(`        ${statement}`);
       }
-    })();
-    console.log("\n  pending migrations, as Prisma sees them:");
-    for (const line of status.split("\n").filter((l) => /migration|pending|following/i.test(l))) {
-      console.log(`    ${scrub(line.trim())}`);
+      console.log("");
+    }
+
+    const destructive = pending.flatMap(statementsOf).filter((line) =>
+      /\b(DROP|TRUNCATE|DELETE|UPDATE|ALTER\s+COLUMN|SET\s+NOT\s+NULL)\b/i.test(line),
+    );
+    if (destructive.length > 0) {
+      console.log("  WARNING — these statements are not purely additive:");
+      for (const line of destructive) console.log(`    ${line}`);
+      console.log("");
+    } else {
+      console.log("  All statements are additive (ADD COLUMN only). No backfill, no data rewritten.\n");
     }
 
     if (dryRun) {
