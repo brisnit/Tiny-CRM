@@ -40,6 +40,17 @@ model User {
   planRenewsAt       DateTime?
   billingCustomerId  String?
 
+  /// Which published terms version this account accepted, and when. Set once at
+  /// signup from TERMS_VERSION in src/lib/legal.ts, which is the same string the
+  /// pages display as their effective date.
+  ///
+  /// Nullable on purpose, and it must stay nullable: every account created before
+  /// this column existed has no acceptance to record, and inventing one would be
+  /// worse than an honest null. A null therefore means "accepted before we
+  /// recorded it, or not at all" — it does not mean "refused".
+  termsAcceptedVersion String?
+  termsAcceptedAt      DateTime?
+
   onboardedAt DateTime?
   lastSeenAt  DateTime?
 

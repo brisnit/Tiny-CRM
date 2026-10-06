@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { AlertCircle } from "lucide-react";
 
@@ -189,6 +190,11 @@ export function SignupForm({
       name: String(form.get("name") ?? ""),
       email,
       password,
+      // Sent as a boolean the server validates independently. The `required`
+      // attribute below stops an ordinary submit, but a client can be made to
+      // submit anything, so the checkbox is a courtesy and the server is the
+      // control.
+      acceptedTerms: form.get("acceptedTerms") === "on",
     });
 
     if (!result.ok) {
@@ -235,6 +241,40 @@ export function SignupForm({
           maxLength={PASSWORD_MAX_BYTES}
         />
       </Field>
+      {/*
+        A native checkbox rather than the Radix primitive in components/ui:
+        `required` and FormData participation work without relying on Radix's
+        hidden bubble input, and it is what Playwright's .check() drives in the
+        browser test. Unchecked by default — there is no `defaultChecked`, and
+        there must never be one.
+      */}
+      <div className="flex items-start gap-2.5">
+        <input
+          id="acceptedTerms"
+          name="acceptedTerms"
+          type="checkbox"
+          required
+          className="mt-0.5 size-4 shrink-0 rounded border-hairline-strong accent-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/30"
+        />
+        <label htmlFor="acceptedTerms" className="text-[12.5px] leading-relaxed text-muted">
+          I agree to the{" "}
+          <Link
+            href="/terms"
+            target="_blank"
+            className="font-medium text-brand-600 hover:underline dark:text-brand-400"
+          >
+            Terms of Service
+          </Link>{" "}
+          and acknowledge the{" "}
+          <Link
+            href="/privacy"
+            target="_blank"
+            className="font-medium text-brand-600 hover:underline dark:text-brand-400"
+          >
+            Privacy Notice
+          </Link>
+        </label>
+      </div>
       <Button type="submit" variant="brand" size="lg" className="w-full" loading={pending}>
         Create account
       </Button>

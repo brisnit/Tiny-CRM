@@ -61,9 +61,9 @@ describe("authentication", () => {
       const email = `enumerate-${Date.now()}@test.local`;
       const password = "a-sufficiently-long-password";
 
-      const first = await signUp({ name: "First", email, password });
+      const first = await signUp({ name: "First", email, password, acceptedTerms: true });
       await resetRateLimit("signup", "unknown");
-      const second = await signUp({ name: "Second", email, password });
+      const second = await signUp({ name: "Second", email, password, acceptedTerms: true });
 
       assert.deepEqual(
         second, first,
@@ -89,6 +89,7 @@ describe("authentication", () => {
       for (const password of ["short", "x".repeat(200)]) {
         const result = await signUp({
           name: "Probe", email: `weak-${Date.now()}@test.local`, password,
+          acceptedTerms: true,
         });
         assert.equal(result.ok, false, `accepted a password of length ${password.length}`);
         if (!result.ok) assert.equal(result.field, "password");

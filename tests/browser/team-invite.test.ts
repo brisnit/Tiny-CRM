@@ -120,6 +120,10 @@ describe("joining a workspace from an invitation", () => {
 
     await page.fill("#name", "Newly Invited");
     await page.fill("#password", PASSWORD);
+    // Signup now requires accepting the terms. The box is unchecked by default
+    // and the server refuses without it, so an invitation flow that skipped this
+    // would fail — which is how this test caught the change.
+    await page.locator("#acceptedTerms").check();
     await page.getByRole("button", { name: "Create account" }).click();
 
     // Back on the invitation, now signed in, with one button left to press.
