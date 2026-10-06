@@ -77,6 +77,60 @@ export async function assertWithinLimit(
   }
 }
 
+/**
+ * Throws unless the workspace's owner is on a plan that includes file uploads.
+ *
+ * ## Why this did not exist, and why it has to
+ *
+ * `PlanCapabilities.fileUploads` has been declared since the plan matrix was
+ * written — `false` on Free, `true` on Plus and Pro — and **nothing ever read
+ * it**. `planGrants` was only ever called for `documentQa`. The capability was
+ * enforced by accident: the `files` feature flag defaults to `false` and is
+ * enabled for one workspace, so nobody had uploads and the gap was invisible.
+ *
+ * It stops being invisible the moment `files` is turned on globally, which is
+ * exactly what rolling this feature out involves. Without this check a Free
+ * account would get a capability the pricing page sells as Plus, and the flag
+ * that was supposed to be an operator rollout control would silently become a
+ * pricing change.
+ *
+ * ## Whose plan
+ *
+ * The **workspace owner's**, like seats and like `documentQaEntitled` — the
+ * capability belongs to the workspace and the owner is who pays for it. Reading
+ * the caller's plan instead would refuse a Free member of a Plus workspace and
+ * admit a Plus member of a Free one.
+ *
+ * ## Uploading only
+ *
+ * Called on the two upload steps and deliberately **not** on preview, download
+ * or delete. An account that downgrades keeps what it already stored and must
+ * still be able to read and remove it; a plan change is not a reason to hold
+ * somebody's contracts hostage. This mirrors what the document-QA refusal
+ * already promises in so many words: "Everything already uploaded stays where
+ * it is, and you can still download it."
+ *
+ * Must be called inside a tenant context the caller has already earned.
+ * `Workspace` is under row-level security, so a workspace that is not visible
+ * from this context is not entitled — failing closed, because the alternative
+ * is granting a paid capability because a read came back empty.
+ */
+export async function requireFileUploadEntitlement(workspaceId: string): Promise<void> {
+  const { planGrants } = await import("@/lib/plans");
+
+  const workspace = await db.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { owner: { select: { plan: true } } },
+  });
+
+  if (workspace && planGrants(workspace.owner.plan, "fileUploads")) return;
+
+  throw new AppError(
+    "plan_limit",
+    "Attaching files to a record is a Plus feature. Upgrade to upload documents.",
+  );
+}
+
 /** Current usage across every limited resource. */
 export async function getPlanUsage(actor: Actor | WorkspaceActor): Promise<Record<LimitKey, number>> {
   const workspaceIds = actor.memberships.map((m) => m.id);

@@ -82,6 +82,95 @@ describe("word boundaries — the false-positive class", () => {
   });
 });
 
+describe("number agreement — the false-negative class", () => {
+  /**
+   * The failure this exists for, measured against a real ingested document.
+   *
+   * Page 3 of the RFP fixture reads "Invoices are paid net 45 days after
+   * acceptance." Before matching folded plurals, "What is the invoice payment
+   * term?" retrieved **nothing** and the customer was told the document said
+   * nothing about it, while "What are the invoices payment terms?" was answered
+   * from that very page. A specific, confident denial about a fact on page 3 is
+   * the worst thing this feature can do, so it is asserted here rather than
+   * left to the one question that happened to be phrased plurally.
+   */
+  const invoiceClause = ["Invoices are paid net 45 days after acceptance."];
+
+  test("a singular question matches a plural document", () => {
+    const scored = scoreChunks(invoiceClause, { tokens: ["invoice"], phrases: [] });
+    assert.equal(scored.length, 1, "'invoice' did not match 'Invoices'");
+  });
+
+  test("a plural question matches a singular document", () => {
+    const scored = scoreChunks(["One invoice per milestone."], { tokens: ["invoices"], phrases: [] });
+    assert.equal(scored.length, 1, "'invoices' did not match 'invoice'");
+  });
+
+  test("terms and term are the same term", () => {
+    assert.equal(scoreChunks(["Payment terms are net 45."], { tokens: ["term"], phrases: [] }).length, 1);
+    assert.equal(scoreChunks(["The payment term is net 45."], { tokens: ["terms"], phrases: [] }).length, 1);
+  });
+
+  test("a y plural is folded, and does not produce a non-word", () => {
+    assert.equal(scoreChunks(["Our policies are published."], { tokens: ["policy"], phrases: [] }).length, 1);
+    assert.equal(scoreChunks(["The policy is published."], { tokens: ["policies"], phrases: [] }).length, 1);
+  });
+
+  test("an -es plural is folded", () => {
+    assert.equal(scoreChunks(["Attach the addresses."], { tokens: ["address"], phrases: [] }).length, 1);
+    assert.equal(scoreChunks(["Milestone one."], { tokens: ["milestones"], phrases: [] }).length, 1);
+  });
+
+  test("a double-s word is not mangled into a stem", () => {
+    // "process" must not become "proces": the stem would still match here, so
+    // the assertion is that "progress" does NOT match "process".
+    assert.equal(scoreChunks(["Describe the process."], { tokens: ["process"], phrases: [] }).length, 1);
+    assert.equal(
+      scoreChunks(["Report on progress."], { tokens: ["process"], phrases: [] }).length,
+      0,
+      "folding reached past the plural and matched a different word",
+    );
+  });
+
+  test("folding stops at the plural — it is not a stemmer", () => {
+    // Deliberate, documented limits. If these ever start passing, the rule has
+    // grown into something that needs its own measurement.
+    assert.equal(
+      scoreChunks(["Invoices are paid net 45 days."], { tokens: ["payment"], phrases: [] }).length,
+      0,
+      "'payment' now matches 'paid' — the rule has grown beyond number agreement",
+    );
+    assert.equal(
+      scoreChunks(["Costly overruns."], { tokens: ["cost"], phrases: [] }).length,
+      0,
+      "'cost' now matches 'costly' — the word-boundary guarantee is at risk",
+    );
+  });
+
+  test("the boundary guarantee survives folding", () => {
+    // The same trap as the false-positive suite, re-asserted after the change:
+    // a stem plus an optional plural must not become a substring search.
+    const texts = [
+      "The vendor shall expose a documented API.",
+      "Work shall proceed rapidly to meet the capital schedule.",
+      "New therapies are out of scope.",
+    ];
+    assert.deepEqual(
+      scoreChunks(texts, { tokens: ["api"], phrases: [] }).map((s) => s.index),
+      [0],
+      "folding reintroduced the substring match",
+    );
+  });
+
+  test("a phrase folds each of its words", () => {
+    const scored = scoreChunks(["Review the payment terms carefully."], {
+      tokens: [],
+      phrases: ["payment term"],
+    });
+    assert.equal(scored.length, 1, "a phrase did not fold its final word");
+  });
+});
+
 describe("phrases tolerate the document's line breaks", () => {
   test("a phrase split across a newline still matches", () => {
     const texts = ["Section 2. The scope\nof work includes discovery."];

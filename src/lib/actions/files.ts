@@ -8,6 +8,8 @@ import {
 } from "@/lib/actions/base";
 import { assertConfirmation } from "@/lib/destructive";
 import { AppError, forbidden, noSuchRecord } from "@/lib/errors";
+import { requireFileUploadEntitlement } from "@/lib/entitlements";
+import { dispatchSoon } from "@/lib/events";
 import { requireFlag } from "@/lib/flags";
 import { log } from "@/lib/logger";
 import { getStorage } from "@/lib/storage";
@@ -125,6 +127,9 @@ export async function requestUpload(input: unknown): Promise<ActionResult<Upload
         // reachable while the product reads as switched off, and "the feature
         // is disabled" would mean only that nothing renders a button.
         await requireFlag("files", workspaceId);
+        // Two different questions, so two checks: the flag says whether uploads
+        // are rolled out here, the plan says whether this account bought them.
+        await requireFileUploadEntitlement(workspaceId);
 
         const head = decodeHead(parsed.headBase64);
 
@@ -194,6 +199,9 @@ export async function confirmUpload(input: unknown): Promise<ActionResult<Confir
       { permission: "record:create", workspaceId: ticket.workspaceId, rateLimit: "mutation" },
       async ({ actor, workspaceId, recordId }) => {
         await requireFlag("files", workspaceId);
+        // Re-checked here, not merely at authorisation: an upload token outlives
+        // the request that issued it, and a plan can change in between.
+        await requireFileUploadEntitlement(workspaceId);
 
         // The token was signed for one workspace. If the project now resolves
         // somewhere else, something is wrong enough to refuse rather than
@@ -316,7 +324,7 @@ export async function confirmUpload(input: unknown): Promise<ActionResult<Confir
           summary: `Uploaded ${file.name} to a project`,
         });
 
-        // The outbox seam. Nothing consumes it yet; see src/lib/events.ts.
+        // The outbox. `file.uploaded` is what Document Intelligence ingests on.
         await emitEvent({
           workspaceId,
           name: "file.uploaded",
@@ -325,6 +333,24 @@ export async function confirmUpload(input: unknown): Promise<ActionResult<Confir
           actorId: actor.identity.id,
           payload: { projectId: recordId, sizeBytes: file.sizeBytes, mimeType: file.mimeType },
         });
+
+        /**
+         * Start draining now rather than waiting for the next cron tick.
+         *
+         * Not the delivery mechanism — the outbox plus `/api/cron/jobs` is, and
+         * that is what guarantees an event survives a request that dies. This is
+         * the latency fix, and it was measured: with no drain here, an uploaded
+         * document sat `pending` with `attempts: 0` through twenty page loads,
+         * because only projects, deals and tasks called `dispatchSoon` and a GET
+         * drains nothing. Production cron runs every 30 minutes, so a customer
+         * could upload a contract, ask about it, and be told "I haven't been
+         * able to read it yet" for half an hour — a true sentence that reads
+         * like a broken feature.
+         *
+         * Deliberately after `emitEvent` and fire-and-forget, so ingestion can
+         * neither slow the upload down nor fail it.
+         */
+        dispatchSoon();
 
         revalidateRecord([`/projects/${recordId}`]);
         return file;
