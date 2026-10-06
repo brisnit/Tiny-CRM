@@ -121,8 +121,11 @@ the page cannot quote a figure the product does not enforce.
 
 1. ~~Set an effective date~~ — done. `LEGAL_EFFECTIVE_ON = "2026-10-05"` in
    `src/lib/legal.ts` is both the published effective date and the version recorded
-   against each acceptance. **If the merge slips past 5 October, change that one
-   line**, or accounts will record a version dated before the pages went live.
+   against each acceptance. **If publication slips past 5 October, change that one
+   line** — not because a version dated earlier would falsify an acceptance
+   record, but because the page must not display an effective date it did not
+   have. The version string identifies *which text* was agreed; `termsAcceptedAt`
+   records *when*. Only the second is a timestamp of consent.
 2. ~~Present the terms at signup~~ — done, see above.
 3. ~~Restore the routes and footer links~~ — done.
 4. **Decide items 1–5 under *Still unresolved*, or publish with them open** and

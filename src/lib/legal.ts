@@ -9,14 +9,23 @@
  * at a version no page ever displayed — unanswerable in a dispute, which is the
  * one thing an acceptance record exists for.
  *
- * ## This must equal the publication date
+ * ## This must equal the intended publication date
  *
- * It is the effective date of both documents. If publication slips past the date
- * below, change it — it is one line, and `tests/unit/legal-version.test.ts` fails
- * if the format is wrong. It is **not** generated from the clock: a value that
- * moved on its own would silently re-date a document nobody edited, and every
- * acceptance already recorded would then name a version that no longer matches
- * what was shown.
+ * It is the effective date both documents display, so it must not be earlier than
+ * the day they actually go live — a page claiming it took effect before anyone
+ * could read it is simply wrong. If publication slips past the date below, change
+ * it. One line.
+ *
+ * An earlier version of this comment overstated the risk, and the correction is
+ * worth keeping: a recorded *version* dated before publication is not by itself a
+ * false acceptance record. The version identifies **which text** was agreed to;
+ * `User.termsAcceptedAt` records **when** the agreement happened. Those are two
+ * different facts and only the second is a timestamp of consent. What would be
+ * wrong is the page implying an effective date it did not have.
+ *
+ * It is deliberately **not** generated from the clock: a value that moved on its
+ * own would silently re-date a document nobody edited, and acceptances already
+ * recorded would then name a version string that no page had ever displayed.
  */
 export const LEGAL_EFFECTIVE_ON = "2026-10-05";
 
