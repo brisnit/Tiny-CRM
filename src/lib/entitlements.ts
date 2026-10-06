@@ -295,6 +295,61 @@ export async function reserveAiOrThrow(actor: Actor | WorkspaceActor): Promise<v
 }
 
 /**
+ * The share of a month's allowance that work nobody asked for may spend.
+ *
+ * ## The problem this exists for, as measured
+ *
+ * A brand-new Free account read **4 of its allowance before its owner typed
+ * anything**: the daily brief on the home page, and a record summary for each
+ * record opened. Then one real question took it to 7. On Free's standing
+ * allowance of 10 — October's grandfathered 25 is currently hiding this — a
+ * customer could spend most of the month's budget just looking around, and the
+ * first question they actually cared about would be refused.
+ *
+ * Automatic generation is worth having; summaries are cached against a
+ * fingerprint of the record, so this is not a per-view cost. But it must not be
+ * able to consume the whole allowance, because the allowance is sold as answers
+ * to the customer's questions.
+ *
+ * ## Half, and why a share rather than a count
+ *
+ * One rule that holds on every plan and needs no re-costing: **half of your
+ * allowance is always yours to spend on your own questions.** A fixed count
+ * would have to be chosen three times and re-chosen whenever an allowance
+ * moves; a share follows `aiAllowanceFor` automatically, including through the
+ * October cutover.
+ *
+ * It is enforced by passing the *reduced* limit to the same atomic
+ * `reserveAiRequest`, so there is no second counter to keep consistent and no
+ * read-then-write race: both kinds of request increment one row, and only the
+ * ceiling they are checked against differs.
+ */
+export const AUTOMATIC_ALLOWANCE_SHARE = 0.5;
+
+/**
+ * Reserves a metered request for work the customer did not ask for.
+ *
+ * Returns `false` rather than throwing, because every caller's correct response
+ * is to produce the deterministic version instead — not to show an error. A
+ * summary written by the built-in engine is a feature the product already
+ * advertises ("Record summaries: structured without a model; written in prose
+ * with one"), and it costs nothing to serve.
+ *
+ * `false` therefore means two different things that need no distinguishing at
+ * the call site: either the automatic half is spent, or the whole allowance is.
+ */
+export async function reserveAutomaticAi(actor: Actor | WorkspaceActor): Promise<boolean> {
+  const plan = planFor(actor.identity.plan);
+  const allowance = aiAllowanceFor(plan, currentPeriod());
+  if (allowance === UNLIMITED) return reserveAiRequest(actor.identity.id, UNLIMITED);
+
+  // Floor, so a small allowance errs toward the customer's own questions rather
+  // than away from them. On Free's standing 10 that is 5 automatic requests.
+  const ceiling = Math.floor(allowance * AUTOMATIC_ALLOWANCE_SHARE);
+  return reserveAiRequest(actor.identity.id, ceiling);
+}
+
+/**
  * Applies a plan change. Callable only from the verified billing webhook and
  * from the development simulator — never from a browser-reachable action.
  */

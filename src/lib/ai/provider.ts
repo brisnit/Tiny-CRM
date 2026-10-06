@@ -284,6 +284,27 @@ export function installedProviderForTests(): AiProvider | null {
  * Every call site that sends CRM content to a provider uses this rather than
  * `getProvider()`, so the mode cannot be bypassed by forgetting a check.
  */
+/**
+ * The deterministic engine, directly.
+ *
+ * For a caller that has already resolved a model-backed provider and then
+ * decided not to spend on it — automatic generation past its share of the
+ * allowance, in `summaries.ts`. Producing the built-in version is the right
+ * answer there, and it is a feature rather than a fallback: the settings screen
+ * promises "Record summaries: structured without a model; written in prose with
+ * one".
+ *
+ * A provider installed by a test still wins, for the same reason it wins in
+ * `getProviderForWorkspace`: a test asking "was a provider reached" must not be
+ * answered by a module-local shortcut.
+ */
+export function offlineProvider(): AiProvider {
+  if (installedForTests) return installedForTests;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { OfflineProvider } = require("@/lib/ai/offline") as typeof import("@/lib/ai/offline");
+  return new OfflineProvider();
+}
+
 export async function getProviderForWorkspace(workspaceId: string): Promise<AiProvider> {
   // First, and on every path: a test that installed a provider is asking
   // "was a provider reached?", which is a different question from "which one".

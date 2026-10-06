@@ -82,3 +82,6 @@ browser-test.db-*
 
 # Local state for scripts/stripe-test-clock-dunning.mjs (object ids only, no secrets).
 .stripe-test-clock-state.json
+
+# Throwaway database for scripts/docqa-model-check.mjs
+.docqa-check.db

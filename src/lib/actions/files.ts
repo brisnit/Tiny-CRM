@@ -14,6 +14,7 @@ import { requireFlag } from "@/lib/flags";
 import { log } from "@/lib/logger";
 import { getStorage } from "@/lib/storage";
 import { issueUploadToken, readUploadToken } from "@/lib/upload-token";
+import { scanForMalware } from "@/lib/malware";
 import { storageKeyFor, validateUpload, type UploadCandidate } from "@/lib/uploads";
 import { LIMITS } from "@/lib/validation/limits";
 import { zId } from "@/lib/validation/common";
@@ -279,6 +280,47 @@ export async function confirmUpload(input: unknown): Promise<ActionResult<Confir
         } catch (error) {
           await discard(ticket.key, "content did not match its extension");
           throw error;
+        }
+
+        // --- Malware scanning, on the bytes at rest -------------------------
+        //
+        // Between the signature check and the record's existence, deliberately.
+        // An infected file must never become a FileAsset: a row would make it
+        // listable, previewable and downloadable for however long it took
+        // somebody to notice, and deleting a record is not the same as the file
+        // never having been accepted.
+        //
+        // The whole object is read once, under the upload ceiling, and handed to
+        // the scanner. Re-reading inside the scanner would double egress and
+        // open a window where the object could change after being checked.
+        //
+        // Every failure here is fail-closed: `scanForMalware` throws on a
+        // timeout, an unreachable scanner, a non-200 or a reply it cannot parse,
+        // and there is no verdict a caller can mistake for good news. An outage
+        // refuses uploads rather than silently turning scanning off.
+        const bytes = await storage.readObject(ticket.key, LIMITS.maxUploadBytes);
+        const verdict = await scanForMalware(bytes, { key: ticket.key }).catch(async (error) => {
+          await discard(ticket.key, "could not be scanned");
+          throw error;
+        });
+
+        if (verdict.status === "infected") {
+          await discard(ticket.key, `malware detected: ${verdict.signature}`);
+          // Audited against the workspace, with the signature name and never the
+          // file's contents. An upload that was refused for this reason is worth
+          // being able to find later.
+          await audit(actor, {
+            workspaceId,
+            action: "security.upload_rejected",
+            entityType: "fileAsset",
+            entityId: recordId,
+            summary: `Refused ${ticket.displayName}: malware detected (${verdict.signature})`,
+          });
+          throw new AppError(
+            "validation",
+            "That file was refused because it appears to contain malware.",
+            { internal: `malware signature ${verdict.signature} on key ${ticket.key}` },
+          );
         }
 
         // --- Only now does it exist -----------------------------------------

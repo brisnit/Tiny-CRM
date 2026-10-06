@@ -3,10 +3,10 @@ import "server-only";
 import { createHash } from "node:crypto";
 
 import { db } from "@/lib/db";
-import { getProvider, getProviderForWorkspace } from "@/lib/ai/provider";
+import { getProvider, getProviderForWorkspace, offlineProvider } from "@/lib/ai/provider";
 import { SYSTEM_PROMPTS, withContext } from "@/lib/ai/prompts";
 import { buildRecordContext, buildWorkspaceSnapshot, type ContextScope } from "@/lib/ai/context";
-import { reserveAiOrThrow } from "@/lib/entitlements";
+import { reserveAiOrThrow, reserveAutomaticAi } from "@/lib/entitlements";
 import { AiAllowanceError, PlanLimitError } from "@/lib/plans";
 import { log } from "@/lib/logger";
 import type { Actor } from "@/lib/auth/access";
@@ -59,6 +59,18 @@ function degrade(error: unknown): Degraded {
   return { body, cached: false, model: null, generatedAt: new Date(), degraded: true };
 }
 
+/**
+ * Did a person ask for this, or did a page render ask on their behalf?
+ *
+ * `surfaceErrors` is already the flag that means "somebody is waiting for this
+ * and must see a real error" — it is set by the explicit regenerate actions in
+ * src/lib/actions/ai.ts and by nothing else. Reusing it keeps one notion of
+ * who asked, rather than adding a second flag that could disagree with it.
+ */
+function userAsked(options: { surfaceErrors?: boolean }): boolean {
+  return options.surfaceErrors === true;
+}
+
 /** A hung provider must not hold a page render open. */
 async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -104,7 +116,7 @@ export async function getRecordSummary(
     try {
       // Workspace-aware: a workspace with AI off summarises with the
       // deterministic engine instead of sending its records to a provider.
-      const provider = await getProviderForWorkspace(options.workspaceId || scope.workspaceIds[0]!);
+      let provider = await getProviderForWorkspace(options.workspaceId || scope.workspaceIds[0]!);
 
       // Only a provider that actually calls a metered external service spends
       // the allowance. The offline provider is a local reasoning engine over
@@ -112,8 +124,17 @@ export async function getRecordSummary(
       // costs nothing, so charging it against a monthly quota was wrong twice
       // over: it exhausted an allowance nobody was billed for, and then the
       // exhaustion took the page down.
-      const metered = provider.id !== "offline";
-      if (metered) await reserveAiOrThrow(actor);
+      if (provider.id !== "offline") {
+        if (userAsked(options)) {
+          await reserveAiOrThrow(actor);
+        } else if (!(await reserveAutomaticAi(actor))) {
+          // Nobody asked for this summary, and automatic work has had its share
+          // of the month. Write the built-in one rather than spending budget the
+          // customer is keeping for their own questions — and rather than
+          // showing the apology `degrade()` produces, which is for a failure.
+          provider = offlineProvider();
+        }
+      }
 
       const result = await withTimeout(
         provider.complete({
@@ -198,14 +219,20 @@ export async function getDailyBrief(
     // enough to keep the whole brief local — the safe direction.
     const { aiPermission } = await import("@/lib/ai/privacy");
     const permissions = await Promise.all(scope.workspaceIds.map((id) => aiPermission(id)));
-    const provider = permissions.every((p) => p.mayTransmitContent)
+    let provider = permissions.every((p) => p.mayTransmitContent)
       ? getProvider()
       : await getProviderForWorkspace(scope.workspaceIds[0] ?? "");
 
     try {
-      // See getRecordSummary: the local engine is not a metered request.
-      const metered = provider.id !== "offline";
-      if (metered) await reserveAiOrThrow(actor);
+      // See getRecordSummary: the local engine is not a metered request, and
+      // the brief nobody asked for spends only the automatic share.
+      if (provider.id !== "offline") {
+        if (userAsked(options)) {
+          await reserveAiOrThrow(actor);
+        } else if (!(await reserveAutomaticAi(actor))) {
+          provider = offlineProvider();
+        }
+      }
 
       const result = await withTimeout(
         provider.complete({

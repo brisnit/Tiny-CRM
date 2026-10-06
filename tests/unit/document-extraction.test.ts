@@ -80,6 +80,58 @@ describe("extractPdf", () => {
   });
 });
 
+describe("the fixture builder does not silently lose text", () => {
+  /**
+   * A property of the *helper*, asserted because its absence looked exactly
+   * like a product bug.
+   *
+   * Text painted outside the page box is not extracted — correctly, since a
+   * reader never sees it. So a fixture line wider than the page came back
+   * truncated mid-word with no warning: a 96-character sentence extracted as 89
+   * characters. Found while building a dense Q&A corpus, where it presented as
+   * retrieval citing the right page for a sentence that was not in the
+   * extracted text. Every assertion anywhere that names a phrase it expects on
+   * a page depends on this.
+   */
+  const SENTENCE =
+    "The Vendor shall not transfer City data outside the United States without prior written consent.";
+
+  test("a line wider than the page survives extraction", async () => {
+    assert.ok(SENTENCE.length > 88, "the fixture sentence is no longer long enough to test this");
+    const extracted = await extractPdf(buildPdf([[SENTENCE]]));
+    const text = extracted.pages[0]?.text ?? "";
+    // Wrapped, so the words are preserved even though the line breaks move.
+    assert.ok(
+      text.replace(/\s+/g, " ").includes(SENTENCE),
+      `the sentence did not survive extraction: ${JSON.stringify(text)}`,
+    );
+  });
+
+  test("a run of capitals survives, though it is far wider than prose", async () => {
+    // The case a character-count wrap gets wrong: `W` is 0.944em where
+    // lowercase prose averages about 0.45em, so counting characters wraps this
+    // too late and the tail falls off the page.
+    const token = "W".repeat(200);
+    const extracted = await extractPdf(buildPdf([[token]]));
+    const text = (extracted.pages[0]?.text ?? "").replace(/\s+/g, "");
+    assert.equal(text.length, 200, "a run of wide glyphs lost characters off the page edge");
+  });
+
+  test("a long single word is hard-broken rather than truncated", async () => {
+    const token = "a".repeat(300);
+    const extracted = await extractPdf(buildPdf([[token]]));
+    const text = (extracted.pages[0]?.text ?? "").replace(/\s+/g, "");
+    assert.equal(text.length, 300, "an unbreakable word lost characters");
+  });
+
+  test("short lines are not reflowed", async () => {
+    // Wrapping must not disturb the documents every other suite asserts on.
+    const lines = ["Heading", "A short body line.", "Another short line."];
+    const extracted = await extractPdf(buildPdf([lines]));
+    assert.equal(extracted.pages[0]?.text.split("\n").length, lines.length);
+  });
+});
+
 describe("malformed input fails as a category", () => {
   const cases: Array<[string, Uint8Array, string]> = [
     ["random bytes", new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]), "unsupported_type"],

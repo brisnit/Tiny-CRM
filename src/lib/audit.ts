@@ -39,6 +39,10 @@ export type AuditAction =
   | "ai.suggestion_applied" | "ai.suggestion_rejected"
   | "billing.plan_changed"
   | "security.config_changed" | "security.alert_acknowledged"
+  // An upload refused before it became a record. Filed under security
+  // rather than with the record events because nothing was created: there
+  // is no FileAsset to attach it to, and the reason is a detection.
+  | "security.upload_rejected"
   | "workspace.deletion_requested" | "workspace.deletion_cancelled"
   | "ai.privacy_changed";
 

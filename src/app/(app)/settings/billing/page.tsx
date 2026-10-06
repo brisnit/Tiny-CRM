@@ -9,7 +9,7 @@ import { currentPeriod } from "@/lib/dates";
 import { getPlanUsage } from "@/lib/entitlements";
 import {
   ENFORCED_LIMITS,
-  LIMIT_NOUN,
+  LIMIT_NOUN_PLURAL,
   LIMIT_SCOPE,
   UNLIMITED,
   advertisedFeatures,
@@ -128,7 +128,11 @@ export default async function BillingSettings({
         />
         <div className="border-t border-hairline p-4">
           <ul className="grid gap-2 sm:grid-cols-2">
-            {advertisedFeatures(plan, enabledFlags).map((feature) => (
+            {/* The period matters here: this list sits directly above the usage
+                meter, and without it the copy stated the standing allowance while
+                the meter counted the effective one — "10 Tiny AI model answers a
+                month" above "Model answers 7 / 25" during the October cutover. */}
+            {advertisedFeatures(plan, enabledFlags, currentPeriod()).map((feature) => (
               <li key={feature} className="flex items-start gap-2 text-[13px] text-body">
                 <Check className="mt-0.5 size-3.5 shrink-0 text-brand-500" />
                 {feature}
@@ -188,7 +192,7 @@ export default async function BillingSettings({
               <li key={key} className="px-4 py-3">
                 <div className="flex items-baseline justify-between gap-3">
                   <span className="text-[13px] text-body">
-                    <span className="capitalize">{LIMIT_NOUN[key]}s</span>
+                    <span className="capitalize">{LIMIT_NOUN_PLURAL[key]}</span>
                     {LIMIT_SCOPE[key] === "workspace" ? (
                       <span className="ml-1.5 text-[11px] text-faint">per workspace</span>
                     ) : null}
