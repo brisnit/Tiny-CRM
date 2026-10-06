@@ -1,0 +1,48 @@
+# Proposal only. Nothing has been provisioned.
+#
+#   fly launch --no-deploy --name tiny-crm-scanner --region sea
+#   fly volumes create clamav_db --size 3 --region sea
+#   fly secrets set SCANNER_TOKEN="$(openssl rand -base64 48)"
+#   fly deploy
+#
+# Then read the token back once, to put the same value into Vercel Production:
+#   fly ssh console -C 'printenv SCANNER_TOKEN'
+
+app = "tiny-crm-scanner"
+primary_region = "sea"   # nearest Fly region to the app's pdx1
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  MAX_SIGNATURE_AGE_HOURS = "48"
+  MAX_SCAN_BYTES = "26214400"
+
+[mounts]
+  source = "clamav_db"
+  destination = "/var/lib/clamav"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Deliberately NOT auto_stop/auto_start. A cold start reloads the whole
+  # signature database, which would put a multi-second stall on the first
+  # upload after any quiet period, against a 20-second client timeout.
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+[[http_service.checks]]
+  interval = "60s"
+  timeout = "10s"
+  grace_period = "300s"   # the first signature download is slow
+  method = "GET"
+  path = "/health"
+  # The check carries the token because /health is authenticated like /scan.
+  [http_service.checks.headers]
+    Authorization = "Bearer PLACEHOLDER_SET_VIA_FLY_SECRETS"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "2gb"   # 1gb is not enough: clamd holds the signature set resident

@@ -6,7 +6,7 @@ import { db } from "@/lib/db";
 import { getProvider, getProviderForWorkspace, offlineProvider } from "@/lib/ai/provider";
 import { SYSTEM_PROMPTS, withContext } from "@/lib/ai/prompts";
 import { buildRecordContext, buildWorkspaceSnapshot, type ContextScope } from "@/lib/ai/context";
-import { reserveAiOrThrow, reserveAutomaticAi } from "@/lib/entitlements";
+import { reserveAiOrThrow } from "@/lib/entitlements";
 import { AiAllowanceError, PlanLimitError } from "@/lib/plans";
 import { log } from "@/lib/logger";
 import type { Actor } from "@/lib/auth/access";
@@ -118,20 +118,27 @@ export async function getRecordSummary(
       // deterministic engine instead of sending its records to a provider.
       let provider = await getProviderForWorkspace(options.workspaceId || scope.workspaceIds[0]!);
 
-      // Only a provider that actually calls a metered external service spends
-      // the allowance. The offline provider is a local reasoning engine over
-      // the same scores the rest of the app computes — it makes no request and
-      // costs nothing, so charging it against a monthly quota was wrong twice
-      // over: it exhausted an allowance nobody was billed for, and then the
-      // exhaustion took the page down.
+      // THE ALLOWANCE IS FOR THINGS THE CUSTOMER ASKED FOR.
+      //
+      // A page render has not asked for anything. Opening a record used to
+      // generate a model-written summary and charge it to the month, and a new
+      // Free account measurably read 4 of its allowance before its owner typed
+      // a word — on a standing allowance of 10, most of the month spent looking
+      // around, with the first question they cared about then refused.
+      //
+      // So automatic generation uses the built-in engine and is **never
+      // metered**. The deterministic summary is a feature rather than a
+      // consolation: the settings screen already describes the split as
+      // "structured without a model; written in prose with one", and it is
+      // computed from the same scores the rest of the page shows.
+      //
+      // Only `userAsked(options)` — the explicit regenerate action — spends the
+      // allowance, and it spends the whole of it, with a real error and an
+      // upgrade prompt when it is gone, because somebody is waiting.
       if (provider.id !== "offline") {
         if (userAsked(options)) {
           await reserveAiOrThrow(actor);
-        } else if (!(await reserveAutomaticAi(actor))) {
-          // Nobody asked for this summary, and automatic work has had its share
-          // of the month. Write the built-in one rather than spending budget the
-          // customer is keeping for their own questions — and rather than
-          // showing the apology `degrade()` produces, which is for a failure.
+        } else {
           provider = offlineProvider();
         }
       }
@@ -224,12 +231,13 @@ export async function getDailyBrief(
       : await getProviderForWorkspace(scope.workspaceIds[0] ?? "");
 
     try {
-      // See getRecordSummary: the local engine is not a metered request, and
-      // the brief nobody asked for spends only the automatic share.
+      // See getRecordSummary. The brief on the home page is not something the
+      // customer asked for, so it is built locally and costs nothing; pressing
+      // refresh is, and spends one request.
       if (provider.id !== "offline") {
         if (userAsked(options)) {
           await reserveAiOrThrow(actor);
-        } else if (!(await reserveAutomaticAi(actor))) {
+        } else {
           provider = offlineProvider();
         }
       }

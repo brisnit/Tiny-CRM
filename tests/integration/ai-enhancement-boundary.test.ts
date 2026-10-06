@@ -156,7 +156,7 @@ describe("AI failures degrade instead of breaking the page", () => {
       // check and both call a paid API. The ordering property this test asserts
       // is unchanged — the provider must be chosen first, so the built-in engine
       // is never charged.
-      const reserveAt = body.search(/reserveAiOrThrow\(|reserveAutomaticAi\(/);
+      const reserveAt = body.search(/reserveAiOrThrow\(/);
       assert.ok(providerAt > -1 && reserveAt > -1, `${fn}: could not locate provider/reservation lines`);
       assert.ok(
         providerAt < reserveAt,
@@ -171,9 +171,10 @@ describe("AI failures degrade instead of breaking the page", () => {
         /provider\.id !== "offline"/,
         `${fn} does not gate the allowance on a metered provider`,
       );
-      // And the two kinds of request must stay distinguished: a page render
-      // spends only the automatic share, while somebody who asked and is
-      // waiting gets the whole allowance and a real error if it is gone.
+      // And the two kinds of request must stay distinguished: a page render is
+      // handed the deterministic engine and spends nothing, while somebody who
+      // asked and is waiting gets the whole allowance and a real error if it is
+      // gone. Covered in behaviour by tests/security/automatic-ai-allowance.
       assert.match(
         body.slice(providerAt, reserveAt + 600),
         /userAsked\(options\)/,
@@ -181,8 +182,8 @@ describe("AI failures degrade instead of breaking the page", () => {
       );
       assert.match(
         body.slice(providerAt, reserveAt + 600),
-        /reserveAutomaticAi\(actor\)/,
-        `${fn} charges automatic generation against the whole allowance`,
+        /provider = offlineProvider\(\)/,
+        `${fn} does not fall back to the built-in engine for work nobody asked for`,
       );
     }
   });
