@@ -96,12 +96,11 @@ export function DraftBanner() {
     <div className="flex items-start gap-2.5 rounded-xl border border-amber-400 bg-amber-50/80 p-4 text-[13px] leading-relaxed text-body dark:border-amber-800 dark:bg-amber-950/40">
       <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
       <div>
-        <strong className="font-semibold">Draft — not yet legally reviewed.</strong> Every statement
-        about how the software behaves was written from the code and is accurate. Everything
-        highlighted in amber is a business or legal detail the codebase cannot supply, and has been
-        left blank rather than guessed. This page should not be published, and must not be used to
-        satisfy a payment processor&apos;s requirements, until those are filled in and a lawyer has
-        reviewed the result.
+        <strong className="font-semibold">Draft — not published.</strong> Every statement about how
+        the software behaves was written from its source and is accurate as of the date above. This
+        page has not been legally certified, and open operational questions remain. It should not be
+        published, or used to satisfy a payment processor&apos;s requirements, until those are
+        closed.
       </div>
     </div>
   );

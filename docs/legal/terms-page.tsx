@@ -1,29 +1,57 @@
 import Link from "next/link";
 
-import { DraftBanner, LegalPage, NeedsDetail, Section } from "./legal";
-import { PLANS, PLAN_ORDER } from "@/lib/plans";
+import { DraftBanner, LegalPage, Section } from "./legal";
+import {
+  PLANS,
+  PLAN_ORDER,
+  PRE_STRIPE_FREE_AI_ALLOWANCE,
+  PRICING_CUTOVER_PERIOD,
+  UNLIMITED,
+} from "@/lib/plans";
 
 export const metadata = {
   title: "Terms",
   description: "The terms covering use of Tiny CRM, its plans and its limits.",
 };
 
+/** "2026-10" → "October 2026", so the page never prints a period key at a reader. */
+function monthName(period: string): string {
+  const [year, month] = period.split("-").map(Number);
+  const name = new Date(Date.UTC(year, month - 1, 1)).toLocaleString("en-GB", {
+    month: "long",
+    timeZone: "UTC",
+  });
+  return `${name} ${year}`;
+}
+
 /**
  * Terms of service.
  *
- * The commercial facts here are read from `src/lib/plans.ts` rather than typed
- * out, so the terms cannot quote a price or a limit the product does not enforce.
- * That was a real failure mode on the marketing page, which advertised $14/month
- * and two features with no implementation for an entire plan generation.
+ * Revised 5 October 2026 against the owner-approved review copy. The approved
+ * decisions written in here are the liability cap — the greater of $100 or the
+ * fees paid in the preceding twelve months, with exceptions and mandatory rights
+ * preserved — and California law with San Diego County venue, also preserving
+ * mandatory rights.
  *
- * Everything that depends on a legal entity, a jurisdiction or a commercial policy
- * is marked with `NeedsDetail` instead of being invented.
+ * Tax is stated as current behaviour and deliberately NOT as a settled
+ * obligation. The open questions behind it are in docs/legal/REVIEW-NOTES.md,
+ * which is internal and is not rendered here.
+ *
+ * Prices, limits, the cutover month and the legacy Free allowance are all read
+ * from src/lib/plans.ts rather than typed out, so this page cannot quote a figure
+ * the product does not enforce. That was a real failure mode on the marketing
+ * page, which advertised $14/month and two features with no implementation for an
+ * entire plan generation.
+ *
+ * Nothing here describes the page as lawyer-reviewed or legally certified,
+ * because it is neither.
  */
 export default function TermsPage() {
   const sellable = PLAN_ORDER.map((id) => PLANS[id]);
+  const limit = (value: number) => (value === UNLIMITED ? "Unlimited" : value.toLocaleString());
 
   return (
-    <LegalPage title="Terms of service" updated="2 October 2026" intro={<DraftBanner />}>
+    <LegalPage title="Terms of service" updated="5 October 2026" intro={<DraftBanner />}>
       <Section id="parties" heading="1. Who these terms are between">
         <p>
           These terms are between you and <strong>Artifact Digital LLC</strong>, 178 N. Cuyamaca St.,
@@ -61,9 +89,10 @@ export default function TermsPage() {
             <thead>
               <tr className="border-b border-hairline text-left text-body">
                 <th className="py-2 pr-4 font-semibold">Plan</th>
-                <th className="py-2 pr-4 font-semibold">Price</th>
+                <th className="py-2 pr-4 font-semibold">Monthly price</th>
                 <th className="py-2 pr-4 font-semibold">Contacts</th>
                 <th className="py-2 pr-4 font-semibold">Workspaces</th>
+                <th className="py-2 pr-4 font-semibold">Seats</th>
                 <th className="py-2 font-semibold">AI answers / month</th>
               </tr>
             </thead>
@@ -71,25 +100,41 @@ export default function TermsPage() {
               {sellable.map((plan) => (
                 <tr key={plan.id} className="border-b border-hairline/60">
                   <td className="py-2 pr-4 text-body">{plan.name}</td>
-                  <td className="py-2 pr-4">${(plan.priceCents / 100).toLocaleString()}{plan.priceCents > 0 ? "/mo" : ""}</td>
-                  <td className="py-2 pr-4 tabular">{plan.limits.contacts.toLocaleString()}</td>
-                  <td className="py-2 pr-4 tabular">{plan.limits.workspaces}</td>
-                  <td className="py-2 tabular">{plan.limits.aiRequestsPerMonth}</td>
+                  <td className="py-2 pr-4">${(plan.priceCents / 100).toLocaleString()}</td>
+                  <td className="py-2 pr-4 tabular">{limit(plan.limits.contacts)}</td>
+                  <td className="py-2 pr-4 tabular">{limit(plan.limits.workspaces)}</td>
+                  <td className="py-2 pr-4 tabular">{limit(plan.limits.seats)}</td>
+                  <td className="py-2 tabular">{limit(plan.limits.aiRequestsPerMonth)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        {PRICING_CUTOVER_PERIOD !== null &&
+        PRE_STRIPE_FREE_AI_ALLOWANCE > PLANS.free.limits.aiRequestsPerMonth ? (
+          <p>
+            For <strong>{monthName(PRICING_CUTOVER_PERIOD)}</strong>, Free accounts retain a
+            temporary allowance of {PRE_STRIPE_FREE_AI_ALLOWANCE} AI answers. The standing allowance
+            is {PLANS.free.limits.aiRequestsPerMonth} per month thereafter. Original Lifetime
+            entitlements remain preserved and are not offered for new purchase.
+          </p>
+        ) : (
+          <p>
+            Original Lifetime entitlements remain preserved and are not offered for new purchase.
+          </p>
+        )}
         <p>
-          The full set of limits is shown on the <Link href="/#pricing" className="text-brand-600 hover:underline dark:text-brand-400">pricing page</Link> and
-          in your billing settings, where current usage is displayed against each one. Limits are
-          enforced on the server, so the figures you see are the figures that apply.
+          Current plan limits and usage are shown on the{" "}
+          <Link href="/#pricing" className="text-brand-600 hover:underline dark:text-brand-400">
+            pricing page
+          </Link>{" "}
+          and in billing settings. Server-side enforcement applies.
         </p>
         <p>
-          <strong>Reaching a limit never deletes anything.</strong> It prevents creating more of that
-          thing. If you move to a smaller plan and are above its ceiling, your existing records stay
-          exactly where they are and remain readable, editable and exportable — you simply cannot add
-          more until you are back under it.
+          <strong>Reaching a record limit does not delete existing records.</strong> It prevents
+          creating more of that record type. If you move to a smaller plan and exceed a ceiling,
+          existing records remain readable, editable and exportable within the export limitations
+          described in the privacy notice; you cannot add more until you are within the limit.
         </p>
         <p>
           Prices and limits may change. Before a change applies to an existing subscription we will
@@ -97,18 +142,27 @@ export default function TermsPage() {
           you can cancel before it takes effect — see{" "}
           <Link href="#changes" className="text-brand-600 hover:underline dark:text-brand-400">
             section 11
-          </Link>.
+          </Link>
+          .
         </p>
       </Section>
 
       <Section id="billing" heading="4. Billing, cancellation and refunds">
         <ul className="list-disc space-y-1 pl-5">
-          <li>Payments are processed by Stripe. Card details are entered on Stripe&apos;s pages and never reach our servers.</li>
+          <li>
+            Payments are processed by Stripe. Card details are entered on Stripe&apos;s pages and
+            never reach our servers.
+          </li>
           <li>Paid plans renew monthly until cancelled.</li>
           <li>You can change plan or cancel yourself, at any time, from billing settings.</li>
-          <li>Cancelling takes effect at the end of the period you have already paid for. You keep your plan until then.</li>
-          <li>If a payment fails we do not remove access immediately: Stripe retries, and your plan is retained while it does. Access ends only once the subscription is finally unpaid or cancelled.</li>
-          <li>Changing plan mid-period is prorated by Stripe.</li>
+          <li>
+            Cancelling takes effect at the end of the period you have already paid for. You keep
+            your plan until then.
+          </li>
+          <li>
+            A failed payment does not immediately remove access. Stripe may retry payment; plan
+            access can end when the subscription becomes unpaid or is cancelled.
+          </li>
         </ul>
         <p>
           <strong>Cancellation.</strong> If you cancel, no refund or credit is issued for unused
@@ -122,77 +176,62 @@ export default function TermsPage() {
           adjustment appears on your <em>next invoice</em> rather than being charged or refunded
           immediately.
         </p>
+        <p>If you were charged in error, contact us and we will refund it.</p>
         <p>
-          If you were charged in error, contact us and we will refund it.
-        </p>
-        {/*
-          Written from verified behaviour, not intent. An earlier proposal said tax
-          "is added at checkout and shown before you pay" — that was false. Our
-          `checkout.sessions.create` call in src/lib/billing/stripe.ts passes
-          neither `automatic_tax` nor any tax rate, and Stripe's reference makes
-          `automatic_tax` optional: a session created without it returns
-          `automatic_tax: { enabled: false }` and `amount_tax: 0`. The Dashboard's
-          automatic-tax setting governs Dashboard-created transactions, not
-          API-created sessions. Confirmed empirically by the first live purchase,
-          which charged exactly $10.00 with no tax line.
-
-          Separately, the account has no California tax registration, so even with
-          automatic tax enabled Stripe would calculate zero for a California
-          customer. Both paths lead to the same present fact: nothing is collected.
-
-          What remains a legal question is narrower than the old marker implied —
-          not "how is tax handled" but "is there a registration or collection
-          obligation anywhere", which is not ours to answer.
-        */}
-        <p>
-          <strong>Prices are exclusive of tax, and no tax is currently added.</strong> We do not
-          calculate or collect sales tax or VAT at checkout today, so the amount you are charged is
-          the plan price shown — $10 or $20 a month. If that changes you will get the same notice as
-          any other pricing change: at least 30 days by email.
-        </p>
-        <p>
-          Whether we are required to register for, or collect, sales tax or VAT in any jurisdiction
-          is <NeedsDetail>for legal review</NeedsDetail>.
+          <strong>Taxes.</strong> Subscription prices are stated in USD. We do not currently add
+          sales tax or VAT at checkout, so the subscription charge is the displayed plan price. If
+          we begin collecting applicable taxes, they will be shown before you complete a purchase.
+          Our 30-day notice policy applies to increases in the subscription price itself; it does
+          not delay tax collection or other changes required by law.
         </p>
       </Section>
 
       <Section id="your-data" heading="5. Your data">
-        <ul className="list-disc space-y-1 pl-5">
-          <li>Your content remains yours. We claim no ownership of it.</li>
-          <li>
-            You can export your records as CSV at any time, without asking us, including after
-            cancelling. Six exports exist today — contacts, companies, deals, projects,
-            opportunities and tasks — each up to 50,000 rows. Timeline notes, activity history,
-            uploaded files, tags and custom field values are not yet part of an export; see the
-            privacy notice.
-          </li>
-          <li>Your content is not used to train any machine-learning model.</li>
-          <li>How we handle your data is described in the <Link href="/privacy" className="text-brand-600 hover:underline dark:text-brand-400">privacy notice</Link>, which forms part of these terms.</li>
-        </ul>
         <p>
-          You are responsible for having a lawful basis to store information about the people you add,
-          and for telling them if that is required where you are.
+          Your content remains yours. We claim no ownership of it. You authorise us to store and
+          process it as needed to provide the service and follow your instructions, subject to
+          applicable law.
+        </p>
+        <p>
+          You can export contacts, companies, deals, projects, opportunities and tasks as CSV,
+          including after cancelling a paid plan, with up to <strong>50,000 rows per export</strong>{" "}
+          and excluding records in Trash. Notes, activity history, uploaded files, tags and custom
+          field values are not included; see the{" "}
+          <Link href="/privacy" className="text-brand-600 hover:underline dark:text-brand-400">
+            privacy notice
+          </Link>{" "}
+          for details.
+        </p>
+        <p>
+          We do not use your CRM content to train machine-learning models, or sell or share it for
+          advertising. AI-provider handling is described in the privacy notice.
+        </p>
+        <p>
+          How we handle your data is described in the{" "}
+          <Link href="/privacy" className="text-brand-600 hover:underline dark:text-brand-400">
+            privacy notice
+          </Link>
+          , which forms part of these terms.
+        </p>
+        <p>
+          You are responsible for having a lawful basis to store information about the people you
+          add, and for telling them if that is required where you are.
         </p>
       </Section>
 
       <Section id="acceptable-use" heading="6. Acceptable use">
         <p>You agree not to:</p>
         <ul className="list-disc space-y-1 pl-5">
-          <li>Use the service to send unsolicited bulk messages, or to store data obtained unlawfully.</li>
-          <li>Attempt to access another account or workspace, or to circumvent plan limits or rate limits.</li>
+          <li>
+            Use the service to send unsolicited bulk messages, or to store data obtained unlawfully.
+          </li>
+          <li>
+            Attempt to access another account or workspace, or to circumvent plan limits or rate
+            limits.
+          </li>
           <li>Probe, scan or load-test the service without written permission.</li>
           <li>Resell or sublicense the service without an agreement with us.</li>
         </ul>
-        {/*
-          Approved wording, not a placeholder. Two things keep it honest about what
-          the product can actually do: `deactivatedAt` is enforced on every request
-          — login, session context, password reset and email verification — so a
-          suspension takes effect immediately even against a valid session token;
-          but nothing in src/ or scripts/ writes it, so suspending is a manual
-          operation and the notice below is an email sent by hand. Neither is
-          described here as automatic, and nothing promises a timescale the one
-          operator cannot meet.
-        */}
         <p>
           <strong>Suspension.</strong> If an account puts the service or other customers at risk —
           through abuse, an attempt to reach another account or workspace, or anything unlawful — we
@@ -201,81 +240,131 @@ export default function TermsPage() {
         </p>
         <p>
           <strong>Appeals.</strong> Write to{" "}
-          <a href="mailto:privacy@tinycrm.biz" className="text-brand-600 hover:underline dark:text-brand-400">
+          <a
+            href="mailto:privacy@tinycrm.biz"
+            className="text-brand-600 hover:underline dark:text-brand-400"
+          >
             privacy@tinycrm.biz
-          </a>. We aim to respond within five business days. Suspension is not deletion: your records
+          </a>
+          . We aim to respond within five business days. Suspension is not deletion: your records
           are not removed, and a suspension that we got wrong is reversible.
         </p>
       </Section>
 
       <Section id="ai-terms" heading="7. Tiny AI specifically">
         <ul className="list-disc space-y-1 pl-5">
-          <li>AI is controlled per workspace. With AI disabled, no workspace content is sent to any model provider, and every built-in feature keeps working.</li>
-          <li>Each plan includes a monthly allowance of model answers. Only requests that reach a paid provider count; the built-in engine never does.</li>
-          <li>When the allowance is spent, the built-in engine keeps working and the allowance resets at the start of the next month.</li>
-          <li>Model output can be wrong. Check anything you intend to act on; we do not warrant that an answer is accurate.</li>
-          <li>We make no zero-retention claim on behalf of the model provider. See the privacy notice.</li>
+          <li>
+            AI is controlled per workspace. With AI disabled, no workspace content is sent to any
+            model provider, and every built-in feature keeps working.
+          </li>
+          <li>
+            Each plan includes a monthly allowance of model answers. Only requests that reach a paid
+            provider count; the built-in engine never does.
+          </li>
+          <li>
+            When the allowance is spent, the built-in engine keeps working and the allowance resets
+            at the start of the next month.
+          </li>
+          <li>
+            Model output can be wrong. Check anything you intend to act on; we do not warrant that
+            an answer is accurate.
+          </li>
+          <li>
+            We make no zero-retention claim on behalf of the model provider. See the privacy notice.
+          </li>
         </ul>
       </Section>
 
       <Section id="availability" heading="8. Availability">
         <p>
-          The service is provided as-is, with no uptime commitment and no service-level agreement. Database recovery
-          has been tested, but it recovers from a mistake inside the database within a 6-hour
-          window and is held by the same provider in the same project — it is not an independent
-          backup, and we offer no recovery-time guarantee. Keeping your own exports is therefore
-          sensible, and export is always available to you.
-        </p>
-        <p>
-          No availability commitment is offered. That is a deliberate choice rather than an
-          omission: a single-region deployment without an on-call rota should not promise a number,
-          and saying so plainly is more useful than silence.
+          The service is provided as available, with no uptime commitment, service-level agreement or
+          recovery-time guarantee. Database recovery has been tested within our configured six-hour
+          window and is held by the same provider in the same project. It is not an independent
+          backup. Consider keeping your own exports, noting the limitations described in the privacy
+          notice.
         </p>
       </Section>
 
       <Section id="liability" heading="9. Warranties and liability">
         <p>
-          The warranty disclaimer, limitation of liability, indemnities and their caps are{" "}
-          <NeedsDetail>for legal review</NeedsDetail> — these clauses determine real financial
-          exposure and should not be drafted from a template or by an assistant.
+          To the extent permitted by applicable law, the service is provided &ldquo;as is&rdquo; and
+          &ldquo;as available&rdquo;, without warranties of any kind, whether express or implied,
+          including implied warranties of merchantability, fitness for a particular purpose or
+          non-infringement.
+        </p>
+        <p>
+          <strong>Limitation of liability.</strong> To the extent permitted by applicable law,
+          Artifact Digital LLC&apos;s total liability to you for all claims arising from or relating
+          to Tiny CRM or these terms will not exceed the greater of <strong>$100 USD</strong> or the
+          total fees you paid us for Tiny CRM during the <strong>12 months</strong> immediately
+          preceding the event giving rise to the claim.
+        </p>
+        <p>
+          This limit does not apply to fraud, willful misconduct, or any liability that applicable
+          law does not allow us to limit. Nothing in these terms excludes or restricts your
+          mandatory statutory rights.
         </p>
       </Section>
 
       <Section id="termination" heading="10. Ending the agreement">
         <ul className="list-disc space-y-1 pl-5">
-          <li>You may stop using the service at any time, and cancel a paid plan yourself from billing settings.</li>
-          <li>You can delete individual records, and whole workspaces. Deleting a workspace is scheduled rather than immediate, so it can be reversed during a 7-day grace period before anything is destroyed.</li>
           <li>
-            <strong>Closing an account is not yet possible from inside the product.</strong> Until it
-            is, a closure request can be sent to{" "}
-            <a href="mailto:privacy@tinycrm.biz" className="text-brand-600 hover:underline dark:text-brand-400">
-              privacy@tinycrm.biz
-            </a>. We would rather say this than describe a button that does not exist.
+            You may stop using the service at any time, and cancel a paid plan yourself from billing
+            settings.
           </li>
-          <li>Export your data before you stop using the service. What an export covers, and what it does not, is set out in the privacy notice.</li>
+          <li>
+            You can delete individual records, and whole workspaces. Deleting a workspace is
+            scheduled rather than immediate, so it can be reversed during a 7-day grace period
+            before anything is destroyed.
+          </li>
+          <li>
+            Account closure is not currently available inside the product. Send closure requests to{" "}
+            <a
+              href="mailto:privacy@tinycrm.biz"
+              className="text-brand-600 hover:underline dark:text-brand-400"
+            >
+              privacy@tinycrm.biz
+            </a>
+            .
+          </li>
+          <li>
+            Export your data before you stop using the service. What an export covers, and what it
+            does not, is set out in the privacy notice.
+          </li>
         </ul>
         <p>
-          What is retained after you stop using the service, and for how long, is described in{" "}
-          <Link href="/privacy#retention" className="text-brand-600 hover:underline dark:text-brand-400">
+          Our current retention practices are described in{" "}
+          <Link
+            href="/privacy#retention"
+            className="text-brand-600 hover:underline dark:text-brand-400"
+          >
             section 8 of the privacy notice
-          </Link>{" "}
-          — as the service behaves today, rather than as a promised maximum period.
+          </Link>
+          . Those practices do not override applicable legal requirements or your statutory rights.
         </p>
       </Section>
 
       <Section id="changes" heading="11. Changes, law and contact">
         <p>
           We will give at least <strong>30 days&apos; notice by email to your account address</strong>{" "}
-          before a price increase or a material change to these terms applies to an existing
-          subscription. You can cancel before it takes effect.
+          before a subscription price increase or a material change to these terms applies to an
+          existing subscription. You can cancel before it takes effect. Changes required sooner by
+          law may take effect sooner, with notice as appropriate.
         </p>
         <p>
-          Governing law and the courts with jurisdiction are{" "}
-          <NeedsDetail>for legal review</NeedsDetail> — a California business address does not by
-          itself choose California law. Contact for legal notices:{" "}
-          <a href="mailto:privacy@tinycrm.biz" className="text-brand-600 hover:underline dark:text-brand-400">
+          <strong>Governing law and disputes.</strong> These terms are governed by California law,
+          excluding its conflict-of-law rules. Unless applicable law requires otherwise, disputes
+          arising from these terms or your use of Tiny CRM will be brought in the state or federal
+          courts located in San Diego County, California. Nothing in these terms deprives you of
+          mandatory protections under applicable law, or of any right to bring a claim in another
+          court where that right cannot lawfully be restricted. Contact for legal notices:{" "}
+          <a
+            href="mailto:privacy@tinycrm.biz"
+            className="text-brand-600 hover:underline dark:text-brand-400"
+          >
             privacy@tinycrm.biz
-          </a>.
+          </a>
+          .
         </p>
       </Section>
     </LegalPage>
