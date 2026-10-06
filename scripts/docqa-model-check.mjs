@@ -19,11 +19,18 @@
  * Deliberately a script and not a test: it costs real money per run and needs a
  * key, so it must never run in CI.
  *
- *   node scripts/docqa-model-check.mjs
+ *   npm run docqa:check                # the real thing, costs money
+ *   npm run docqa:check -- --dry-run   # retrieval and citations only, free
+ *
+ * Run through the npm script rather than node directly: it needs
+ * `--require ./scripts/allow-server-modules.cjs` for the `server-only` guard,
+ * and tsx to resolve the `@/` path aliases. `worker` sets the same flag for the
+ * same reason.
  *
  * Needs, and refuses without:
- *   - ANTHROPIC_API_KEY, in .env (see the note it prints)
- *   - an object store: node scripts/minio.mjs start
+ *   - ANTHROPIC_API_KEY, in .env — set it with
+ *     `node scripts/set-local-anthropic-key.mjs`, which validates it first
+ *   - object storage, started automatically from `scripts/storage-env.mjs`
  *
  * ## Grading
  *
@@ -64,17 +71,53 @@ const dryRun = process.argv.includes("--dry-run");
 if (!dryRun && !(process.env.ANTHROPIC_API_KEY ?? "").trim()) {
   console.error(
     "\nNo ANTHROPIC_API_KEY.\n\n" +
-      "  Put it on line 14 of .env, replacing the empty value:\n" +
-      "      ANTHROPIC_API_KEY=sk-ant-...\n\n" +
-      "  .env is git-ignored and untracked. Do not pass the key as an argument\n" +
-      "  (it would be visible in ps) and do not paste it into a chat.\n",
+      "  Set it with:\n" +
+      "      node scripts/set-local-anthropic-key.mjs\n\n" +
+      "  That reads it from a hidden prompt, refuses a truncated paste, and\n" +
+      "  checks it against the API before writing. Editing .env by hand has\n" +
+      "  silently produced a 31-character value twice.\n",
   );
   process.exit(1);
 }
+/**
+ * Object storage, through the same helper the three test runners use.
+ *
+ * This used to demand a pre-set `S3_ENDPOINT` and exit if it was missing, which
+ * meant the script failed with "No S3_ENDPOINT" on a machine where MinIO was
+ * already running — the variables live in `scripts/minio.mjs env`, not in the
+ * shell. `storageEnvFor()` is the one place that reconciles those: it honours an
+ * endpoint an operator has already set, starts MinIO when one is installed, and
+ * returns nothing when neither is available.
+ */
+const { storageEnvFor } = await import("./storage-env.mjs");
+Object.assign(process.env, await storageEnvFor());
+
 if (!process.env.S3_ENDPOINT) {
-  console.error("\nNo S3_ENDPOINT. Run: node scripts/minio.mjs start\n");
+  console.error(
+    "\nNo object storage available, so there is nothing to upload to.\n" +
+      "  brew install minio && node scripts/minio.mjs start\n",
+  );
   process.exit(1);
 }
+
+/**
+ * Refuse anything that is not a local endpoint.
+ *
+ * This script creates accounts, uploads documents and ingests them. None of
+ * that belongs in a production bucket, and `storageEnvFor()` will hand back
+ * whatever `S3_ENDPOINT` happens to be set — including a real one. So the
+ * decision is made here rather than trusted: loopback only.
+ */
+const endpointHost = new URL(process.env.S3_ENDPOINT).hostname;
+if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(endpointHost)) {
+  console.error(
+    `\nRefusing to run: S3_ENDPOINT points at ${endpointHost}, which is not local.\n` +
+      "This script writes documents and would be writing them to that bucket.\n" +
+      "Unset S3_ENDPOINT to use MinIO, or point it at a local endpoint.\n",
+  );
+  process.exit(1);
+}
+console.log(`object storage: ${process.env.S3_ENDPOINT} (bucket ${process.env.STORAGE_BUCKET})`);
 
 const DB = process.env.DOCQA_DB ?? resolve(ROOT, ".docqa-check.db");
 process.env.DATABASE_URL = `file:${DB}`;
@@ -93,7 +136,7 @@ const { withTenantContext } = await import("../src/lib/tenant-db.ts");
 const { getStorage } = await import("../src/lib/storage.ts");
 const { ingestFileAsset } = await import("../src/lib/documents/ingest.ts");
 const { retrievePassages } = await import("../src/lib/documents/retrieve.ts");
-const { answerFromDocument, buildCitations, unsupportedAnswer, resolveDocumentProvider } =
+const { answerFromDocument, unsupportedAnswer, resolveDocumentProvider } =
   await import("../src/lib/ai/document-agent.ts");
 
 /** A world an ordinary Pro customer would have. */
@@ -215,7 +258,11 @@ for (const document of CORPUS) {
       })) {
         out += chunk;
       }
-      answer = out + buildCitations(result.passages);
+      // NOT `out + buildCitations(...)`. `answerFromDocument` yields the
+      // citations as its own final chunk (document-agent.ts:226), so appending
+      // them here printed every Sources block twice — which looked like a
+      // product defect in the first run of this script and was this line.
+      answer = out;
     }
 
     const pages = [...new Set(result.passages.map((p) => [p.pageStart, p.pageEnd]))];
@@ -250,8 +297,16 @@ function grade(expected, answer, result, calledModel) {
         return { ok: false, why: `the retrieved text does not contain "${expected.fact}"` };
       }
     }
-    if (!dryRun && expected.fact && !answer.includes(expected.fact)) {
-      return { ok: false, why: `answer does not contain "${expected.fact}"` };
+    if (!dryRun && expected.fact) {
+      // Alternatives, because the document says "thirty percent" and a correct
+      // answer may well say "30%". A grader that only accepts the document's
+      // own wording marks a right answer wrong, which is worse than useless —
+      // it hides the cases that are genuinely wrong among the ones that are not.
+      const accepted = [expected.fact, ...(expected.alsoAccept ?? [])];
+      const found = accepted.some((f) => answer.toLowerCase().includes(f.toLowerCase()));
+      if (!found) {
+        return { ok: false, why: `answer contains none of ${JSON.stringify(accepted)}` };
+      }
     }
     if (expected.page !== undefined) {
       const cited = result.passages.some(

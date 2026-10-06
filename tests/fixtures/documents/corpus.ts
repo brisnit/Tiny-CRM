@@ -29,6 +29,15 @@ export type Expectation = {
   question: string;
   /** What a correct answer must say. */
   fact?: string;
+  /**
+   * Other wordings that are equally correct.
+   *
+   * The document says "thirty percent"; an answer saying "30%" is right. The
+   * grader is a screen over prose, so it has to accept the forms a correct
+   * answer actually takes — otherwise a right answer is reported as a failure
+   * and the genuinely wrong ones are lost in the noise.
+   */
+  alsoAccept?: string[];
   /** The page a citation must name. */
   page?: number;
   kind: "supported" | "unsupported" | "misleading";
@@ -107,7 +116,7 @@ const RFP: Corpus = {
     { question: "What is the invoice payment term?", fact: "45", page: 3, kind: "supported",
       note: "the question that was flatly refused before plural folding" },
     { question: "How much cyber liability insurance is required?", fact: "2,000,000", page: 4, kind: "supported" },
-    { question: "How is cost weighted in the evaluation?", fact: "thirty percent", page: 5, kind: "supported" },
+    { question: "How is cost weighted in the evaluation?", fact: "thirty percent", alsoAccept: ["30 percent", "30%"], page: 5, kind: "supported" },
     { question: "What is the bond percentage?", fact: "ten percent", page: 4, kind: "supported",
       note: "one matched term, and the answer IS in the document — the collision case" },
     { question: "What is the penalty for late delivery of hardware?", kind: "unsupported",
@@ -153,9 +162,9 @@ const AGREEMENT: Corpus = {
     ],
   ],
   expectations: [
-    { question: "How long is the initial term?", fact: "thirty-six", page: 2, kind: "supported" },
+    { question: "How long is the initial term?", fact: "thirty-six", alsoAccept: ["36 months", "36-month", "three years"], page: 2, kind: "supported" },
     { question: "What notice is needed to terminate for convenience?", fact: "ninety days", page: 2, kind: "supported" },
-    { question: "What uptime percentage must be met monthly?", fact: "ninety-nine", page: 3, kind: "supported",
+    { question: "What uptime percentage must be met monthly?", fact: "ninety-nine", alsoAccept: ["99.5", "99.5%"], page: 3, kind: "supported",
       note: "the same question that must be refused on the RFP" },
     { question: "Can City data be sent outside the United States?", fact: "written consent", page: 4, kind: "supported" },
     { question: "What is the total contract ceiling?", kind: "unsupported",
