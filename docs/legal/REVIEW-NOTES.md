@@ -4,9 +4,18 @@
 `/terms`. It records what the 5 October 2026 review copy left open, plus what
 checking that copy against the repository turned up.
 
-Status: both pages are **routed and linked**, signup requires accepting the terms,
-and PR #31 is **draft** — nothing is merged or deployed. The pages have **not**
-been legally certified, and the banner on each says so.
+Status: both pages are **routed and linked**, carry an **"Effective date"** line
+taken from `LEGAL_EFFECTIVE_ON`, signup requires accepting the terms, and PR #31
+is **draft** — nothing is merged or deployed.
+
+**The draft banner has been removed from both pages.** It said they "should not be
+published", which would have been false on a published page, and a banner is the
+wrong place for the caveats anyway. The pages claim no legal review, no
+certification and no compliance with any jurisdiction; the factual limitations —
+no data processing agreement, no promise of data residency, retention as
+implemented, and no tax collected — stay in the customer-facing text where a
+reader meets them in context. The unresolved *operational* questions stay here,
+internal, and render nowhere.
 
 ## What was approved and is now written into the pages
 

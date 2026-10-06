@@ -1,4 +1,4 @@
-import { DraftBanner, LegalPage, Section } from "@/components/marketing/legal";
+import { LegalPage, Section } from "@/components/marketing/legal";
 import { legalEffectiveDate } from "@/lib/legal";
 
 export const metadata = {
@@ -20,12 +20,16 @@ export const metadata = {
  * them are recorded in docs/legal/REVIEW-NOTES.md, which is internal and is not
  * rendered on the page.
  *
- * Nothing here describes the page as lawyer-reviewed or legally certified,
- * because it is neither.
+ * Nothing here claims legal review, certification, or compliance with any
+ * particular jurisdiction — none of which would be true. The page simply states
+ * what the software does and what is not offered, and the factual limitations
+ * stay in the customer-facing text rather than moving to a banner: no data
+ * processing agreement, no promise of data residency, retention as implemented,
+ * and no tax currently collected.
  */
 export default function PrivacyPage() {
   return (
-    <LegalPage title="Privacy notice" updated={legalEffectiveDate()} intro={<DraftBanner />}>
+    <LegalPage title="Privacy notice" effectiveOn={legalEffectiveDate()}>
       <Section id="what-this-is" heading="1. What Tiny CRM is, and why that shapes this notice">
         <p>
           Tiny CRM stores information about your contacts, companies, deals, projects and notes.

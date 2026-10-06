@@ -21,13 +21,21 @@ import { LogoMark } from "@/components/brand/logo";
 
 export function LegalPage({
   title,
-  updated,
+  effectiveOn,
   intro,
   children,
 }: {
   title: string;
-  updated: string;
-  intro: React.ReactNode;
+  /**
+   * The date the document takes effect, rendered as "Effective date: …".
+   *
+   * Named for what it is. It was `updated` while the pages were drafts, and
+   * "last updated" is a weaker and different claim than "effective" — the one
+   * that matters for a document somebody is agreeing to.
+   */
+  effectiveOn: string;
+  /** Optional. There is no draft banner any more; nothing is rendered when absent. */
+  intro?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -48,8 +56,8 @@ export function LegalPage({
 
       <main className="mx-auto max-w-3xl px-4 py-12 sm:px-6">
         <h1 className="text-[30px] font-semibold leading-tight tracking-[-0.03em] text-body">{title}</h1>
-        <p className="mt-2 text-[12.5px] text-faint">Last updated {updated}</p>
-        <div className="mt-6 text-[14px] leading-relaxed text-muted">{intro}</div>
+        <p className="mt-2 text-[12.5px] text-faint">Effective date: {effectiveOn}</p>
+        {intro ? <div className="mt-6 text-[14px] leading-relaxed text-muted">{intro}</div> : null}
         <div className="mt-10 space-y-10">{children}</div>
       </main>
 
@@ -90,18 +98,3 @@ export function NeedsDetail({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Banner stating that the page is not yet publishable. */
-export function DraftBanner() {
-  return (
-    <div className="flex items-start gap-2.5 rounded-xl border border-amber-400 bg-amber-50/80 p-4 text-[13px] leading-relaxed text-body dark:border-amber-800 dark:bg-amber-950/40">
-      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
-      <div>
-        <strong className="font-semibold">Draft — not published.</strong> Every statement about how
-        the software behaves was written from its source and is accurate as of the date above. This
-        page has not been legally certified, and open operational questions remain. It should not be
-        published, or used to satisfy a payment processor&apos;s requirements, until those are
-        closed.
-      </div>
-    </div>
-  );
-}

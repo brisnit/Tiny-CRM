@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { DraftBanner, LegalPage, Section } from "@/components/marketing/legal";
+import { LegalPage, Section } from "@/components/marketing/legal";
 import { legalEffectiveDate } from "@/lib/legal";
 import {
   PLANS,
@@ -44,15 +44,19 @@ function monthName(period: string): string {
  * page, which advertised $14/month and two features with no implementation for an
  * entire plan generation.
  *
- * Nothing here describes the page as lawyer-reviewed or legally certified,
- * because it is neither.
+ * Nothing here claims legal review, certification, or compliance with any
+ * particular jurisdiction — none of which would be true. The page simply states
+ * what the software does and what is not offered, and the factual limitations
+ * stay in the customer-facing text rather than moving to a banner: no data
+ * processing agreement, no promise of data residency, retention as implemented,
+ * and no tax currently collected.
  */
 export default function TermsPage() {
   const sellable = PLAN_ORDER.map((id) => PLANS[id]);
   const limit = (value: number) => (value === UNLIMITED ? "Unlimited" : value.toLocaleString());
 
   return (
-    <LegalPage title="Terms of service" updated={legalEffectiveDate()} intro={<DraftBanner />}>
+    <LegalPage title="Terms of service" effectiveOn={legalEffectiveDate()}>
       <Section id="parties" heading="1. Who these terms are between">
         <p>
           These terms are between you and <strong>Artifact Digital LLC</strong>, 178 N. Cuyamaca St.,
