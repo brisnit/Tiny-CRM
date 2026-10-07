@@ -354,6 +354,19 @@ export function assertProductionEnv(): void {
     }
   }
 
+  // A deployment that declares it scans uploads must actually be able to. This
+  // is a hard problem rather than a warning because the alternative is the
+  // failure the whole seam exists to prevent: believing scanning is on while
+  // every upload goes through unscanned. `scanForMalware` also refuses at
+  // request time, but discovering it there means the first customer upload is
+  // the test.
+  if (process.env["REQUIRE_MALWARE_SCAN"] === "true" && !process.env["MALWARE_SCANNER_URL"]?.trim()) {
+    problems.push(
+      "REQUIRE_MALWARE_SCAN=true but MALWARE_SCANNER_URL is not set. Point it at a " +
+        "scanner, or unset REQUIRE_MALWARE_SCAN to accept unscanned uploads.",
+    );
+  }
+
   // Rate limiting is only a control if the counters are shared. On more than one
   // instance an in-process limiter gives an attacker N times every limit, and
   // resets them all on each deploy — so a deployment that declares more than one
@@ -462,6 +475,14 @@ export function productionWarnings(): string[] {
           "with no long-lived process this is the only job runner, so automations, " +
           "scheduled workspace deletions and retention sweeps will not happen. " +
           "Either set it and schedule the endpoint, or run `npm run worker`.",
+      );
+    }
+
+    if (env.storageDriver !== "none" && !process.env["MALWARE_SCANNER_URL"]?.trim()) {
+      warnings.push(
+        "Object storage is configured but MALWARE_SCANNER_URL is not — uploads are " +
+          "accepted without being scanned. Set MALWARE_SCANNER_URL, and " +
+          "REQUIRE_MALWARE_SCAN=true to refuse uploads when the scanner cannot answer.",
       );
     }
 

@@ -1,7 +1,6 @@
 import "server-only";
 
 import { AppError } from "@/lib/errors";
-import { log } from "@/lib/logger";
 import { sanitizeFilename } from "@/lib/sanitize";
 import { LIMITS } from "@/lib/validation/limits";
 
@@ -30,9 +29,12 @@ import { LIMITS } from "@/lib/validation/limits";
  *  - **Served from a separate origin, or as an attachment.** Serving
  *    user-uploaded content from the app's origin makes any file-typing mistake
  *    into stored XSS with a session cookie attached.
- *  - **Scanning is a hook, and it is honest about being empty.** There is no
- *    malware scanner behind `scanForMalware`; it fails closed when a scanner is
- *    required by configuration and is otherwise a documented no-op.
+ *  - **Scanning lives in `src/lib/malware.ts`**, which this module no longer
+ *    pretends to do. The stub that used to sit here threw when
+ *    `REQUIRE_MALWARE_SCAN=true` and was called from nowhere, so the variable
+ *    that was supposed to make a deployment fail closed had no effect at all.
+ *    The real client is reached from `confirmUpload`, on bytes read back out of
+ *    storage, before the record exists.
  */
 
 /** Extensions and their permitted magic-byte signatures. */
@@ -163,36 +165,6 @@ export function validateUpload(candidate: UploadCandidate): AcceptedUpload {
 export function storageKeyFor(workspaceId: string, extension: string): string {
   const random = globalThis.crypto.randomUUID();
   return `workspaces/${workspaceId}/${random}.${extension}`;
-}
-
-/**
- * Malware scanning hook.
- *
- * **There is no scanner behind this.** It is a seam, not a control, and it says
- * so rather than returning `true` and letting a reader assume otherwise.
- *
- * With `REQUIRE_MALWARE_SCAN=true` and no scanner wired in, this throws — so a
- * deployment that believes it is scanning cannot accept an unscanned file.
- * Without it, the upload proceeds and the absence is logged, once per file, at
- * warning level.
- */
-export async function scanForMalware(key: string): Promise<{ scanned: boolean }> {
-  const required = process.env.REQUIRE_MALWARE_SCAN === "true";
-
-  if (required) {
-    throw new AppError(
-      "internal",
-      "Uploads are unavailable right now.",
-      {
-        internal:
-          "REQUIRE_MALWARE_SCAN is set but no scanner is configured. Wire one into " +
-          "scanForMalware() in src/lib/uploads.ts, or unset the variable.",
-      },
-    );
-  }
-
-  log.warn("upload stored without malware scanning", { key });
-  return { scanned: false };
 }
 
 /**

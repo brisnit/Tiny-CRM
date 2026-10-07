@@ -32,6 +32,7 @@
     "test:backup": "node scripts/backup-test.mjs",
     "test:backup:roundtrip": "node scripts/backup-roundtrip-pg.mjs",
     "worker": "NODE_OPTIONS=\"--require ./scripts/allow-server-modules.cjs\" tsx scripts/worker.ts",
+    "docqa:check": "NODE_OPTIONS=\"--require ./scripts/allow-server-modules.cjs\" tsx scripts/docqa-model-check.mjs",
     "audit:deps": "node scripts/dependency-audit.mjs",
     "verify:hosted": "node scripts/verify-hosted.mjs"
   },

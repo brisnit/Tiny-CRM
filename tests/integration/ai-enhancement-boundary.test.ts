@@ -147,7 +147,9 @@ describe("AI failures degrade instead of breaking the page", () => {
     const source = readFileSync(resolve(import.meta.dirname, "../../src/lib/ai/summaries.ts"), "utf8");
     for (const fn of ["getRecordSummary", "getDailyBrief"]) {
       const body = source.slice(source.indexOf(`export async function ${fn}`));
-      const providerAt = body.search(/const provider = /);
+      // `let`, not `const`, since the automatic path may reassign it to the
+      // offline engine when automatic work has spent its share of the month.
+      const providerAt = body.search(/(?:const|let) provider = /);
       // `reserveAiRequest` replaced the read-then-write `assertWithinLimit` /
       // `recordUsage` pair: the check and the increment are now one atomic
       // statement, because two concurrent requests could both pass a read-only
@@ -160,7 +162,29 @@ describe("AI failures degrade instead of breaking the page", () => {
         providerAt < reserveAt,
         `${fn} claims the allowance before choosing a provider, so the offline engine is charged`,
       );
-      assert.match(body.slice(0, reserveAt + 400), /metered/, `${fn} does not gate the allowance on a metered provider`);
+      // The gate used to be a `metered` boolean. It is now the branch itself:
+      // nothing may be reserved except inside a test that the resolved provider
+      // is not the offline one. Asserted on the text between choosing the
+      // provider and reserving, which is where the guard has to be.
+      assert.match(
+        body.slice(providerAt, reserveAt),
+        /provider\.id !== "offline"/,
+        `${fn} does not gate the allowance on a metered provider`,
+      );
+      // And the two kinds of request must stay distinguished: a page render is
+      // handed the deterministic engine and spends nothing, while somebody who
+      // asked and is waiting gets the whole allowance and a real error if it is
+      // gone. Covered in behaviour by tests/security/automatic-ai-allowance.
+      assert.match(
+        body.slice(providerAt, reserveAt + 600),
+        /userAsked\(options\)/,
+        `${fn} no longer distinguishes work the customer asked for from work it did not`,
+      );
+      assert.match(
+        body.slice(providerAt, reserveAt + 600),
+        /provider = offlineProvider\(\)/,
+        `${fn} does not fall back to the built-in engine for work nobody asked for`,
+      );
     }
   });
 

@@ -78,6 +78,11 @@ export async function Pricing({ signedIn }: { signedIn: boolean }) {
             </Button>
 
             <ul className="mt-6 space-y-2.5 border-t border-hairline pt-5">
+              {/* Deliberately no period. This page describes the plan, not this
+                  month, and it has no meter beside it to contradict. It therefore
+                  shows the standing allowance — understating October's
+                  grandfathered figure rather than baking a transitional number
+                  into a page that may be cached past the month it described. */}
               {advertisedFeatures(plan, enabledFlags).map((feature) => (
                 <li key={feature} className="flex items-start gap-2.5 text-[13px] leading-snug text-body">
                   <Check

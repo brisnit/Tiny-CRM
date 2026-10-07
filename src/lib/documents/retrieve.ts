@@ -156,6 +156,47 @@ export function extractTerms(question: string): QueryTerms {
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
+ * One query word, as a pattern matching its simple English inflections.
+ *
+ * Word-boundary matching is what makes a passage relevant rather than merely
+ * plausible — see `matcherFor`. But *exact* word matching also refuses facts the
+ * document plainly contains, and it does so silently. Measured against a
+ * five-page RFP whose page 3 reads "Invoices are paid net 45 days after
+ * acceptance":
+ *
+ *   "What is the invoice payment term?"    -> 0 terms matched, flat refusal
+ *   "What are the invoices payment terms?" -> matched, answered
+ *
+ * `invoice` did not match `Invoices`, and `term` did not match `terms`. A
+ * customer who asks the natural singular question is told the document says
+ * nothing about something on page 3. That is the worst failure this feature can
+ * have: a confident, specific denial.
+ *
+ * So each word is folded to a stem and matched with its plural back on. This is
+ * deliberately *not* a stemmer: no Porter, no suffix table, no irregulars, no
+ * verb forms. It handles number agreement, which is what the measurement showed
+ * was costing real answers, and nothing else. `payment` still does not match
+ * `paid`, and that is accepted rather than hidden — a wider rule would start
+ * matching `costly` for `cost` and put the word-boundary guarantee back at risk.
+ *
+ * Inverse document frequency is unaffected: this changes what counts as an
+ * occurrence of a term, not how occurrences are weighed.
+ */
+function inflectedPattern(word: string): string {
+  let stem = word;
+  if (word.length > 4 && /[^aeiou]ies$/.test(word)) stem = `${word.slice(0, -3)}y`;
+  else if (word.length > 4 && /(?:s|x|z|ch|sh)es$/.test(word)) stem = word.slice(0, -2);
+  else if (word.length > 3 && /[^s]s$/.test(word)) stem = word.slice(0, -1);
+
+  // A stem ending in `y` pluralises to `ies`, so match that pair explicitly
+  // rather than appending `s` to produce the non-word "policys".
+  if (stem.length > 2 && stem.endsWith("y")) {
+    return `${escape(stem.slice(0, -1))}(?:y|ies)`;
+  }
+  return `${escape(stem)}(?:es|s)?`;
+}
+
+/**
  * A matcher for one term, anchored to word boundaries.
  *
  * `\b` is ASCII-only in JavaScript, so the boundaries are written out as
@@ -169,8 +210,8 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  */
 function matcherFor(term: string): RegExp {
   const body = term.includes(" ")
-    ? term.split(/\s+/).map(escape).join("\\s+")
-    : escape(term);
+    ? term.split(/\s+/).map(inflectedPattern).join("\\s+")
+    : inflectedPattern(term);
   return new RegExp(`(?<![\\p{L}\\p{N}_])${body}(?![\\p{L}\\p{N}_])`, "giu");
 }
 

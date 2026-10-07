@@ -1,0 +1,65 @@
+# The malware scanner. See docs/MALWARE-SCANNING.md.
+#
+# Provisioned with `fly apps create` + `fly volumes create` rather than
+# `fly launch`, which is interactive and offers separately-billed add-ons.
+#
+#   fly apps create tiny-crm-scanner --org personal
+#   fly volumes create clamav_db --size 3 --region sjc --app tiny-crm-scanner
+#   fly volumes update <id> --scheduled-snapshots=false   # snapshots are billed
+#   printf 'SCANNER_TOKEN=%s\n' "$TOKEN" | fly secrets import   # stdin, not argv
+#   fly deploy
+
+app = "tiny-crm-scanner"
+primary_region = "sjc"   # nearest region this account offers to the app's pdx1;
+                         # Fly has no "sea" here, and sjc beats lax on distance
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  MAX_SIGNATURE_AGE_HOURS = "48"
+  MAX_SCAN_BYTES = "26214400"
+
+  # clamd listens on loopback only. Set through the environment because the
+  # base image's entrypoint rewrites clamd.conf from CLAMD_CONF_* on every
+  # start — editing the file ourselves would be overwritten.
+  CLAMD_CONF_TCPSocket = "3310"
+  CLAMD_CONF_TCPAddr = "127.0.0.1"
+  CLAMD_CONF_StreamMaxLength = "30M"
+
+  # Four signature checks a day rather than the image's default of one. With
+  # MAX_SIGNATURE_AGE_HOURS at 48 a single missed check is harmless and two
+  # consecutive missed days fail closed, which is the behaviour wanted — but a
+  # once-a-day default leaves very little margin for a mirror hiccup.
+  FRESHCLAM_CHECKS = "4"
+
+[mounts]
+  source = "clamav_db"
+  destination = "/var/lib/clamav"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Deliberately NOT auto_stop/auto_start. A cold start reloads the whole
+  # signature database, which would put a multi-second stall on the first
+  # upload after any quiet period, against a 20-second client timeout.
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+[[http_service.checks]]
+  interval = "60s"
+  timeout = "10s"
+  grace_period = "300s"   # the first signature download is slow
+  method = "GET"
+  # /live, not /health, for two reasons. The check cannot carry a credential —
+  # this file is committed and there is no secret interpolation for check
+  # headers — and it must not test signature freshness: a failing check restarts
+  # the machine, and a restart does not make signatures fresher. Staleness stops
+  # scans at scan time instead, which is where it can do some good.
+  path = "/live"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "2gb"   # 1gb is not enough: clamd holds the signature set resident

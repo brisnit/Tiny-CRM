@@ -5,8 +5,9 @@ import { resolve } from "node:path";
 
 import { FLAGS } from "../../src/lib/flags";
 import {
-  ENFORCED_LIMITS, PLANS, PLAN_ORDER, PRE_STRIPE_PLAN_ALIASES, UNLIMITED,
-  advertisedFeatures, planFor, type PlanId,
+  AI_ALLOWANCE_FEATURE, ENFORCED_LIMITS, LIMIT_NOUN, LIMIT_NOUN_PLURAL, PLANS, PLAN_ORDER,
+  PRE_STRIPE_PLAN_ALIASES, PRICING_CUTOVER_PERIOD, UNLIMITED,
+  advertisedFeatures, aiAllowanceFor, planFor, type LimitKey, type PlanId,
 } from "../../src/lib/plans";
 
 /**
@@ -254,5 +255,182 @@ describe("the plan rename cannot strip an account on either side of the deploy",
     assert.equal(planFor("something_else").id, "free");
     assert.equal(planFor(null).id, "free");
     assert.equal(planFor(undefined).id, "free");
+  });
+});
+
+/**
+ * `PRICING_CUTOVER_PERIOD` is nullable on purpose — the grandfather is meant to
+ * be switchable off by setting it to null. Narrowed once here so the assertions
+ * below read as what they mean, and skipped rather than silently vacuous if the
+ * cutover is ever retired.
+ */
+const CUTOVER = PRICING_CUTOVER_PERIOD;
+const cutoverActive = CUTOVER === null ? { skip: "the pricing cutover has been retired" } : undefined;
+
+describe("the AI allowance line follows the period being described", () => {
+  test("no period means the plan's standing allowance", () => {
+    for (const id of PLAN_ORDER) {
+      const plan = PLANS[id];
+      const line = advertisedFeatures(plan, []).find((f) => /Tiny AI model answers/.test(f));
+      assert.ok(line, `${id} no longer advertises an AI allowance`);
+      assert.match(
+        line,
+        new RegExp(`^${plan.limits.aiRequestsPerMonth.toLocaleString()} Tiny AI`),
+        `${id} advertised a number that is not its standing allowance`,
+      );
+    }
+  });
+
+  test("the cutover period means the effective allowance", cutoverActive, () => {
+    const free = PLANS.free;
+    const effective = aiAllowanceFor(free, CUTOVER!);
+    assert.notEqual(
+      effective,
+      free.limits.aiRequestsPerMonth,
+      "the cutover no longer changes Free's allowance, so this test proves nothing",
+    );
+
+    const line = advertisedFeatures(free, [], CUTOVER!)
+      .find((f) => /Tiny AI model answers/.test(f));
+    assert.equal(
+      line,
+      `${effective.toLocaleString()} Tiny AI model answers a month`,
+      "the copy and the meter would disagree during the cutover",
+    );
+  });
+
+  test("a period after the cutover returns to the standing allowance", () => {
+    const line = advertisedFeatures(PLANS.free, [], "2099-01")
+      .find((f) => /Tiny AI model answers/.test(f));
+    assert.equal(line, "10 Tiny AI model answers a month");
+  });
+
+  test("the paid plans are unaffected by the cutover", cutoverActive, () => {
+    // The grandfather lifts Free only. If it ever touched a paid plan, the
+    // allowance would stop being derivable from the cost model.
+    for (const id of ["plus", "pro"] as const) {
+      const plan = PLANS[id];
+      assert.equal(
+        aiAllowanceFor(plan, CUTOVER!),
+        plan.limits.aiRequestsPerMonth,
+        `${id}'s allowance moved during the cutover`,
+      );
+    }
+  });
+
+  test("the placeholder never reaches a reader", () => {
+    for (const id of PLAN_ORDER) {
+      for (const period of [undefined, CUTOVER ?? undefined, "2099-01"]) {
+        for (const feature of advertisedFeatures(PLANS[id], ["documentAi"], period)) {
+          assert.doesNotMatch(
+            feature,
+            /\u0000/,
+            `${id} rendered the raw allowance token with period=${period}`,
+          );
+        }
+      }
+    }
+  });
+
+  test("every plan's features carry exactly one allowance token", () => {
+    // Guards the substitution: a plan that lost its token would silently stop
+    // advertising an allowance, and one with two would get two lines.
+    for (const id of PLAN_ORDER) {
+      const tokens = PLANS[id].features.filter((f) => f === AI_ALLOWANCE_FEATURE);
+      assert.equal(tokens.length, 1, `${id} has ${tokens.length} allowance tokens`);
+    }
+  });
+
+  test("no plan hard-codes an allowance number in its other copy", () => {
+    // The defect was a literal in the features array. If one comes back, the
+    // substitution above cannot keep it honest.
+    for (const id of PLAN_ORDER) {
+      for (const feature of PLANS[id].features) {
+        if (feature === AI_ALLOWANCE_FEATURE) continue;
+        assert.doesNotMatch(
+          feature,
+          /\d+\s+Tiny AI/,
+          `${id} hard-codes an AI allowance in "${feature}"`,
+        );
+      }
+    }
+  });
+});
+
+describe("the render sites pass the period they should", () => {
+  test("the billing page passes a period; the public pricing page does not", async () => {
+    /**
+     * Wiring, asserted at the call site, because the defect was the wiring: the
+     * substitution was correct and the page did not ask for it.
+     *
+     * The billing page must pass a period — it renders the list directly above
+     * the usage meter, and that adjacency is what made the contradiction
+     * visible. The public page must not: it describes the plan rather than this
+     * month, and it can be cached past the month it described.
+     */
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+
+    const billing = readFileSync(
+      resolve(process.cwd(), "src/app/(app)/settings/billing/page.tsx"), "utf8");
+    assert.match(
+      billing,
+      /advertisedFeatures\(plan, enabledFlags, currentPeriod\(\)\)/,
+      "the billing page's feature list no longer follows the period its meter counts",
+    );
+
+    const marketing = readFileSync(
+      resolve(process.cwd(), "src/components/marketing/pricing.tsx"), "utf8");
+    assert.match(
+      marketing,
+      /advertisedFeatures\(plan, enabledFlags\)/,
+      "the public pricing page now bakes a single month's allowance into cacheable copy",
+    );
+  });
+});
+
+describe("usage labels are pluralised, not suffixed", () => {
+  const keys = Object.keys(LIMIT_NOUN) as LimitKey[];
+
+  test("every limit has a plural", () => {
+    for (const key of keys) {
+      assert.ok(LIMIT_NOUN_PLURAL[key], `${key} has no plural label`);
+    }
+    assert.equal(
+      Object.keys(LIMIT_NOUN_PLURAL).length,
+      keys.length,
+      "the two noun maps have drifted apart",
+    );
+  });
+
+  test("the cases naive suffixing got wrong", () => {
+    assert.equal(LIMIT_NOUN_PLURAL.companies, "companies");
+    assert.equal(LIMIT_NOUN_PLURAL.opportunities, "opportunities");
+    // The control: proves the old rendering really did produce the bad strings,
+    // so the assertions above are testing the fix rather than a weak fixture.
+    assert.equal(`${LIMIT_NOUN.companies}s`, "companys");
+    assert.equal(`${LIMIT_NOUN.opportunities}s`, "opportunitys");
+  });
+
+  test("no plural is the singular with an s stuck on it where that is wrong", () => {
+    for (const key of keys) {
+      const naive = `${LIMIT_NOUN[key]}s`;
+      if (LIMIT_NOUN_PLURAL[key] === naive) continue; // "contact" -> "contacts" is fine
+      assert.notEqual(
+        LIMIT_NOUN_PLURAL[key],
+        naive,
+        `${key} still uses the naive plural`,
+      );
+    }
+  });
+
+  test("no plural ends in a sequence English does not produce", () => {
+    for (const key of keys) {
+      assert.doesNotMatch(
+        LIMIT_NOUN_PLURAL[key],
+        /(ys|chs|shs|xs|ss$)/,
+        `"${LIMIT_NOUN_PLURAL[key]}" is not an English plural`,
+      );
+    }
   });
 });

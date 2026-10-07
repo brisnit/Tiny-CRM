@@ -77,6 +77,60 @@ export async function assertWithinLimit(
   }
 }
 
+/**
+ * Throws unless the workspace's owner is on a plan that includes file uploads.
+ *
+ * ## Why this did not exist, and why it has to
+ *
+ * `PlanCapabilities.fileUploads` has been declared since the plan matrix was
+ * written — `false` on Free, `true` on Plus and Pro — and **nothing ever read
+ * it**. `planGrants` was only ever called for `documentQa`. The capability was
+ * enforced by accident: the `files` feature flag defaults to `false` and is
+ * enabled for one workspace, so nobody had uploads and the gap was invisible.
+ *
+ * It stops being invisible the moment `files` is turned on globally, which is
+ * exactly what rolling this feature out involves. Without this check a Free
+ * account would get a capability the pricing page sells as Plus, and the flag
+ * that was supposed to be an operator rollout control would silently become a
+ * pricing change.
+ *
+ * ## Whose plan
+ *
+ * The **workspace owner's**, like seats and like `documentQaEntitled` — the
+ * capability belongs to the workspace and the owner is who pays for it. Reading
+ * the caller's plan instead would refuse a Free member of a Plus workspace and
+ * admit a Plus member of a Free one.
+ *
+ * ## Uploading only
+ *
+ * Called on the two upload steps and deliberately **not** on preview, download
+ * or delete. An account that downgrades keeps what it already stored and must
+ * still be able to read and remove it; a plan change is not a reason to hold
+ * somebody's contracts hostage. This mirrors what the document-QA refusal
+ * already promises in so many words: "Everything already uploaded stays where
+ * it is, and you can still download it."
+ *
+ * Must be called inside a tenant context the caller has already earned.
+ * `Workspace` is under row-level security, so a workspace that is not visible
+ * from this context is not entitled — failing closed, because the alternative
+ * is granting a paid capability because a read came back empty.
+ */
+export async function requireFileUploadEntitlement(workspaceId: string): Promise<void> {
+  const { planGrants } = await import("@/lib/plans");
+
+  const workspace = await db.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { owner: { select: { plan: true } } },
+  });
+
+  if (workspace && planGrants(workspace.owner.plan, "fileUploads")) return;
+
+  throw new AppError(
+    "plan_limit",
+    "Attaching files to a record is a Plus feature. Upgrade to upload documents.",
+  );
+}
+
 /** Current usage across every limited resource. */
 export async function getPlanUsage(actor: Actor | WorkspaceActor): Promise<Record<LimitKey, number>> {
   const workspaceIds = actor.memberships.map((m) => m.id);
@@ -239,6 +293,30 @@ export async function reserveAiOrThrow(actor: Actor | WorkspaceActor): Promise<v
   const ok = await reserveAiRequest(actor.identity.id, limit);
   if (!ok) throw new AiAllowanceError(limit, plan.id);
 }
+
+/**
+ * Why there is no automatic-work allowance in this module.
+ *
+ * An earlier version capped automatic generation at half the month's allowance,
+ * so a page render could still spend a customer's budget — just less of it.
+ * That was the wrong shape. The allowance is sold as answers to the customer's
+ * questions, and a record summary nobody asked for is not one; metering it at
+ * any rate means part of what they paid for is consumed by browsing. Measured
+ * on production: a new Free account read 4 of its allowance before its owner
+ * typed a word.
+ *
+ * So automatic generation does not reserve at all. It uses the deterministic
+ * engine, which makes no external request and costs nothing to serve. The
+ * decision lives at the call site in `src/lib/ai/summaries.ts`, where the
+ * provider is chosen — there is deliberately no second reservation function
+ * here that a caller could reach for by mistake.
+ *
+ * Only an explicit customer action reaches `reserveAiOrThrow`: the regenerate
+ * buttons, document questions, Tiny AI chat and entity extraction.
+ *
+ * Recorded rather than deleted silently, because "why was nothing charged for
+ * the summary on this page" is a question worth answering from the code.
+ */
 
 /**
  * Applies a plan change. Callable only from the verified billing webhook and

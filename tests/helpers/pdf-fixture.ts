@@ -17,10 +17,108 @@ function pdfString(text: string): string {
   return text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 }
 
+/**
+ * Wrapping lines so that none of them is painted off the page.
+ *
+ * **Text painted outside the page box is not extracted.** It is not clipped from
+ * the file and it is not an error; a reader never sees it, and pdf.js reports
+ * what a reader would see. So a fixture line wider than the page used to come
+ * back silently truncated — a 96-character sentence extracted as 89 characters,
+ * cut mid-word, with no warning. Found while building a dense corpus for the
+ * document Q&A model check, where it presented as retrieval citing the correct
+ * page for a sentence that was not in the extracted text.
+ *
+ * Wrapping on a character count is not enough, and that is the second thing this
+ * had to learn: `W` is 0.944em in Helvetica where lowercase prose averages about
+ * 0.45em, so seventy-two characters of capitals is nearly twice the width of
+ * seventy-two characters of prose and runs off the page again. So the wrap
+ * measures width rather than counting characters, with a deliberately generous
+ * per-character estimate — over-estimating wraps a line early, which is
+ * harmless, while under-estimating loses text, which is the bug.
+ */
+const FONT_SIZE_PT = 14;
+/** 612pt MediaBox, inset 72pt on the left, with a 72pt right margin. */
+const TEXT_WIDTH_PT = 612 - 72 - 72;
+
+/**
+ * Helvetica advance widths for printable ASCII, in 1/1000 em.
+ *
+ * The real table from the font's own metrics, not an estimate. A first attempt
+ * used width classes — 0.95em for capitals, 0.6em for everything else — and it
+ * was wrong in the expensive direction: it over-estimated an ordinary line by
+ * about forty percent and wrapped text that fits, which broke an existing
+ * assertion that a phrase appears contiguously on one page. Over-estimating is
+ * not "safe" here; it just moves the damage from losing text to reflowing it.
+ *
+ * Indexed from space (0x20) to tilde (0x7e). Anything outside that range falls
+ * back to the widest entry, since the builder writes latin1 and an exotic
+ * character is rare enough that wrapping early is the right trade.
+ */
+const HELVETICA_WIDTHS = [
+  278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, // ' ' .. '/'
+  556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, // '0' .. '?'
+  1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, // '@' .. 'O'
+  667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, // 'P' .. '_'
+  333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, // '`' .. 'o'
+  556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584, // 'p' .. '~'
+] as const;
+
+const WIDEST_WIDTH = 1015;
+
+/** One glyph's advance, in points. */
+function glyphWidth(ch: string): number {
+  const code = ch.charCodeAt(0);
+  const index = code - 0x20;
+  const thousandths =
+    index >= 0 && index < HELVETICA_WIDTHS.length ? HELVETICA_WIDTHS[index]! : WIDEST_WIDTH;
+  return (thousandths / 1000) * FONT_SIZE_PT;
+}
+
+function lineWidth(text: string): number {
+  let total = 0;
+  for (const ch of text) total += glyphWidth(ch);
+  return total;
+}
+
+/** Breaks one logical line at word boundaries so none of it falls off the page. */
+function wrapLine(line: string): string[] {
+  if (lineWidth(line) <= TEXT_WIDTH_PT) return [line];
+
+  const out: string[] = [];
+  let current = "";
+  const flush = () => {
+    if (current.length > 0) out.push(current);
+    current = "";
+  };
+
+  for (const word of line.split(" ")) {
+    const candidate = current.length === 0 ? word : `${current} ${word}`;
+    if (lineWidth(candidate) <= TEXT_WIDTH_PT) {
+      current = candidate;
+      continue;
+    }
+    flush();
+    current = word;
+    // A single word too wide to fit on its own cannot be broken at a space.
+    // Hard-break it rather than let its tail fall off the page.
+    while (lineWidth(current) > TEXT_WIDTH_PT) {
+      let taken = "";
+      for (const ch of current) {
+        if (lineWidth(taken + ch) > TEXT_WIDTH_PT) break;
+        taken += ch;
+      }
+      out.push(taken);
+      current = current.slice(taken.length);
+    }
+  }
+  flush();
+  return out;
+}
+
 /** One page's content stream: a heading, then body lines, laid out top-down. */
 function contentStream(lines: string[]): string {
   const out: string[] = ["BT", "/F1 14 Tf", "72 720 Td"];
-  lines.forEach((line, index) => {
+  lines.flatMap(wrapLine).forEach((line, index) => {
     if (index > 0) out.push("0 -22 Td");
     // A separate Tj per line, so each page has several text items rather than
     // one — which is what a real document looks like to the extractor.

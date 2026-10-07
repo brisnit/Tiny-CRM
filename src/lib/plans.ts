@@ -117,6 +117,23 @@ export type Plan = {
  * Free carries no revenue at all, so its 10 is a deliberate acquisition cost,
  * bounded per account and reported in docs/AI-COST-MODEL.md.
  */
+/**
+ * Stands in for the AI-allowance line until the month is known.
+ *
+ * The three plan `features` arrays used to hard-code `${AI_FREE}` and friends,
+ * which made the copy state the plan's **standing** allowance while the meter
+ * beside it showed the **effective** one. During the October 2026 cutover the
+ * billing page therefore contradicted itself in adjacent elements: "10 Tiny AI
+ * model answers a month" directly above "Model answers 7 / 25".
+ *
+ * A module-level template literal cannot be right here, because the number
+ * depends on which usage period is being described and that is only known per
+ * request. So the position is held by this token and `advertisedFeatures`
+ * substitutes the real figure, which keeps the line where the copy wants it
+ * without letting a stale number be rendered.
+ */
+export const AI_ALLOWANCE_FEATURE = "\u0000ai-allowance";
+
 const AI_FREE = 10;
 const AI_PLUS = 30;
 const AI_PRO = 60;
@@ -150,7 +167,7 @@ export const PLANS: Record<PlanId, Plan> = {
       "5 projects, 25 deals, 200 tasks",
       "Tasks, notes and the activity timeline",
       "Unlimited built-in insights — scores, momentum, duplicates, what has gone quiet",
-      `${AI_FREE} Tiny AI model answers a month`,
+      AI_ALLOWANCE_FEATURE,
       "CSV and spreadsheet import, export any time",
     ],
   },
@@ -182,7 +199,7 @@ export const PLANS: Record<PlanId, Plan> = {
       "2,000 contacts and 750 companies",
       "75 projects, 400 deals, 4,000 tasks",
       "File attachments on any record",
-      `${AI_PLUS} Tiny AI model answers a month`,
+      AI_ALLOWANCE_FEATURE,
       "20 custom fields, multiple pipelines",
       "Cancel any time, no contract",
     ],
@@ -218,7 +235,7 @@ export const PLANS: Record<PlanId, Plan> = {
       "10 workspaces, up to 10 people in each",
       "5,000 contacts and 2,000 companies",
       "200 projects, 1,200 deals, 10,000 tasks",
-      `${AI_PRO} Tiny AI model answers a month`,
+      AI_ALLOWANCE_FEATURE,
       "50 custom fields",
     ],
     gatedFeatures: [
@@ -468,11 +485,27 @@ export function planGrants(plan: string | null | undefined, key: CapabilityKey):
  * database read, so it is done once per render and passed in rather than
  * re-queried per plan.
  */
-export function advertisedFeatures(plan: Plan, enabledFlags: readonly string[]): string[] {
+export function advertisedFeatures(
+  plan: Plan,
+  enabledFlags: readonly string[],
+  /**
+   * The usage period the copy describes, as `YYYY-MM`. Omitted means "the
+   * plan's standing allowance", which is what a surface describing the plan in
+   * the abstract wants. Every surface that sits next to a usage meter must pass
+   * the period the meter counts, or the two will disagree during a cutover.
+   */
+  period?: string,
+): string[] {
+  const allowance = period ? aiAllowanceFor(plan, period) : plan.limits.aiRequestsPerMonth;
+  const features = plan.features.map((feature) =>
+    feature === AI_ALLOWANCE_FEATURE
+      ? `${allowance.toLocaleString()} Tiny AI model answers a month`
+      : feature,
+  );
   const gated = (plan.gatedFeatures ?? [])
     .filter((f) => enabledFlags.includes(f.flag))
     .map((f) => f.text);
-  return [...plan.features, ...gated];
+  return [...features, ...gated];
 }
 
 /** "17 of 50 contacts" — copy shared by settings, upgrade prompts and toasts. */
@@ -532,6 +565,30 @@ export const LIMIT_NOUN: Record<LimitKey, string> = {
   savedViews: "saved view",
   customFields: "custom field",
   seats: "seat",
+};
+
+/**
+ * The same nouns in the plural, written out rather than computed.
+ *
+ * The billing page rendered `{LIMIT_NOUN[key]}s`, which produced **"Companys"**
+ * and **"Opportunitys"** on a page where customers look at what they are paying
+ * for — and, with `capitalize` applied, in title case. English plurals are not a
+ * suffix rule, so there is no clever version of this; twelve strings is the
+ * honest answer and the one that cannot be wrong.
+ */
+export const LIMIT_NOUN_PLURAL: Record<LimitKey, string> = {
+  workspaces: "workspaces",
+  contacts: "contacts",
+  companies: "companies",
+  deals: "deals",
+  projects: "projects",
+  opportunities: "opportunities",
+  tasks: "tasks",
+  aiRequestsPerMonth: "monthly Tiny AI requests",
+  automations: "automations",
+  savedViews: "saved views",
+  customFields: "custom fields",
+  seats: "seats",
 };
 
 /**
