@@ -21,6 +21,7 @@ the sequence around it.
 | Scanner authentication | **passed** | 401 for absent, wrong, and wrong-but-right-length tokens; `/health` too |
 | Stale signatures refuse | **passed** | signatures backdated 30 days → `/health` 503, every scan refused |
 | Outage refuses | **passed** | `clamd` stopped → gateway 502 → the adapter throws → upload refused |
+| A detection is distinguishable from a validation refusal | **passed** | EICAR as `.pdf` refused at `requestUpload` with zero scans and no audit entry; EICAR as `.txt` refused by the scanner with one |
 | **The hosting** | **NOT DONE** | needs provisioning; see §1 |
 | **Production behaviour** | **NOT DONE** | nothing has run in production |
 
@@ -65,46 +66,77 @@ for `freshclam`, and `/health` for the age. Do not proceed.
 
 ---
 
-## 3. Point production at it, still with uploads off
+## 3. Merge — and this step DOES change customer-visible behaviour
 
-Vercel → Production only:
+**Merge before configuring anything in Vercel.** Verified against
+`origin/main`: production has no `src/lib/malware.ts` at all, neither
+`MALWARE_SCANNER_URL` nor `MALWARE_SCANNER_TOKEN` is referenced anywhere in
+`src/`, and `REQUIRE_MALWARE_SCAN` is read only inside the old
+`scanForMalware` stub — which is **called from nowhere**. So all three
+variables are no-ops in production today. Setting them first would produce a
+redeploy that changes nothing and a configuration that looks live and is not.
 
-```
-MALWARE_SCANNER_URL   = https://tiny-crm-scanner.fly.dev/scan
-MALWARE_SCANNER_TOKEN = <the SCANNER_TOKEN value>
-```
+An earlier version of this plan had configuration at step 3 and merge at step
+4. That order was wrong.
 
-Redeploy. Then, and only then:
+### What merging changes for customers
 
-```
-REQUIRE_MALWARE_SCAN  = true
-```
+Both flags stay `false`, so nothing about uploads or document Q&A changes. But
+it is **not** a behaviour-free merge, and two of these are immediately visible:
 
-Redeploy again. The order matters: the second variable without the first is
-refused at boot by the configuration gate, deliberately, so a deployment that
-believes it scans cannot start without a scanner.
+| Change | Who sees it |
+|---|---|
+| **Automatic summaries and the daily brief switch to the built-in engine.** Record pages and the home brief become the structured version instead of model-written prose. | every account, immediately |
+| **The AI usage meter stops moving on page views.** Only explicit actions — regenerate, Tiny AI chat, document questions, entity extraction — spend the allowance. | every account |
+| **Billing page allowance line follows the usage period.** During October it reads 25 for Free rather than 10, matching the meter beside it. | every account on the billing page |
+| **"Companys" and "Opportunitys" become "companies" and "opportunities".** | every account on the billing page |
+| Uploads become plan-gated (Plus and above) | nobody yet — `files` is off |
+| Retrieval fixes, immediate ingestion, the scanner adapter | nobody yet — both flags off |
+| `sharp` patched past CVE-2026-96889 | nobody; it is a build-time dependency |
 
-**Gate:** the boot line appears, and the warning
-`Object storage is configured but MALWARE_SCANNER_URL is not` is gone.
+The first two are the ones to be deliberate about. Record summaries will read
+differently — more structured, less prose — and that is the intended trade for
+not charging customers' allowances for pages they merely opened. If you would
+rather keep model-written summaries on page load, say so before merging; it is
+a one-line change at the call site.
 
-Uploads are still off — the `files` flag is `false` — so nothing is scanned yet
-and nothing customer-facing has changed.
+**Gate:** CI green on the merge head. No migrations — `git diff --stat main HEAD -- prisma/`
+is empty.
 
 ---
 
-## 4. Merge the branch
+## 4. Configure the scanner in production
 
-`feat/document-qa-readiness`, draft PR #32. Merging changes no behaviour: both
-flags default to `false` and are overridden nowhere, and `src/lib/flags.ts` is
-byte-identical to `main`.
+Now the variables mean something. Vercel → Project → Settings → Environment
+Variables, **Production only**, using the secret field:
 
-What merging does ship: the retrieval fix, the upload plan entitlement,
-immediate ingestion, the pricing-copy corrections, the unmetered automatic
-summaries, the `sharp` patch, and the scanner adapter.
+| Variable | Value |
+|---|---|
+| `MALWARE_SCANNER_URL` | `https://tiny-crm-scanner.fly.dev/scan` |
+| `MALWARE_SCANNER_TOKEN` | the same value you set as Fly's `SCANNER_TOKEN` |
 
-**Gate:** CI green on the merge head. Apply migrations first if any are
-outstanding — there are none in this branch (`git diff --stat main HEAD -- prisma/`
-is empty).
+Redeploy. **Both**, not just the URL — the gateway returns 401 without the
+token and the adapter treats a 401 as no verdict, so a URL on its own would
+refuse every upload once step 5 is done.
+
+Then, as a separate change:
+
+| Variable | Value |
+|---|---|
+| `REQUIRE_MALWARE_SCAN` | `true` |
+
+Redeploy again.
+
+**The order within this step matters.** `REQUIRE_MALWARE_SCAN=true` without
+`MALWARE_SCANNER_URL` is refused at boot by the configuration gate in
+`src/lib/env.ts` — deliberately, so a deployment that believes it scans cannot
+start without a scanner. Setting all three at once works; setting the
+requirement first does not.
+
+**Gate:** the boot line appears, and the warning
+`Object storage is configured but MALWARE_SCANNER_URL is not` is gone from it.
+
+Uploads are still off, so nothing is scanned yet.
 
 ---
 
@@ -118,12 +150,40 @@ VALUES (gen_random_uuid()::text, 'files', '<workspace id>', true, now());
 Start with the Artifact Digital workspace, which already has this row. Then one
 external workspace on Plus or Pro.
 
-**Gate, per workspace:** upload a real PDF and confirm it appears; upload pure
-EICAR renamed `.pdf` and confirm it is **refused** with "appears to contain
-malware", leaves no row, and writes a `security.upload_rejected` audit entry.
+### The gate, and how to read a refusal
 
-**Note:** a Free workspace will be refused with "Attaching files to a record is
-a Plus feature" — that is the plan entitlement working, not a fault.
+Upload a real PDF: it should appear in the project's Documents panel.
+
+Then test the scanner **through the app** — and this is where the obvious check
+is wrong:
+
+> **Do not use EICAR renamed `.pdf`.** It is refused, but by *validation*, not
+> scanning. `pdf` carries a magic-byte rule (`%PDF`) and EICAR begins
+> `X5O!P%@AP`, so the file is rejected at `requestUpload` before it is even
+> stored — two steps before any scan. Measured: the refusal reads *"That file's
+> contents do not match its extension."*, the scanner is consulted **zero**
+> times, and **no audit entry is written**.
+
+Use **`eicar.txt`** instead. `csv`, `txt` and `md` have no magic-byte rule, so
+pure EICAR as `.txt` passes validation and reaches the scanner.
+
+| What you upload | Refused by | Message | Audit entry |
+|---|---|---|---|
+| pure EICAR as `eicar.txt` | **scanning** | "That file was refused because it appears to contain malware." | `security.upload_rejected`, naming the signature |
+| pure EICAR as `eicar.pdf` | validation | "That file's contents do not match its extension." | **none** |
+| a clean `.txt` | nothing — accepted | — | — |
+| anything, while the scanner is down | scanning | "We could not scan that file. Please try again." | none |
+
+So: **if you see "appears to contain malware" and a `security.upload_rejected`
+entry, scanning is working.** If you see "contents do not match its extension",
+you have tested the extension allowlist and learned nothing about the scanner.
+
+The direct scanner check in `docs/MALWARE-SCANNING.md` §7 is separate from this
+and stays separate — it bypasses the app entirely and is the one that proves
+ClamAV itself is live.
+
+**Note:** a Free workspace is refused with "Attaching files to a record is a
+Plus feature". That is the plan entitlement working, not a fault.
 
 ---
 
