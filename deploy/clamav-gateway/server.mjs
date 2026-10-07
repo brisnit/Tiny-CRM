@@ -46,6 +46,43 @@ function authorised(header) {
   return timingSafeEqual(presented, expected);
 }
 
+/**
+ * Can clamd actually answer?
+ *
+ * Added after deploying. On a machine restart the gateway was answering
+ * `/live` and `/health` with 200 while clamd was still loading the signature
+ * set from the volume — so Fly routed traffic to a scanner that returned 502
+ * for about ten seconds. Fail-closed, so uploads refused rather than passing
+ * unscanned, but an avoidable outage window and a health endpoint that was
+ * lying.
+ *
+ * `/live` now depends on this, so the platform withholds traffic until the
+ * scanner can scan. Signature *freshness* deliberately stays out of `/live`:
+ * restarting a machine does not make signatures fresher, and tying the two
+ * together would loop. Staleness is enforced at scan time.
+ */
+function ping(timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    const socket = connect(CLAMD_PORT, CLAMD_HOST);
+    let reply = "";
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs, () => finish(false));
+    socket.on("error", () => finish(false));
+    socket.on("connect", () => socket.write("zPING\0"));
+    socket.on("data", (d) => {
+      reply += d.toString("utf8");
+      if (reply.includes("PONG")) finish(true);
+    });
+    socket.on("close", () => finish(reply.includes("PONG")));
+  });
+}
+
 /** Streams a buffer to clamd and returns its one-line reply. */
 function scan(bytes) {
   return new Promise((resolve, reject) => {
@@ -96,17 +133,45 @@ function send(res, status, body) {
 }
 
 const server = createServer(async (req, res) => {
+  const url = new URL(req.url ?? "/", "http://localhost");
+
+  /**
+   * Liveness, unauthenticated, and deliberately uninformative.
+   *
+   * The platform's own health check cannot carry a credential: `fly.toml` is
+   * committed, and there is no secret interpolation for check headers, so an
+   * authenticated check would mean a token in version control.
+   *
+   * It reports only that the process is answering. **Not** signature freshness:
+   * a failing platform check makes Fly restart the machine, and a restart does
+   * not make signatures fresher — it would produce a restart loop while uploads
+   * were already correctly refusing. Staleness is enforced where it belongs, at
+   * scan time, and reported on the authenticated /health for an operator.
+   */
+  if (req.method === "GET" && url.pathname === "/live") {
+    // 503 until clamd answers, so the platform does not route scans at a
+    // scanner that cannot perform one. Still reveals nothing but liveness.
+    const up = await ping();
+    return send(res, up ? 200 : 503, { ok: up });
+  }
+
   if (!authorised(req.headers.authorization)) {
     // No detail: an unauthenticated caller learns nothing about what runs here.
     return send(res, 401, { error: "unauthorized" });
   }
 
-  const url = new URL(req.url ?? "/", "http://localhost");
-
   if (req.method === "GET" && url.pathname === "/health") {
     try {
-      const age = await signatureAgeHours();
+      const [age, clamdUp] = await Promise.all([signatureAgeHours(), ping()]);
       const stale = age > MAX_SIGNATURE_AGE_HOURS;
+      if (!clamdUp) {
+        // Reported honestly rather than as "ok with a fresh database", which is
+        // what this said during the restart window before deploying showed it.
+        return send(res, 503, {
+          status: "clamd unreachable",
+          signatureAgeHours: Number.isFinite(age) ? Math.round(age) : null,
+        });
+      }
       // 503 rather than a verdict: the adapter throws on a non-200, so stale
       // signatures stop uploads exactly as an outage does. A scanner running a
       // six-month-old database reporting "clean" with authority is the failure

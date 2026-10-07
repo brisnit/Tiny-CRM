@@ -61,6 +61,14 @@ async function startClamd(): Promise<number> {
     let tail = Buffer.alloc(0);
     let answered = false;
     socket.on("data", (chunk) => {
+      // PING is its own command and answers immediately — the readiness check
+      // in the gateway uses it, and a fake that only understood INSTREAM made
+      // every /live call sit until the 4-second timeout.
+      if (!answered && chunk.toString("latin1").startsWith("zPING")) {
+        answered = true;
+        socket.end("PONG\0");
+        return;
+      }
       seen += chunk.length;
       // The terminator is four zero bytes; it may straddle two reads.
       tail = Buffer.concat([tail, chunk]).subarray(-4);
@@ -268,6 +276,68 @@ describe("stale signatures fail closed", () => {
   test("and scanning resumes once they are fresh again", async () => {
     const verdict = await scanForMalware(BYTES, { key: "k" });
     assert.equal(verdict.status, "clean", "the staleness check did not clear");
+  });
+});
+
+describe("liveness is unauthenticated and says nothing else", () => {
+  test("/live answers without a token", async () => {
+    // The platform's health check cannot carry a credential: fly.toml is
+    // committed and has no secret interpolation for check headers. So /live is
+    // open by necessity, and must therefore be worth nothing to a stranger.
+    const response = await fetch(`${gatewayUrl.replace("/scan", "")}/live`);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body, { ok: true }, "the open endpoint reveals more than liveness");
+  });
+
+  test("/live is 503 when clamd cannot answer", async () => {
+    /**
+     * Found by deploying, not by reasoning. On a machine restart the gateway
+     * answered /live and /health with 200 while clamd was still loading the
+     * signature set from the volume, so Fly routed traffic to a scanner that
+     * returned 502 for about ten seconds — fail-closed, but an avoidable
+     * outage window and a health endpoint that was lying.
+     */
+    clamdReply = "refuse";
+    const live = await fetch(`${gatewayUrl.replace("/scan", "")}/live`);
+    assert.equal(live.status, 503, "/live claimed healthy with clamd unreachable");
+    assert.deepEqual(await live.json(), { ok: false });
+
+    const health = await fetch(`${gatewayUrl.replace("/scan", "")}/health`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    assert.equal(health.status, 503, "/health claimed healthy with clamd unreachable");
+    assert.match(JSON.stringify(await health.json()), /clamd unreachable/);
+  });
+
+  test("and both recover once clamd answers again", async () => {
+    clamdReply = "stream: OK";
+    const live = await fetch(`${gatewayUrl.replace("/scan", "")}/live`);
+    assert.equal(live.status, 200, "the readiness check did not clear");
+  });
+
+  test("/live does not report signature freshness", async () => {
+    // Deliberate. A failing platform check restarts the machine, and a restart
+    // does not make signatures fresher — it would loop while uploads were
+    // already refusing correctly. Staleness belongs at scan time.
+    const response = await fetch(`${gatewayUrl.replace("/scan", "")}/live`);
+    const text = await response.text();
+    assert.doesNotMatch(text, /signature|stale|age/i, "/live leaks scanner state");
+  });
+
+  test("/health still requires a token", async () => {
+    const open = await fetch(`${gatewayUrl.replace("/scan", "")}/health`);
+    assert.equal(open.status, 401, "/health answered without a token");
+    const authed = await fetch(`${gatewayUrl.replace("/scan", "")}/health`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    assert.equal(authed.status, 200);
+    assert.match(JSON.stringify(await authed.json()), /signatureAgeHours/);
+  });
+
+  test("/scan still requires a token", async () => {
+    const response = await fetch(gatewayUrl, { method: "POST", body: new Uint8Array(BYTES) });
+    assert.equal(response.status, 401, "adding /live opened up /scan");
   });
 });
 

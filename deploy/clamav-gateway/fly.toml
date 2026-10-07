@@ -1,15 +1,17 @@
-# Proposal only. Nothing has been provisioned.
+# The malware scanner. See docs/MALWARE-SCANNING.md.
 #
-#   fly launch --no-deploy --name tiny-crm-scanner --region sea
-#   fly volumes create clamav_db --size 3 --region sea
-#   fly secrets set SCANNER_TOKEN="$(openssl rand -base64 48)"
+# Provisioned with `fly apps create` + `fly volumes create` rather than
+# `fly launch`, which is interactive and offers separately-billed add-ons.
+#
+#   fly apps create tiny-crm-scanner --org personal
+#   fly volumes create clamav_db --size 3 --region sjc --app tiny-crm-scanner
+#   fly volumes update <id> --scheduled-snapshots=false   # snapshots are billed
+#   printf 'SCANNER_TOKEN=%s\n' "$TOKEN" | fly secrets import   # stdin, not argv
 #   fly deploy
-#
-# Then read the token back once, to put the same value into Vercel Production:
-#   fly ssh console -C 'printenv SCANNER_TOKEN'
 
 app = "tiny-crm-scanner"
-primary_region = "sea"   # nearest Fly region to the app's pdx1
+primary_region = "sjc"   # nearest region this account offers to the app's pdx1;
+                         # Fly has no "sea" here, and sjc beats lax on distance
 
 [build]
   dockerfile = "Dockerfile"
@@ -18,6 +20,19 @@ primary_region = "sea"   # nearest Fly region to the app's pdx1
   PORT = "8080"
   MAX_SIGNATURE_AGE_HOURS = "48"
   MAX_SCAN_BYTES = "26214400"
+
+  # clamd listens on loopback only. Set through the environment because the
+  # base image's entrypoint rewrites clamd.conf from CLAMD_CONF_* on every
+  # start — editing the file ourselves would be overwritten.
+  CLAMD_CONF_TCPSocket = "3310"
+  CLAMD_CONF_TCPAddr = "127.0.0.1"
+  CLAMD_CONF_StreamMaxLength = "30M"
+
+  # Four signature checks a day rather than the image's default of one. With
+  # MAX_SIGNATURE_AGE_HOURS at 48 a single missed check is harmless and two
+  # consecutive missed days fail closed, which is the behaviour wanted — but a
+  # once-a-day default leaves very little margin for a mirror hiccup.
+  FRESHCLAM_CHECKS = "4"
 
 [mounts]
   source = "clamav_db"
@@ -38,10 +53,12 @@ primary_region = "sea"   # nearest Fly region to the app's pdx1
   timeout = "10s"
   grace_period = "300s"   # the first signature download is slow
   method = "GET"
-  path = "/health"
-  # The check carries the token because /health is authenticated like /scan.
-  [http_service.checks.headers]
-    Authorization = "Bearer PLACEHOLDER_SET_VIA_FLY_SECRETS"
+  # /live, not /health, for two reasons. The check cannot carry a credential —
+  # this file is committed and there is no secret interpolation for check
+  # headers — and it must not test signature freshness: a failing check restarts
+  # the machine, and a restart does not make signatures fresher. Staleness stops
+  # scans at scan time instead, which is where it can do some good.
+  path = "/live"
 
 [[vm]]
   size = "shared-cpu-1x"

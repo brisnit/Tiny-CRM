@@ -22,7 +22,7 @@ the sequence around it.
 | Stale signatures refuse | **passed** | signatures backdated 30 days → `/health` 503, every scan refused |
 | Outage refuses | **passed** | `clamd` stopped → gateway 502 → the adapter throws → upload refused |
 | A detection is distinguishable from a validation refusal | **passed** | EICAR as `.pdf` refused at `requestUpload` with zero scans and no audit entry; EICAR as `.txt` refused by the scanner with one |
-| **The hosting** | **NOT DONE** | needs provisioning; see §1 |
+| **The hosting** | **DONE 2026-10-07** | `tiny-crm-scanner.fly.dev`, one `shared-cpu-1x`/2 GB machine in `sjc` with a 3 GB volume, $11.15/mo; all five checks pass on the deployed URL, including pure EICAR → `Eicar-Test-Signature` |
 | **Production behaviour** | **NOT DONE** | nothing has run in production |
 
 Everything in the "passed" rows ran locally or in CI. None of it exercised the
@@ -31,40 +31,27 @@ Vercel reaching across the internet to it. That is what §1–§3 are for.
 
 ---
 
-## 1. Provision the scanner
+## 1. Provision the scanner — DONE
 
-**Approved at up to $12/month. The measured total is $11.15–$11.56**
-($10.70–$11.11 for `shared-cpu-1x` with 2 GB, plus $0.45 for a 3 GB volume).
-`docs/MALWARE-SCANNING.md` §6 has the commands.
+`tiny-crm-scanner.fly.dev`. One `shared-cpu-1x` machine with 2 GB in `sjc`, a
+3 GB encrypted volume with scheduled snapshots off, shared IPv4.
+**$10.70 + $0.45 = $11.15/month**, inside the approved $12.
 
-**Stop and come back if `fly` quotes more than $12/month** at any point — in
-particular if it will not sell a 2 GB `shared-cpu-1x` at the rate above, or if
-the organisation carries a support plan ($29 or $99/month) that was not in the
-estimate.
+`docs/MALWARE-SCANNING.md` records what was run and the three things the plan
+had wrong — no `sea` region on this account, snapshots on by default and billed,
+and `fly launch` being the wrong tool.
 
-`flyctl` is not installed on this machine, and provisioning needs your login,
-your organisation and a payment method. This step is yours.
+## 2. Prove the deployed scanner — DONE
 
-**Gate:** `fly status` shows one machine, and `/health` returns 200 with a
-`signatureAgeHours` under 48.
+All five checks pass. The one that matters:
 
----
+```
+pure EICAR -> {"Status":"FOUND","Description":"Eicar-Test-Signature"}
+```
 
-## 2. Prove the deployed scanner
-
-`docs/MALWARE-SCANNING.md` §7, all five checks, against the real URL.
-
-**Check 2 — pure EICAR returning `FOUND` — is the only step in either document
-that establishes ClamAV is scanning in production.** Use pure EICAR, not a PDF:
-real ClamAV reports `OK` for a PDF-wrapped EICAR, verified locally, because the
-header changes the file's type.
-
-**Gate:** check 2 returns `{"Status":"FOUND","Description":"Eicar-Test-Signature"}`.
-
-**If it returns `OK`:** the signature database has not loaded. Check `fly logs`
-for `freshclam`, and `/health` for the age. Do not proceed.
-
----
+Plus a readiness gap found by deploying and fixed: `/live` and `/health` were
+reporting healthy for ~10s after a restart while clamd was still loading, so
+Fly routed traffic at a scanner that could not scan. Both now PING clamd.
 
 ## 3. Merge — and this step DOES change customer-visible behaviour
 
