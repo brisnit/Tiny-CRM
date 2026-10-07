@@ -85,6 +85,49 @@ async function fillLikeAPasswordManager(page: Page, selector: string, value: str
       const element = document.querySelector(selector) as HTMLInputElement;
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
       setter.call(element, value);
+      // A marker on the DOM node itself, not an attribute — so it survives a
+      // re-render of this node and does *not* survive the node being replaced.
+      // That is what separates "React clobbered the value" from "the tree
+      // remounted", which look identical from the outside and have completely
+      // different causes. See `diagnose`.
+      (element as unknown as Record<string, unknown>).__fillMarker = value;
+    },
+    { selector, value },
+  );
+}
+
+/**
+ * Why the field no longer holds what was written to it.
+ *
+ * The assertion is unchanged — the field must hold the value for the whole
+ * pending window — but a bare "React overwrote it" is wrong two times in three,
+ * and a misattributed failure costs more than no failure at all. The three
+ * causes, and how each is told apart:
+ *
+ *   clobbered  the same DOM node, value changed. The regression this suite
+ *              exists for: a controlled input re-rendering with an empty
+ *              `value` prop.
+ *   remounted  a different DOM node is at the selector, so the marker is gone.
+ *              A dev-server recompile or an error-state re-render can do this,
+ *              and neither is the regression.
+ *   errored    the action came back with a failure and the form re-rendered
+ *              around an error note. Also not the regression.
+ */
+async function diagnose(page: Page, selector: string, value: string): Promise<string> {
+  return page.evaluate(
+    ({ selector, value }) => {
+      const element = document.querySelector(selector) as HTMLInputElement | null;
+      if (!element) return "the field is gone entirely";
+      const marked = (element as unknown as Record<string, unknown>).__fillMarker === value;
+      const note = document.querySelector("form div[class*='rose']")?.textContent?.trim();
+      const parts = [
+        marked
+          ? "the SAME node is still there and its value changed — this is the controlled-input regression"
+          : "a DIFFERENT node is at the selector, so the subtree remounted rather than being re-rendered",
+        `field is ${element.value === "" ? "empty" : "holding something else"}`,
+        note ? `an error note is showing: ${JSON.stringify(note)}` : "no error note",
+      ];
+      return parts.join("; ");
     },
     { selector, value },
   );
@@ -153,10 +196,16 @@ describe("password reset, driven by a browser", () => {
     for (let i = 0; i < 12; i++) {
       const gone = await page.evaluate(() => !document.querySelector("#password"));
       if (gone) break; // Replaced by the success panel, which is the good end.
-      assert.ok(
-        await stillHolds(page, "#password", GENERATED),
-        "the field was emptied while the action was in flight — React overwrote a password-manager fill",
-      );
+      if (!(await stillHolds(page, "#password", GENERATED))) {
+        // The assertion is the same; only the message is better. It names which
+        // of the three causes applies, because the first failure of this test on
+        // CI reported the regression and was in fact a starved runner — the
+        // harness's authenticated-shell warm-up had timed out after 300s.
+        assert.fail(
+          `the field stopped holding the fill while the action was in flight: ` +
+            `${await diagnose(page, "#password", GENERATED)}`,
+        );
+      }
       await page.waitForTimeout(100);
     }
 
