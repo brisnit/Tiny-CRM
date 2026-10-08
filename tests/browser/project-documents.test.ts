@@ -370,6 +370,51 @@ describe("project documents", { concurrency: false }, () => {
   });
 });
 
+/**
+ * Console noise `next dev` produces that a production build cannot.
+ *
+ * `favicon` and `DevTools` were already excluded here. The third entry was
+ * added after the Browser regressions job ran this suite in CI for the first
+ * time, and it is narrow deliberately: it matches one React message and
+ * nothing else, so a hydration error, a CSP violation, a failed chunk or any
+ * error the viewer itself raises still fails the test.
+ *
+ * **What it is.** React's development build logs "Encountered a script tag
+ * while rendering React component" when it *creates* a `<script>` element
+ * during a client render. The element is the inline theme script in the root
+ * layout (src/app/layout.tsx), which sets `html.dark` before first paint.
+ *
+ * **Where it comes from.** Bisecting this suite's own setup located it: console
+ * errors were 0 after `signIn` and 0 after `openProject`, and 1 immediately
+ * after `setInputFiles`. So the upload produces it and nothing the viewer does
+ * produces it — this suite is the victim rather than the cause, because the
+ * assertion reads errors accumulated earlier in the same page. A stack captured
+ * at the `console.error` call said the rest: dispatchDiscreteEvent ->
+ * flushSyncWorkAcrossRoots_impl -> performSyncWorkOnRoot -> renderRootSync ->
+ * completeWork. The discrete change event flushes the upload's refresh
+ * synchronously, and in that render React mounts the head script instead of
+ * reusing the server's. It needs a slow machine: it reproduces in CI and under
+ * 8x CPU throttling, and never unthrottled or at 4x.
+ *
+ * **Why filtering it is safe.** The message exists only in react-dom's
+ * development build — `grep` finds it under
+ * node_modules/next/dist/compiled/react-dom/cjs/*.development.js and nowhere
+ * else — and this harness runs `next dev` on purpose. A production build cannot
+ * emit it. The consequence React warns about, that a client-created script
+ * never executes, does not apply: the server's copy already ran during HTML
+ * parse and set the class on `documentElement`, which React does not clear.
+ * There is no supported way to silence it at the source, either; React skips
+ * the warning only for a non-executable `type` (`isScriptDataBlock`), and a
+ * theme script has to execute.
+ *
+ * That argument is only worth as much as the evidence that the theme still
+ * works, so `tests/browser/theme-initialization.test.ts` now asserts the
+ * observable effect in all four directions. This filter cannot hide a theme
+ * that stopped initializing.
+ */
+const DEV_ONLY_CONSOLE_NOISE =
+  /favicon|DevTools|Encountered a script tag while rendering React component/i;
+
 describe("the document viewer", { concurrency: false }, () => {
   /**
    * The viewer renders the file itself — PDF.js onto a canvas — rather than
@@ -393,7 +438,14 @@ describe("the document viewer", { concurrency: false }, () => {
     if (!configured) return;
     page = await browser.newPage();
     page.on("console", (message) => {
-      if (message.type() === "error") consoleErrors.push(message.text());
+      if (message.type() !== "error") return;
+      // With the source location, because these accumulate over the whole
+      // session — sign-in, the project page, then the viewer — and a bare
+      // message cannot say which of those produced it. A CI-only failure here
+      // cost a diagnosis cycle for exactly that reason.
+      const at = message.location();
+      const where = at?.url ? ` @ ${at.url}:${at.lineNumber}:${at.columnNumber}` : "";
+      consoleErrors.push(`${message.text()}${where}`);
     });
     page.on("pageerror", (error) => pageErrors.push(String(error)));
     page.on("requestfailed", (request) => {
@@ -434,7 +486,7 @@ describe("the document viewer", { concurrency: false }, () => {
     // Surfaced first, because a console error here is the signal that matters
     // and everything below would otherwise fail with a less useful message.
     assert.deepEqual(
-      consoleErrors.filter((e) => !/favicon|DevTools/i.test(e)),
+      consoleErrors.filter((e) => !DEV_ONLY_CONSOLE_NOISE.test(e)),
       [],
       `console errors while viewing: ${consoleErrors.join(" | ")}`,
     );
