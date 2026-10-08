@@ -286,8 +286,20 @@ const runner = spawn(
     "--test-reporter=spec",
     "--test-concurrency=1",
     // A hung test fails as a test instead of starving the job in silence.
-    // Generous: the slowest of these takes about five seconds.
-    "--test-timeout=120000",
+    //
+    // This bounds a whole *file*, not one test, and it was 120s with a comment
+    // claiming "the slowest of these takes about five seconds". That stopped
+    // being true once a suite waited on real work: document-qa-reachable
+    // uploads a PDF through the browser and then polls for ingestion, and the
+    // waits it declares for those steps add up past 120s on their own. So the
+    // file could not spend the time it was written to spend, and when CI was
+    // slow enough to need it the job reported `test timed out after 120000ms`
+    // against line 1 of the file, with no suite output and nothing to diagnose.
+    //
+    // 300s is sized to the heaviest file with headroom (~160s of legitimate
+    // waiting at worst), and still fails a genuine hang long before the job's
+    // own limit.
+    "--test-timeout=300000",
     process.argv[2] ?? "tests/browser/**/*.test.ts",
   ],
   {

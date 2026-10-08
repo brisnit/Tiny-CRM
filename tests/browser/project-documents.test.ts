@@ -211,6 +211,41 @@ after(async () => {
   await db.$disconnect();
 });
 
+/**
+ * Asserts a row count that has stopped moving.
+ *
+ * `waitForSelector` followed by `count()` is not the assertion it looks like.
+ * The documents list re-renders when an upload is confirmed, swapping the
+ * optimistic queue row for the stored one, so a count taken between those two
+ * renders reads 0 for a row that is present both before and after. That is
+ * exactly how "the successful document is not listed exactly once" failed in
+ * CI with `0 !== 1`, having waited successfully for the very row it then could
+ * not find.
+ *
+ * So the count has to survive a settle. That also keeps the "exactly once"
+ * half honest in the other direction: a duplicate that appears a moment later
+ * still fails, which a single reading would have missed.
+ */
+async function assertSettledCount(
+  page: Page,
+  selector: string,
+  expected: number,
+  message: string,
+): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  let last = -1;
+  while (Date.now() < deadline) {
+    last = await page.locator(selector).count();
+    if (last === expected) {
+      await page.waitForTimeout(750);
+      last = await page.locator(selector).count();
+      if (last === expected) return;
+    }
+    await page.waitForTimeout(250);
+  }
+  assert.fail(`${message} — expected ${expected}, last observed ${last}`);
+}
+
 describe("project documents", { concurrency: false }, () => {
   test("the panel offers an empty state before anything is attached", needsStorage, async () => {
     const page = await browser.newPage();
@@ -249,13 +284,15 @@ describe("project documents", { concurrency: false }, () => {
       await page.waitForSelector("text=Retry", { timeout: 60_000 });
       await page.waitForSelector("text=good-proposal.pdf", { timeout: 60_000 });
 
-      assert.equal(
-        await page.locator("text=good-proposal.pdf").count(),
+      await assertSettledCount(
+        page,
+        "text=good-proposal.pdf",
         1,
         "the successful document is not listed exactly once",
       );
-      assert.equal(
-        await page.locator("text=bad-proposal.pdf").count(),
+      await assertSettledCount(
+        page,
+        "text=bad-proposal.pdf",
         1,
         "the failed upload is not shown exactly once",
       );
@@ -304,8 +341,9 @@ describe("project documents", { concurrency: false }, () => {
       await page.waitForTimeout(2500); // the retry runs and fails again
 
       // The retry re-ran only the file that failed.
-      assert.equal(
-        await page.locator("text=good-proposal.pdf").count(),
+      await assertSettledCount(
+        page,
+        "text=good-proposal.pdf",
         1,
         "retrying duplicated the document that had already succeeded",
       );

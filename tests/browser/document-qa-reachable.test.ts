@@ -108,15 +108,33 @@ async function signIn(page: Page, email: string) {
   await page.locator('input[name="email"]').fill(email);
   await page.locator('input[name="password"]').fill(PASSWORD);
   await page.locator('form button[type="submit"]').click();
-  await page.waitForURL((u) => !/\/login/.test(u.toString()), { timeout: 120_000 });
+  // 60s, not 120s: a sign-in redirect that has not happened in a minute is not
+  // going to. Waits here are kept well inside the runner's per-file budget so a
+  // failure names the step that was slow instead of expiring the whole file.
+  await page.waitForURL((u) => !/\/login/.test(u.toString()), { timeout: 60_000 });
 }
+
+/**
+ * Progress, with elapsed time, because this hook has no other voice.
+ *
+ * The runner's timeout bounds a whole file, and a file that expires inside
+ * `before()` reports `test timed out after …ms` against line 1 and prints no
+ * suite output at all. That is what CI produced twice: a 120-second gap and
+ * nothing to read. Each step now says when it finished, so the next failure
+ * names the step instead of the file.
+ */
+const startedAt = Date.now();
+const step = (what: string) =>
+  console.log(`  [setup +${String(Math.round((Date.now() - startedAt) / 100) / 10).padStart(5)}s] ${what}`);
 
 before(async () => {
   if (!configured) {
     console.log("  (document Q&A reachability suite skipped: no S3_ENDPOINT)");
     return;
   }
+  step("before() entered");
   browser = await chromium.launch();
+  step("chromium launched");
 
   const email = `docqa-owner-${randomUUID().slice(0, 8)}@render.test`.toLowerCase();
   const owner = await db.user.create({
@@ -135,9 +153,12 @@ before(async () => {
   });
   users.push(owner.id);
   world.ownerEmail = owner.email;
+  step("owner created");
 
   const { provisionWorkspace } = await import("../../src/lib/workspaces/provision");
+  step("provision module imported");
   const workspace = await provisionWorkspace(owner.id, { name: "Doc QA Browser" });
+  step("workspace provisioned");
   workspaces.push(workspace.id);
   world.workspaceId = workspace.id;
 
@@ -155,12 +176,14 @@ before(async () => {
     select: { id: true },
   });
   world.projectId = project.id;
+  step("project created");
 
   // All three flags. `files` and `documentAi` default to off; `ai` defaults on
   // but is set explicitly so the suite does not depend on that default.
   for (const key of ["files", "ai", "documentAi"]) {
     await db.featureFlag.create({ data: { key, enabled: true, workspaceId: workspace.id } });
   }
+  step("flags set — setup complete");
 });
 
 after(async () => {
@@ -188,18 +211,23 @@ describe("document Q&A is reachable from the UI", needsStorage, () => {
       mimeType: "application/pdf",
       buffer: DOCUMENT,
     });
-    await page.waitForSelector("text=rfp-reachability.pdf", { timeout: 120_000 });
+    // 60s is already thirty times what this takes in CI; the row appears as
+    // soon as the upload is confirmed.
+    await page.waitForSelector("text=rfp-reachability.pdf", { timeout: 60_000 });
 
     // --- ingestion -------------------------------------------------
     // `dispatchSoon()` drains the outbox inside the upload request, so this is
     // seconds rather than the cron interval. Polled against the database
     // because the panel's own state is what is being tested next.
     let ready = false;
+    let lastStatus = "no row";
+    const startedWaiting = Date.now();
     for (let i = 0; i < 60; i += 1) {
       const row = await db.documentIngestion.findFirst({
         where: { workspaceId: world.workspaceId },
         select: { status: true, fileAssetId: true },
       });
+      lastStatus = row?.status ?? "no row";
       if (row?.status === "ready") {
         ready = true;
         world.fileId = row.fileAssetId;
@@ -207,7 +235,14 @@ describe("document Q&A is reachable from the UI", needsStorage, () => {
       }
       await page.waitForTimeout(1000);
     }
-    assert.ok(ready, "the document never became ready, so there is nothing to ask about");
+    // The elapsed time and the last status it saw, because "never became ready"
+    // on its own cannot distinguish an event that was never dispatched from one
+    // that is still working.
+    assert.ok(
+      ready,
+      `the document never became ready after ${Math.round((Date.now() - startedWaiting) / 1000)}s ` +
+        `(last ingestion status: ${lastStatus}), so there is nothing to ask about`,
+    );
 
     // --- the control exists, and says the document can be asked about ---
     await page.reload({ waitUntil: "domcontentloaded" });
