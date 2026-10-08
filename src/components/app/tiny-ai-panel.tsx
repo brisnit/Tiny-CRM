@@ -9,11 +9,39 @@ import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/app/markdown";
 import { cn } from "@/lib/utils";
 
+/**
+ * What Tiny AI has been pointed at, if anything.
+ *
+ * `fileAsset` is a different kind of focus from the rest and the copy below
+ * treats it as one. A record focus narrows which CRM rows are in context; a
+ * document focus switches the server to a different agent entirely — one that
+ * retrieves passages from that document and cites their pages, and that answers
+ * from nothing else.
+ *
+ * `fileAsset` was missing from this union, which is why document Q&A had a
+ * complete server path and no way for anyone to reach it: `/api/ai/chat` has
+ * accepted the type since the feature shipped, and no client could send it.
+ */
 export type AiFocus = {
-  type: "contact" | "company" | "deal" | "project" | "opportunity";
+  type: "contact" | "company" | "deal" | "project" | "opportunity" | "fileAsset";
   id: string;
   label: string;
 } | null;
+
+/**
+ * A document focus answers from that document only. Worth saying out loud.
+ *
+ * `AiFocus` already includes `null`, and the prop is optional on top of that,
+ * so this accepts `undefined` too rather than making every call site assert.
+ *
+ * Deliberately a plain boolean and not a type predicate. A predicate narrows the
+ * *negative* branch as well, and because `AiFocus` is not a discriminated union
+ * with a separate member per type, that removed every object type from the
+ * `else` — collapsing the ordinary record case to `never`.
+ */
+function isDocument(focus: AiFocus | undefined): boolean {
+  return focus?.type === "fileAsset";
+}
 
 type Turn = { role: "user" | "assistant"; content: string };
 
@@ -23,6 +51,25 @@ const SUGGESTIONS = [
   "Who haven't I talked to in 30 days?",
   "What projects are at risk?",
   "What should I follow up on?",
+];
+
+/**
+ * Suggestions for a document focus.
+ *
+ * The CRM list above is actively misleading here: "Which deals need attention?"
+ * cannot be answered from inside a contract, so offering it as a chip invites a
+ * refusal and teaches the person the feature is broken. Observed in the first
+ * end-to-end run of this flow — the panel correctly said it was answering from
+ * the document only, and then offered five questions about the CRM.
+ *
+ * Deliberately generic: these have to make sense for a contract, an invoice and
+ * an RFP alike, because nothing here knows which it is.
+ */
+const DOCUMENT_SUGGESTIONS = [
+  "What are the key dates?",
+  "What are the payment terms?",
+  "Summarise the obligations on each party",
+  "What are the deadlines I need to act on?",
 ];
 
 export function TinyAiPanel({
@@ -144,16 +191,36 @@ export function TinyAiPanel({
           Tiny AI
         </span>
       }
-      description={focus ? `Focused on ${focus.label}` : providerLabel}
+      description={
+        focus
+          ? isDocument(focus)
+            ? `Reading ${focus.label}`
+            : `Focused on ${focus.label}`
+          : providerLabel
+      }
     >
       <div ref={scrollRef} className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
         {turns.length === 0 ? (
           <div className="space-y-5">
             <div className="rounded-xl border border-hairline bg-sunken/50 p-4">
-              <p className="text-[13px] leading-relaxed text-body">
-                Ask me anything about your business. I read your contacts, deals, projects, tasks and
-                activity — {focus ? `right now I'm focused on ${focus.label}.` : "across everything in scope."}
-              </p>
+              {/* A document focus is a different feature, not a narrower one,
+                  and the copy has to say so. Asking from a document searches
+                  that document and cites its pages; it cannot see the CRM.
+                  Asking from anywhere else reads CRM records and cannot see
+                  inside a file. Somebody who does not know which of those they
+                  are in will read a correct refusal as a broken product. */}
+              {focus && isDocument(focus) ? (
+                <p className="text-[13px] leading-relaxed text-body">
+                  I&apos;m answering from <strong className="font-medium">{focus.label}</strong> only —
+                  not from your CRM — and I&apos;ll cite the pages I used. If the document
+                  doesn&apos;t say, I&apos;ll tell you that rather than guess.
+                </p>
+              ) : (
+                <p className="text-[13px] leading-relaxed text-body">
+                  Ask me anything about your business. I read your contacts, deals, projects, tasks and
+                  activity — {focus ? `right now I'm focused on ${focus.label}.` : "across everything in scope."}
+                </p>
+              )}
               {!modelBacked ? (
                 <p className="mt-2.5 border-t border-hairline pt-2.5 text-xs text-muted">
                   Running on the built-in reasoning engine. Scores and risk calls are exact; add an{" "}
@@ -163,7 +230,7 @@ export function TinyAiPanel({
               ) : null}
             </div>
             <div className="space-y-1.5">
-              {SUGGESTIONS.map((s) => (
+              {(focus && isDocument(focus) ? DOCUMENT_SUGGESTIONS : SUGGESTIONS).map((s) => (
                 <button
                   key={s}
                   onClick={() => void ask(s)}
@@ -221,7 +288,13 @@ export function TinyAiPanel({
                 void ask(input);
               }
             }}
-            placeholder={focus ? `Ask about ${focus.label}…` : "Ask about your business…"}
+            placeholder={
+              focus
+                ? isDocument(focus)
+                  ? "Ask about this document…"
+                  : `Ask about ${focus.label}…`
+                : "Ask about your business…"
+            }
             className="max-h-36 min-h-[24px] flex-1 resize-none bg-transparent px-1.5 py-1 text-[13px] text-body outline-none placeholder:text-faint"
           />
           {streaming ? (

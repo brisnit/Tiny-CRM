@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Download, FileUp, Loader2, Paperclip, RotateCcw, Trash2, X } from "lucide-react";
+import { Download, FileUp, Loader2, Paperclip, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { DeleteDocumentDialog } from "@/components/app/documents/delete-document-dialog";
@@ -49,7 +49,31 @@ export type DocumentView = {
   uploaderName: string | null;
   /** Whether *this* viewer may delete it. Decided on the server; see below. */
   canDelete: boolean;
+  /**
+   * Whether Tiny can answer questions about this document, and why not.
+   *
+   * `null` when Document Intelligence is not enabled for the workspace at all —
+   * which is different from "not read yet" and must not show as a spinner that
+   * never resolves. Supplied by the server because the four gates in front of
+   * ingestion are server-side and a client cannot see them.
+   */
+  intelligence: DocumentIntelligenceState | null;
 };
+
+/**
+ * What the panel can say about a document's readiness.
+ *
+ * Derived from `DocumentIngestion.status` rather than invented: `pending` and
+ * `processing` are the states where an answer is not available yet, `ready` is
+ * the only one where it is, and everything else is a terminal failure that the
+ * person who uploaded the file needs to be told about rather than left to infer
+ * from a question that answers badly.
+ */
+export type DocumentIntelligenceState =
+  | { state: "absent" }
+  | { state: "processing" }
+  | { state: "ready"; pageCount: number | null }
+  | { state: "failed"; reason: string };
 
 export function DocumentsPanel({
   projectId,
@@ -92,6 +116,23 @@ export function DocumentsPanel({
   });
 
   const busy = items.some((item) => item.status !== "done" && item.status !== "failed");
+
+  /**
+   * Opens Tiny AI pointed at one document.
+   *
+   * The same `tinycrm:ask-ai` event every other Ask control dispatches — the
+   * only new thing is `type: "fileAsset"`, which switches the server to the
+   * document agent. `/api/ai/chat` has accepted that focus type since the
+   * feature shipped; nothing in the client could send it, so the feature was
+   * complete and unreachable.
+   */
+  function askAboutDocument(document: DocumentView) {
+    window.dispatchEvent(
+      new CustomEvent("tinycrm:ask-ai", {
+        detail: { focus: { type: "fileAsset", id: document.id, label: document.name }, question: null },
+      }),
+    );
+  }
 
   function choose(event: React.ChangeEvent<HTMLInputElement>) {
     const chosen = Array.from(event.target.files ?? []);
@@ -164,6 +205,7 @@ export function DocumentsPanel({
               document={document}
               onOpen={() => setViewing(document)}
               onDelete={() => setDeleting(document)}
+              onAsk={() => askAboutDocument(document)}
             />
           ))}
         </ul>
@@ -210,15 +252,87 @@ function describe(count: number): string {
   return count === 1 ? "1 document" : `${count} documents`;
 }
 
+/**
+ * Says whether Tiny can answer about this document, and offers to.
+ *
+ * Four states, because a question asked too early and a question asked about a
+ * document that could not be read are different problems with different
+ * remedies, and the panel used to show neither:
+ *
+ *   absent      Document Intelligence is not on for this workspace. Nothing is
+ *               rendered — an "Ask" control that always refused would be worse
+ *               than no control, and a spinner that never resolves worse still.
+ *   processing  Uploaded, not read yet. Disabled, and says so, rather than
+ *               letting somebody ask and get "I haven't been able to read it".
+ *   ready       The control, with the page count so the offer is concrete.
+ *   failed      Named reason. These are terminal: retrying cannot make a
+ *               scanned image have a text layer.
+ */
+function DocumentIntelligence({
+  document,
+  onAsk,
+}: {
+  document: DocumentView;
+  onAsk: () => void;
+}) {
+  const intelligence = document.intelligence;
+  if (!intelligence || intelligence.state === "absent") return null;
+
+  if (intelligence.state === "processing") {
+    return (
+      <span
+        className="flex items-center gap-1 px-1.5 text-[11px] text-faint"
+        title="Tiny is reading this document. Questions can be asked once it is ready."
+      >
+        <Loader2 className="size-3 animate-spin" aria-hidden />
+        Reading…
+      </span>
+    );
+  }
+
+  if (intelligence.state === "failed") {
+    return (
+      <span
+        className="px-1.5 text-[11px] text-amber-700 dark:text-amber-500"
+        title={`Tiny cannot answer questions about this document: ${intelligence.reason}`}
+      >
+        Cannot read
+      </span>
+    );
+  }
+
+  const pages = intelligence.pageCount;
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      onClick={onAsk}
+      aria-label={
+        `Ask Tiny AI about ${document.name}` +
+        (pages ? `, ${pages} page${pages === 1 ? "" : "s"}` : "") +
+        " — answered from this document only"
+      }
+      title={
+        `Ask about ${document.name}. Answers come from this document only, with ` +
+        `page citations${pages ? ` — ${pages} page${pages === 1 ? "" : "s"} read` : ""}.`
+      }
+    >
+      <Sparkles className="size-3.5 text-brand-500" aria-hidden />
+    </Button>
+  );
+}
+
 /** One stored document. Matches RelatedList's row geometry exactly. */
 function DocumentRow({
   document,
   onOpen,
   onDelete,
+  onAsk,
 }: {
   document: DocumentView;
   onOpen: () => void;
   onDelete: () => void;
+  onAsk: () => void;
 }) {
   const meta = [
     formatBytes(document.sizeBytes),
@@ -245,6 +359,10 @@ function DocumentRow({
         <span className="block truncate text-[11.5px] text-muted">{meta.join(" · ")}</span>
       </button>
       <div className="flex shrink-0 items-center gap-1">
+        {/* Whether Tiny can answer about this one, and the control to try.
+            Rendered before Download so the readiness state reads next to the
+            name rather than at the end of a row of icons. */}
+        <DocumentIntelligence document={document} onAsk={onAsk} />
         {/* A real link, so the browser downloads it the way it downloads
             anything else. The route authorises, then redirects to a URL that
             lives for a minute; the bytes never pass through the app. */}

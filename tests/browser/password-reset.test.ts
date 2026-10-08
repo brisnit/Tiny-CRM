@@ -193,14 +193,32 @@ describe("password reset, driven by a browser", () => {
 
     // Sample across the pending window rather than at one instant, so this
     // cannot pass by landing between the render and the response.
+    //
+    // **One evaluate per sample, not two.** It used to check "is the field
+    // gone?" and then "does it still hold the value?" as separate round trips,
+    // and the success panel could land between them: the field vanished, the
+    // second call found nothing, and the test reported the regression on a
+    // reset that had just succeeded. The improved diagnostic said so in as many
+    // words — "the field is gone entirely" — which is how a race that had been
+    // there all along became visible. The earlier CI failure attributed to a
+    // starved runner was most likely this, made likelier by slowness.
+    //
+    // Reading both facts in one evaluate makes the sample atomic. The assertion
+    // is unchanged and if anything tighter: it fires only when the field is
+    // **present** and no longer holds the fill, which is exactly the shape of
+    // the controlled-input regression. A field that is absent means the success
+    // panel replaced it, which was always the good end.
     for (let i = 0; i < 12; i++) {
-      const gone = await page.evaluate(() => !document.querySelector("#password"));
-      if (gone) break; // Replaced by the success panel, which is the good end.
-      if (!(await stillHolds(page, "#password", GENERATED))) {
-        // The assertion is the same; only the message is better. It names which
-        // of the three causes applies, because the first failure of this test on
-        // CI reported the regression and was in fact a starved runner — the
-        // harness's authenticated-shell warm-up had timed out after 300s.
+      const sample = await page.evaluate(
+        ({ selector, value }) => {
+          const element = document.querySelector(selector) as HTMLInputElement | null;
+          if (!element) return { present: false, holds: false };
+          return { present: true, holds: element.value === value };
+        },
+        { selector: "#password", value: GENERATED },
+      );
+      if (!sample.present) break; // Replaced by the success panel.
+      if (!sample.holds) {
         assert.fail(
           `the field stopped holding the fill while the action was in flight: ` +
             `${await diagnose(page, "#password", GENERATED)}`,

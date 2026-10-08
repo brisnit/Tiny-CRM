@@ -217,6 +217,17 @@ export async function getProject(read: ReadScope, id: string) {
             // Who added it. Nullable because `uploaderId` is SetNull — a
             // document outlives the person who uploaded it.
             uploader: { select: { name: true } },
+            /**
+             * Whether Tiny can answer questions about this document yet.
+             *
+             * Selected because the Documents panel has to say so. Without it the
+             * panel could only offer an "Ask" control that sometimes worked and
+             * sometimes answered "I haven't been able to read this yet", with
+             * nothing on screen explaining which. A to-one relation — the schema
+             * is `DocumentIngestion?` with exactly one row per FileAsset — so
+             * no ordering or take applies.
+             */
+            ingestion: { select: { status: true, errorCode: true, pageCount: true } },
           },
           orderBy: { createdAt: "desc" },
         },

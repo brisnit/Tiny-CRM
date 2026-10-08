@@ -1,0 +1,306 @@
+import { test, describe, before, after } from "node:test";
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import bcrypt from "bcryptjs";
+import { chromium, type Browser, type Page } from "playwright";
+
+import { db } from "../helpers/fixtures";
+import { buildPdf } from "../helpers/pdf-fixture";
+
+/**
+ * Can a user actually reach document Q&A?
+ *
+ * ## Why this suite exists
+ *
+ * Document Q&A shipped with a complete, tested server path — retrieval, the
+ * structural refusal, citations built from stored page provenance, four gates,
+ * cross-workspace isolation under RLS — and **no way for anyone to use it**.
+ * `/api/ai/chat` accepted `focus: { type: "fileAsset", id }`; `AskAiButton`'s
+ * focus union did not include `fileAsset`, no component referenced it, and the
+ * Documents panel had no Ask control. Every test called the server directly, so
+ * every test passed.
+ *
+ * The production canary is what found it: a document was uploaded, a question
+ * was asked in Tiny AI, and the CRM agent answered — accurately — that it had
+ * no file or extracted text in its context. It was describing its own context
+ * correctly, because that is a different agent.
+ *
+ * So the assertion here is **reachability**, from a real browser, by clicking:
+ * the control exists, it opens Tiny AI, the panel says it is reading that
+ * document, and the request that goes out carries the document focus. A server
+ * test cannot make that claim and never could.
+ *
+ * ## What is deliberately not asserted
+ *
+ * The answer's content. That needs a model, costs money per run, and belongs in
+ * `scripts/docqa-model-check.mjs`. What this pins down is that the request
+ * reaches the document agent at all — captured off the wire rather than
+ * inferred from what appears on screen.
+ *
+ * Needs an object store: without one there is nothing to upload, so the suite
+ * skips rather than passing vacuously.
+ */
+
+const BASE_URL = process.env.BASE_URL ?? "http://localhost:3123";
+const PASSWORD = "a-long-enough-password-7731";
+
+const configured = Boolean(process.env.S3_ENDPOINT);
+const needsStorage = configured
+  ? undefined
+  : { skip: "needs an S3 endpoint (node scripts/minio.mjs start)" };
+
+let browser: Browser;
+const users: string[] = [];
+const workspaces: string[] = [];
+const world = { ownerEmail: "", projectId: "", workspaceId: "", fileId: "" };
+
+/** A readable two-page document, so a page citation has somewhere to point. */
+const DOCUMENT = buildPdf([
+  [
+    "Request for Proposal — Records Modernisation",
+    "Issued by the City of Ashgrove Procurement Office",
+    "This document sets out the submission timetable and the budget ceiling.",
+  ],
+  [
+    "Section 2 — Submission Timetable",
+    "Proposals are due on 14 March 2027 at 5:00 PM Pacific Time.",
+    "Late submissions will be returned unopened and will not be evaluated.",
+  ],
+]);
+
+async function open(path: string): Promise<Page> {
+  const page = await browser.newPage();
+  await page.goto(`${BASE_URL}${path}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  return page;
+}
+
+async function signIn(page: Page, email: string) {
+  await page.goto(`${BASE_URL}/login`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await page.locator('input[name="email"]').fill(email);
+  await page.locator('input[name="password"]').fill(PASSWORD);
+  await page.locator('form button[type="submit"]').click();
+  await page.waitForURL((u) => !/\/login/.test(u.toString()), { timeout: 120_000 });
+}
+
+before(async () => {
+  if (!configured) {
+    console.log("  (document Q&A reachability suite skipped: no S3_ENDPOINT)");
+    return;
+  }
+  browser = await chromium.launch();
+
+  const email = `docqa-owner-${randomUUID().slice(0, 8)}@render.test`.toLowerCase();
+  const owner = await db.user.create({
+    data: {
+      email,
+      name: "Doc QA Owner",
+      passwordHash: await bcrypt.hash(PASSWORD, 4),
+      emailVerifiedAt: new Date(),
+      onboardedAt: new Date(),
+      // Uploads are a paid capability and document Q&A is Pro-only, so a Free
+      // owner would be refused by the plan gate rather than by anything this
+      // suite is about.
+      plan: "pro",
+    },
+    select: { id: true, email: true },
+  });
+  users.push(owner.id);
+  world.ownerEmail = owner.email;
+
+  const { provisionWorkspace } = await import("../../src/lib/workspaces/provision");
+  const workspace = await provisionWorkspace(owner.id, { name: "Doc QA Browser" });
+  workspaces.push(workspace.id);
+  world.workspaceId = workspace.id;
+
+  const status = await db.projectStatus.findFirst({
+    where: { workspaceId: workspace.id },
+    select: { id: true },
+  });
+  const project = await db.project.create({
+    data: {
+      workspaceId: workspace.id,
+      name: "Documented Project",
+      statusId: status!.id,
+      ownerId: owner.id,
+    },
+    select: { id: true },
+  });
+  world.projectId = project.id;
+
+  // All three flags. `files` and `documentAi` default to off; `ai` defaults on
+  // but is set explicitly so the suite does not depend on that default.
+  for (const key of ["files", "ai", "documentAi"]) {
+    await db.featureFlag.create({ data: { key, enabled: true, workspaceId: workspace.id } });
+  }
+});
+
+after(async () => {
+  if (!configured) return;
+  await browser?.close();
+  await db.documentChunk.deleteMany({ where: { workspaceId: { in: workspaces } } });
+  await db.documentIngestion.deleteMany({ where: { workspaceId: { in: workspaces } } });
+  await db.fileAsset.deleteMany({ where: { workspaceId: { in: workspaces } } });
+  await db.workspace.deleteMany({ where: { id: { in: workspaces } } });
+  await db.user.deleteMany({ where: { id: { in: users } } });
+  await db.$disconnect();
+});
+
+describe("document Q&A is reachable from the UI", needsStorage, () => {
+  test("uploading a PDF, then asking about it, sends a document focus", async () => {
+    const page = await open("/login");
+    await signIn(page, world.ownerEmail);
+    await page.goto(`${BASE_URL}/projects/${world.projectId}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+
+    // --- upload, through the real control ---------------------------
+    const input = page.locator('input[type="file"]').first();
+    assert.ok(await input.count(), "no upload control on the project page");
+    await input.setInputFiles({
+      name: "rfp-reachability.pdf",
+      mimeType: "application/pdf",
+      buffer: DOCUMENT,
+    });
+    await page.waitForSelector("text=rfp-reachability.pdf", { timeout: 120_000 });
+
+    // --- ingestion -------------------------------------------------
+    // `dispatchSoon()` drains the outbox inside the upload request, so this is
+    // seconds rather than the cron interval. Polled against the database
+    // because the panel's own state is what is being tested next.
+    let ready = false;
+    for (let i = 0; i < 60; i += 1) {
+      const row = await db.documentIngestion.findFirst({
+        where: { workspaceId: world.workspaceId },
+        select: { status: true, fileAssetId: true },
+      });
+      if (row?.status === "ready") {
+        ready = true;
+        world.fileId = row.fileAssetId;
+        break;
+      }
+      await page.waitForTimeout(1000);
+    }
+    assert.ok(ready, "the document never became ready, so there is nothing to ask about");
+
+    // --- the control exists, and says the document can be asked about ---
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const ask = page.getByRole("button", { name: /Ask Tiny AI about rfp-reachability\.pdf/i });
+    assert.equal(
+      await ask.count(),
+      1,
+      "no per-document Ask control — this is exactly the gap the production canary hit",
+    );
+
+    // --- capture the request rather than trusting the screen -------
+    const posted: unknown[] = [];
+    await page.route("**/api/ai/chat", async (route) => {
+      try {
+        posted.push(route.request().postDataJSON());
+      } catch {
+        posted.push(null);
+      }
+      // Answered locally: the point is the request shape, and a real answer
+      // would need a model and cost money on every run.
+      await route.fulfill({
+        status: 200,
+        contentType: "text/plain; charset=utf-8",
+        body: "Proposals are due on 14 March 2027.\n\nSources\n• rfp-reachability.pdf — p. 2",
+      });
+    });
+
+    await ask.click();
+
+    // --- the panel says which feature you are in -------------------
+    await page.waitForSelector("text=Reading rfp-reachability.pdf", { timeout: 30_000 });
+    /**
+     * Scoped to the Tiny AI panel, not any dialog.
+     *
+     * `[role="dialog"]` also matches Next's dev error overlay, which is itself a
+     * `role="dialog"` — a transient compile warning in the dev server made this
+     * a strict-mode violation ("resolved to 2 elements") and failed the test for
+     * a reason that had nothing to do with the feature.
+     */
+    const panel = page.getByRole("dialog").filter({ hasText: "Tiny AI" }).first();
+    const intro = await panel.innerText();
+    assert.match(
+      intro,
+      /answering from[\s\S]*only/i,
+      "the panel does not say the answer comes from this document only",
+    );
+    assert.match(intro, /cite the pages/i, "the panel does not mention page citations");
+
+    // The suggestion chips have to match the feature. Observed in the first
+    // end-to-end run: the panel correctly said it was answering from the
+    // document only, then offered five questions about the CRM — which invites
+    // a refusal and teaches somebody the feature is broken.
+    assert.doesNotMatch(
+      intro,
+      /Which deals need attention|haven't I talked to/i,
+      "a document focus is still offering CRM suggestions",
+    );
+    assert.match(intro, /key dates|payment terms|obligations/i, "no document-appropriate suggestions");
+
+    // --- and the request carries the document focus ----------------
+    const box = panel.locator("textarea").last();
+    await box.fill("When are proposals due?");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => true);
+    await page.waitForTimeout(3000);
+
+    assert.ok(posted.length > 0, "no request reached /api/ai/chat");
+    const body = posted[posted.length - 1] as { focus?: { type?: string; id?: string } } | null;
+    assert.equal(
+      body?.focus?.type,
+      "fileAsset",
+      `the request did not carry a document focus: ${JSON.stringify(body?.focus)}`,
+    );
+    assert.equal(body?.focus?.id, world.fileId, "the focus named a different record");
+
+    // --- and the state that must NOT offer a control ----------------
+    //
+    // Folded into this test rather than its own, because `browser.newPage()`
+    // creates an *isolated context*: a second test would start unauthenticated,
+    // and signing in again would spend one of the five logins the account is
+    // allowed per fifteen minutes. One session, both states.
+    //
+    // A document still being read must say so rather than offering a question
+    // that comes back "I haven't been able to read it yet" — which reads as a
+    // broken feature rather than as a wait.
+    const pending = await db.fileAsset.create({
+      data: {
+        workspaceId: world.workspaceId,
+        projectId: world.projectId,
+        name: "still-reading.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1234,
+        storageKey: `workspaces/${world.workspaceId}/${randomUUID()}.pdf`,
+      },
+      select: { id: true },
+    });
+    await db.documentIngestion.create({
+      data: { fileAssetId: pending.id, workspaceId: world.workspaceId, status: "processing" },
+    });
+
+    await page.goto(`${BASE_URL}/projects/${world.projectId}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await page.waitForSelector("text=still-reading.pdf", { timeout: 60_000 });
+
+    assert.equal(
+      await page.getByRole("button", { name: /Ask Tiny AI about still-reading\.pdf/i }).count(),
+      0,
+      "a document that has not been read offered an Ask control",
+    );
+    const panelText = await page.locator("main").innerText();
+    assert.match(panelText, /Reading…/, "nothing on screen says the document is still being read");
+    // And the ready one still offers its control, so the absence above is the
+    // state and not a selector that stopped matching.
+    assert.equal(
+      await page.getByRole("button", { name: /Ask Tiny AI about rfp-reachability\.pdf/i }).count(),
+      1,
+      "the ready document lost its Ask control",
+    );
+
+    await page.close();
+  });
+
+});

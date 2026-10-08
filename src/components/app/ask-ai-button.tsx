@@ -13,7 +13,16 @@ export function AskAiButton({
   variant = "outline",
   size = "sm",
 }: {
-  focus?: { type: "contact" | "company" | "deal" | "project" | "opportunity"; id: string; label: string };
+  /**
+   * `fileAsset` sends the request to the document agent, which answers from
+   * that document only and cites pages. It was absent from this union, which is
+   * the whole reason document Q&A was unreachable from the UI.
+   */
+  focus?: {
+    type: "contact" | "company" | "deal" | "project" | "opportunity" | "fileAsset";
+    id: string;
+    label: string;
+  };
   question?: string;
   label?: string;
   variant?: "brand" | "outline" | "ghost" | "subtle";

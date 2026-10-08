@@ -118,6 +118,22 @@ before(async () => {
       passwordHash: await bcrypt.hash(PASSWORD, 4),
       emailVerifiedAt: new Date(),
       onboardedAt: new Date(),
+      /**
+       * Plus, because uploads are a paid capability.
+       *
+       * `requireFileUploadEntitlement` reads the workspace owner's plan, and a
+       * Free owner is now refused with "Attaching files to a record is a Plus
+       * feature" — correctly. This suite is about upload *mechanics*: the
+       * two-stage validation, a partial batch, the retry. Leaving the owner on
+       * the default Free made every upload here fail for a reason the suite is
+       * not testing.
+       *
+       * Worth recording how late this was found: the entitlement check landed
+       * in c323db4 and CI never saw it, because this suite needs an S3 endpoint
+       * and CI has none, so it skips there. It only fails on a machine with
+       * MinIO installed.
+       */
+      plan: "plus",
     },
     select: { id: true, email: true },
   });
