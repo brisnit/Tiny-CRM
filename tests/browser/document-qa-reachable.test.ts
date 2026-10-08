@@ -51,12 +51,13 @@ const configured = Boolean(process.env.S3_ENDPOINT);
  *
  * A skip reads as a pass, and this suite exists because two defects reached
  * production through exactly that gap: the upload plan entitlement, which broke
- * every upload in `project-documents` and was invisible without MinIO; and
+ * every upload in `project-documents` and was invisible without object storage;
+ * and
  * document Q&A shipping with no user interface, which no server-side test could
- * see. The CI browser job now installs MinIO — and if some future change
+ * see. The CI browser job now installs object storage — and if some future change
  * removes it, this is what says so instead of going quiet.
  *
- * Locally a skip is still right: a developer without MinIO should not be unable
+ * Locally a skip is still right: a developer without it should not be unable
  * to run the suite.
  */
 if (process.env.CI && !configured) {
@@ -64,13 +65,13 @@ if (process.env.CI && !configured) {
     "document Q&A reachability needs object storage, and CI must provide it: " +
       "S3_ENDPOINT is unset. A skip here would read as a pass, which is how the " +
       "upload entitlement regression and the missing document Q&A UI both got " +
-      "through. Install MinIO in the Browser regressions job, or set S3_ENDPOINT.",
+      "through. Install object storage in the Browser regressions job, or set S3_ENDPOINT.",
   );
 }
 
 const needsStorage = configured
   ? undefined
-  : { skip: "needs an S3 endpoint (node scripts/minio.mjs start)" };
+  : { skip: "needs an S3 endpoint (node scripts/s3.mjs start)" };
 
 let browser: Browser;
 const users: string[] = [];

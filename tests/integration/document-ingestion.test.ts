@@ -18,7 +18,7 @@ import {
  * The storage driver is injected — see the note on `ingestFileAsset`. Gates,
  * idempotency, failure states and classification have nothing to do with S3,
  * and binding them to a live endpoint would mean they ran only on a machine
- * with MinIO installed. The real driver is covered against a real endpoint in
+ * with object storage installed. The real driver is covered against a real endpoint in
  * tests/integration/storage.test.ts.
  *
  * Everything else is real: real tenants, real rows, real row-level security on

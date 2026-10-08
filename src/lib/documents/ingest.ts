@@ -100,7 +100,7 @@ export async function ingestFileAsset(
    * Production passes nothing and gets the configured one. The suites pass a
    * driver that returns bytes from memory, so the gate, idempotency, failure
    * and classification paths are exercised on every run rather than only on a
-   * machine with MinIO installed — those behaviours have nothing to do with
+   * machine with object storage installed — those behaviours have nothing to do with
    * S3, and making them depend on it would mean they usually did not run.
    * `tests/integration/storage.test.ts` covers the real driver against a real
    * endpoint, which is where that coverage belongs.

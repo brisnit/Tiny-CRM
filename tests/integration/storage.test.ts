@@ -13,7 +13,7 @@ import { getStorage } from "../../src/lib/storage";
  * expiry, which headers are signed, whether a ranged GET returns 206, what a
  * provider says when an object is missing.
  *
- * So there is one driver, and locally it points at MinIO (scripts/minio.mjs).
+ * So there is one driver, and locally it points at Garage (scripts/s3.mjs).
  * Production points the same code at Cloudflare R2. What passes here is the
  * behaviour production depends on, not an approximation of it.
  *
@@ -23,7 +23,7 @@ import { getStorage } from "../../src/lib/storage";
  */
 
 const configured = Boolean(process.env.S3_ENDPOINT);
-const needsStorage = configured ? undefined : { skip: "no S3_ENDPOINT; run scripts/minio.mjs start" };
+const needsStorage = configured ? undefined : { skip: "no S3_ENDPOINT; run scripts/s3.mjs start" };
 
 /** `%PDF-1.7` followed by filler, so there are at least 16 bytes to range over. */
 const PDF: Uint8Array<ArrayBuffer> = new Uint8Array([

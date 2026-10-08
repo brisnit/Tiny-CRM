@@ -13,7 +13,8 @@ import { scanForMalware } from "../../src/lib/malware";
  * uses a fake `clamd`, and the upload end-to-end test tells its gateway what to
  * find. Both are correct about *our* behaviour and neither establishes that
  * ClamAV scans anything. This one does, and skips when no local `clamd` is
- * listening — the same bargain the object-storage suites strike with MinIO,
+ * listening — the same bargain the object-storage suites strike with a local
+ * S3 endpoint,
  * because a green run that silently asserted nothing would be worse than an
  * honest skip.
  *

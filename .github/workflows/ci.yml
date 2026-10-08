@@ -78,24 +78,44 @@ jobs:
       # skip in CI is a silent pass. Two things got through that gap: the upload
       # plan entitlement, which broke every upload in
       # tests/browser/project-documents and was only visible on a machine with
-      # MinIO installed; and document Q&A shipping with no user interface at
-      # all, which no server-side test could see.
+      # object storage installed; and document Q&A shipping with no user
+      # interface at all, which no server-side test could see.
       #
-      # `scripts/minio.mjs start` is reused rather than a service container
+      # `scripts/s3.mjs start` is reused rather than a service container
       # because it also creates the bucket, and `scripts/storage-env.mjs`
       # already knows how to find what it starts.
-      - name: Install MinIO
+      #
+      # Garage, not MinIO: MinIO's open-source server was archived and every
+      # community binary withdrawn, so the download this step used began
+      # answering HTTP 410 and took the whole job down with it. A pinned version
+      # rather than `latest`, so that an upstream release cannot change what CI
+      # runs without a commit saying so.
+      #
+      # SeaweedFS was tried in between and rejected: its single-node raft
+      # bootstrap is not deterministic — two of three cold starts never became
+      # ready, one of them sitting 933 seconds before electing itself leader.
+      # Garage is one process and starts in about a second.
+      #
+      # The checksum is pinned alongside the version because this is a single
+      # self-hosted origin, not a package registry: a version tag that quietly
+      # starts serving different bytes should fail the job rather than run.
+      - name: Install object storage
+        env:
+          GARAGE_VERSION: v2.4.1
+          GARAGE_SHA256: ae49f8de4aaee6b5ca305f7cbdccc8cd8a29b2804aac074649f18bfb83d0a2b6
         run: |
-          curl -fsSL -o /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-amd64/minio
-          chmod +x /usr/local/bin/minio
-          minio --version
+          curl -fsSL --retry 3 --retry-all-errors -o /tmp/garage \
+            "https://garagehq.deuxfleurs.fr/_releases/${GARAGE_VERSION}/x86_64-unknown-linux-musl/garage"
+          echo "${GARAGE_SHA256}  /tmp/garage" | sha256sum --check --strict
+          sudo install -m 0755 /tmp/garage /usr/local/bin/garage
+          garage --version
 
       - name: Password reset, password visibility and document Q&A, in a real browser
         run: npm run test:browser
         env:
           # Asserted by the suites themselves: with CI set and no storage they
-          # fail rather than skip, so a change that drops MinIO from this job
-          # cannot quietly take the coverage with it.
+          # fail rather than skip, so a change that drops object storage from
+          # this job cannot quietly take the coverage with it.
           CI: "true"
 
   # ---------------------------------------------------------------------------

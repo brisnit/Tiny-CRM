@@ -41,7 +41,7 @@ import { restrictedIdsFor } from "../../src/lib/auth/access";
 const configured = isPostgres && Boolean(process.env.S3_ENDPOINT);
 const requirements = configured
   ? undefined
-  : { skip: "needs PostgreSQL with RLS and an S3 endpoint (scripts/minio.mjs start)" };
+  : { skip: "needs PostgreSQL with RLS and an S3 endpoint (scripts/s3.mjs start)" };
 
 /** `%PDF-1.7` and filler: a real signature, and more than sixteen bytes. */
 const PDF: Uint8Array<ArrayBuffer> = new Uint8Array([

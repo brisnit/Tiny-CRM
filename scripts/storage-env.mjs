@@ -33,19 +33,19 @@ export async function storageEnvFor() {
   }
 
   try {
-    execFileSync("which", ["minio"], { stdio: "ignore" });
+    execFileSync("which", ["garage"], { stdio: "ignore" });
   } catch {
     console.warn(
-      "\nMinIO is not installed, so the object-storage suites will skip.\n" +
-        "  brew install minio\n" +
+      "\nGarage is not installed, so the object-storage suites will skip.\n" +
+        "  brew install garage\n" +
         "Or set S3_ENDPOINT to an S3-compatible endpoint you already have.\n",
     );
     return {};
   }
 
   try {
-    execFileSync("node", ["scripts/minio.mjs", "start"], { cwd: ROOT, stdio: "inherit" });
-    const printed = execFileSync("node", ["scripts/minio.mjs", "env"], {
+    execFileSync("node", ["scripts/s3.mjs", "start"], { cwd: ROOT, stdio: "inherit" });
+    const printed = execFileSync("node", ["scripts/s3.mjs", "env"], {
       cwd: ROOT,
       encoding: "utf8",
     });
@@ -58,7 +58,7 @@ export async function storageEnvFor() {
     return vars;
   } catch (error) {
     console.warn(
-      `\nCould not start MinIO (${error?.message ?? error}).\n` +
+      `\nCould not start object storage (${error?.message ?? error}).\n` +
         "The object-storage suites will skip.\n",
     );
     return {};

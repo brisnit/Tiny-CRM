@@ -162,7 +162,8 @@ describe("what cannot widen connect-src", () => {
   });
 
   test("a port is kept, because the origin is not the same without it", () => {
-    // Local development points at MinIO on a port; dropping it would name a
+    // Local development points at a loopback endpoint on a port; dropping it
+    // would name a
     // different origin than the one uploads actually use.
     assert.equal(
       configured("http://127.0.0.1:9010"),

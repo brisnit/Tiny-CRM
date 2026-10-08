@@ -83,10 +83,10 @@ if (!dryRun && !(process.env.ANTHROPIC_API_KEY ?? "").trim()) {
  * Object storage, through the same helper the three test runners use.
  *
  * This used to demand a pre-set `S3_ENDPOINT` and exit if it was missing, which
- * meant the script failed with "No S3_ENDPOINT" on a machine where MinIO was
- * already running — the variables live in `scripts/minio.mjs env`, not in the
+ * meant the script failed with "No S3_ENDPOINT" on a machine where storage was
+ * already running — the variables live in `scripts/s3.mjs env`, not in the
  * shell. `storageEnvFor()` is the one place that reconciles those: it honours an
- * endpoint an operator has already set, starts MinIO when one is installed, and
+ * endpoint an operator has already set, starts one when Garage is installed, and
  * returns nothing when neither is available.
  */
 const { storageEnvFor } = await import("./storage-env.mjs");
@@ -95,7 +95,7 @@ Object.assign(process.env, await storageEnvFor());
 if (!process.env.S3_ENDPOINT) {
   console.error(
     "\nNo object storage available, so there is nothing to upload to.\n" +
-      "  brew install minio && node scripts/minio.mjs start\n",
+      "  brew install garage && node scripts/s3.mjs start\n",
   );
   process.exit(1);
 }
@@ -113,7 +113,7 @@ if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(endpointHost)) {
   console.error(
     `\nRefusing to run: S3_ENDPOINT points at ${endpointHost}, which is not local.\n` +
       "This script writes documents and would be writing them to that bucket.\n" +
-      "Unset S3_ENDPOINT to use MinIO, or point it at a local endpoint.\n",
+      "Unset S3_ENDPOINT to use the local one, or point it at a local endpoint.\n",
   );
   process.exit(1);
 }

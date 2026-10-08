@@ -39,7 +39,8 @@ const configured = Boolean(process.env.S3_ENDPOINT);
  *
  * This is the suite the upload plan entitlement broke, and nobody saw it: it
  * needs an S3 endpoint, CI had none, so it skipped and the skip read as a pass.
- * The Browser regressions job installs MinIO now; this is what complains if
+ * The Browser regressions job installs object storage now; this is what
+ * complains if
  * that is ever removed.
  */
 if (process.env.CI && !configured) {
@@ -51,7 +52,7 @@ if (process.env.CI && !configured) {
 }
 const needsStorage = configured
   ? undefined
-  : { skip: "no S3_ENDPOINT; run scripts/minio.mjs start" };
+  : { skip: "no S3_ENDPOINT; run scripts/s3.mjs start" };
 
 let browser: Browser;
 const users: string[] = [];
@@ -147,7 +148,7 @@ before(async () => {
        * Worth recording how late this was found: the entitlement check landed
        * in c323db4 and CI never saw it, because this suite needs an S3 endpoint
        * and CI has none, so it skips there. It only fails on a machine with
-       * MinIO installed.
+       * object storage installed.
        */
       plan: "plus",
     },
