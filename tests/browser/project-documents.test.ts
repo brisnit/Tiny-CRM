@@ -33,6 +33,22 @@ const BASE_URL = process.env.BASE_URL ?? "http://localhost:3123";
 const PASSWORD = "a-long-enough-password-5821";
 
 const configured = Boolean(process.env.S3_ENDPOINT);
+
+/**
+ * In CI, missing storage is a failure rather than a skip.
+ *
+ * This is the suite the upload plan entitlement broke, and nobody saw it: it
+ * needs an S3 endpoint, CI had none, so it skipped and the skip read as a pass.
+ * The Browser regressions job installs MinIO now; this is what complains if
+ * that is ever removed.
+ */
+if (process.env.CI && !configured) {
+  throw new Error(
+    "project documents needs object storage, and CI must provide it: S3_ENDPOINT " +
+      "is unset. A skip here reads as a pass — it is how the upload entitlement " +
+      "regression went unnoticed.",
+  );
+}
 const needsStorage = configured
   ? undefined
   : { skip: "no S3_ENDPOINT; run scripts/minio.mjs start" };

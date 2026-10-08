@@ -73,8 +73,30 @@ jobs:
       - run: npm ci
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
-      - name: Password reset and password visibility, in a real browser
+
+      # Object storage, because without it the document suites skip — and a
+      # skip in CI is a silent pass. Two things got through that gap: the upload
+      # plan entitlement, which broke every upload in
+      # tests/browser/project-documents and was only visible on a machine with
+      # MinIO installed; and document Q&A shipping with no user interface at
+      # all, which no server-side test could see.
+      #
+      # `scripts/minio.mjs start` is reused rather than a service container
+      # because it also creates the bucket, and `scripts/storage-env.mjs`
+      # already knows how to find what it starts.
+      - name: Install MinIO
+        run: |
+          curl -fsSL -o /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-amd64/minio
+          chmod +x /usr/local/bin/minio
+          minio --version
+
+      - name: Password reset, password visibility and document Q&A, in a real browser
         run: npm run test:browser
+        env:
+          # Asserted by the suites themselves: with CI set and no storage they
+          # fail rather than skip, so a change that drops MinIO from this job
+          # cannot quietly take the coverage with it.
+          CI: "true"
 
   # ---------------------------------------------------------------------------
   # The same suite against real PostgreSQL, plus row-level security.
