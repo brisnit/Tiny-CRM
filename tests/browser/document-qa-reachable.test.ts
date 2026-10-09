@@ -103,15 +103,80 @@ async function open(path: string): Promise<Page> {
   return page;
 }
 
+/**
+ * Opens the project page and lets it hydrate before anything is driven.
+ *
+ * `domcontentloaded` means the markup arrived, not that React has adopted it.
+ * Until it has, this page's upload input has no change handler and its buttons
+ * have no click handler: `setInputFiles` would store files that nothing reads,
+ * and the upload would simply never begin — surfacing much later as a row that
+ * never appears. The sibling suite's `openProject` already settles for this
+ * reason; this file navigated bare.
+ */
+async function openProjectPage(page: Page): Promise<void> {
+  await page.goto(`${BASE_URL}/projects/${world.projectId}`, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  });
+  await page.waitForTimeout(750); // hydration, before any click or file lands
+}
+
+/**
+ * Signs in, waiting for hydration before the click — as every other browser
+ * suite here already does.
+ *
+ * This one did not, and it is why the suite was unreliable in CI. Filling and
+ * clicking straight after `domcontentloaded` lands the click on a form React
+ * has not adopted yet: nothing submits, no redirect follows, and `waitForURL`
+ * waits for a navigation that is never coming. On a fast machine hydration wins
+ * the race and the test passes, which is why this looked intermittent.
+ *
+ * It accounted for all three symptoms seen on this file: a silent 120-second
+ * whole-file timeout before the budget was separated from the step, a pass on
+ * quicker runs, and then `page.waitForURL: Timeout 60000ms exceeded … at
+ * signIn` once each wait was scoped.
+ *
+ * The 750ms settle and the `#email`/`#password` selectors are not new
+ * inventions — they are the pattern in opportunity-notes, project-documents,
+ * restricted-contact-detail, rfp-lifecycle and team-invite. Diverging from it
+ * is what cost this suite its reliability.
+ */
 async function signIn(page: Page, email: string) {
   await page.goto(`${BASE_URL}/login`, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await page.locator('input[name="email"]').fill(email);
-  await page.locator('input[name="password"]').fill(PASSWORD);
-  await page.locator('form button[type="submit"]').click();
-  // 60s, not 120s: a sign-in redirect that has not happened in a minute is not
-  // going to. Waits here are kept well inside the runner's per-file budget so a
-  // failure names the step that was slow instead of expiring the whole file.
-  await page.waitForURL((u) => !/\/login/.test(u.toString()), { timeout: 60_000 });
+  await page.waitForSelector("#password", { timeout: 60_000 });
+  await page.waitForTimeout(750); // hydration, before any click lands
+  await page.fill("#email", email);
+  await page.fill("#password", PASSWORD);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  try {
+    await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 60_000 });
+  } catch (error) {
+    // Say which of the two failures this was, because they have different
+    // causes and the bare Playwright message cannot tell them apart: a URL
+    // still on /login means the submission never happened (an unhydrated form
+    // swallowing the click, or credentials refused), while a URL that moved
+    // means the navigation committed and the `load` event never arrived.
+    //
+    // This is here because a CI failure reported only
+    // `waitForURL: Timeout 60000ms exceeded … waiting for navigation until
+    // "load"`, and neither that message nor a local reproduction at 10x CPU
+    // throttling could settle which had happened.
+    const url = page.url();
+    const hydrated = await page
+      .evaluate(() => {
+        const form = document.querySelector("form");
+        return !!form && Object.keys(form).some((k) => k.startsWith("__reactFiber$"));
+      })
+      .catch(() => "unknown");
+    const refusal = await page
+      .locator('[role="alert"], [data-slot="form-message"]')
+      .allTextContents()
+      .catch(() => []);
+    throw new Error(
+      `sign-in did not leave /login within 60s. url=${url} formHydrated=${hydrated} ` +
+        `onPageMessages=${JSON.stringify(refusal)} — ${(error as Error).message}`,
+    );
+  }
 }
 
 /**
@@ -201,7 +266,7 @@ describe("document Q&A is reachable from the UI", needsStorage, () => {
   test("uploading a PDF, then asking about it, sends a document focus", async () => {
     const page = await open("/login");
     await signIn(page, world.ownerEmail);
-    await page.goto(`${BASE_URL}/projects/${world.projectId}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await openProjectPage(page);
 
     // --- upload, through the real control ---------------------------
     const input = page.locator('input[type="file"]').first();
@@ -246,6 +311,7 @@ describe("document Q&A is reachable from the UI", needsStorage, () => {
 
     // --- the control exists, and says the document can be asked about ---
     await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(750); // hydration, before the Ask control is clicked
     const ask = page.getByRole("button", { name: /Ask Tiny AI about rfp-reachability\.pdf/i });
     assert.equal(
       await ask.count(),
@@ -343,10 +409,7 @@ describe("document Q&A is reachable from the UI", needsStorage, () => {
       data: { fileAssetId: pending.id, workspaceId: world.workspaceId, status: "processing" },
     });
 
-    await page.goto(`${BASE_URL}/projects/${world.projectId}`, {
-      waitUntil: "domcontentloaded",
-      timeout: 60_000,
-    });
+    await openProjectPage(page);
     await page.waitForSelector("text=still-reading.pdf", { timeout: 60_000 });
 
     assert.equal(
