@@ -63,7 +63,8 @@ import { log } from "@/lib/logger";
  * ---------------------------------------------------------------------------
  *
  * `STORAGE_DRIVER=local` and `STORAGE_DRIVER=s3` select the *same* code. Local
- * development points it at MinIO; production points it at Cloudflare R2. Both
+ * development points it at Garage (scripts/s3.mjs); production points it at
+ * Cloudflare R2. Both
  * speak the S3 API, so a developer exercises real SigV4 signing, real presigned
  * URLs, real CORS preflights, real ranged GETs and real deletes.
  *
@@ -73,7 +74,7 @@ import { log } from "@/lib/logger";
  * every part of the production path that can actually be wrong.
  *
  * Addressing is path-style (`<endpoint>/<bucket>/<key>`) because that is what
- * MinIO wants by default and what R2 accepts, so one code path serves both.
+ * the local store serves and what R2 accepts, so one code path serves both.
  */
 
 export type UploadContract = {

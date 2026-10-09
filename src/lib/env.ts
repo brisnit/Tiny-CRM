@@ -169,7 +169,7 @@ export const env = {
    * be a second thing to keep correct, and the one property worth proving
    * locally — that SigV4 presigning, CORS, ranged reads and deletes behave the
    * way production behaves — is exactly the property a filesystem stub cannot
-   * demonstrate. `local` is MinIO on a developer's machine, speaking the same
+   * demonstrate. `local` is Garage on a developer's machine, speaking the same
    * protocol R2 speaks in production.
    */
   storageDriver: (optional("STORAGE_DRIVER") ?? "none") as "none" | "local" | "s3",

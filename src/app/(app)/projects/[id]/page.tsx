@@ -22,10 +22,11 @@ import { TaskRow } from "@/components/app/task-row";
 import { RecordHeaderActions } from "@/components/app/record-edit";
 import { AddProjectPerson, RemoveProjectPerson } from "@/components/app/project-people";
 import { ProjectStatusPicker, NextActionEditor, MilestoneList } from "@/components/app/project-controls";
-import { DocumentsPanel } from "@/components/app/documents/documents-panel";
+import { DocumentsPanel, type DocumentIntelligenceState } from "@/components/app/documents/documents-panel";
 import { requireActor, resolveReadScope, restrictedIdsFor } from "@/lib/auth/access";
 import { withTenantContext } from "@/lib/tenant-db";
 import { can } from "@/lib/auth/permissions";
+import { documentIntelligenceEnabled } from "@/lib/documents/gate";
 import { isEnabled } from "@/lib/flags";
 import { UPLOAD_ALLOWLIST } from "@/lib/uploads";
 import { readScope } from "@/lib/scope";
@@ -44,6 +45,57 @@ export async function generateMetadata({ params }: PageProps<"/projects/[id]">) 
   const read = await resolveReadScope(await readScope());
   const project = await getProject(read, id);
   return { title: project?.name ?? "Project" };
+}
+
+/**
+ * Turns an ingestion row into what the Documents panel can say.
+ *
+ * Four outcomes, and the first one matters most: when document Q&A is not
+ * available for this workspace the panel is told `absent` and renders nothing,
+ * rather than showing a control that would always refuse or a spinner that
+ * would never resolve.
+ *
+ * `pending` and `processing` both read as "reading" — the distinction between
+ * queued and started is real but not actionable by the person waiting. Every
+ * other status is terminal, and the reason is written for the uploader rather
+ * than lifted from an error code: "unsupported" on its own tells somebody
+ * nothing about their scanned contract.
+ */
+function documentIntelligenceFor(
+  mimeType: string,
+  ingestion: { status: string; errorCode: string | null; pageCount: number | null } | null,
+  available: boolean,
+): DocumentIntelligenceState {
+  if (!available) return { state: "absent" };
+  // Only PDFs are read. Anything else is not a failure to report — it was never
+  // a candidate, and saying "cannot read" about a spreadsheet would be noise.
+  if (mimeType !== "application/pdf") return { state: "absent" };
+  if (!ingestion) return { state: "processing" };
+
+  switch (ingestion.status) {
+    case "ready":
+      return { state: "ready", pageCount: ingestion.pageCount };
+    case "pending":
+    case "processing":
+      return { state: "processing" };
+    case "no_text":
+      return {
+        state: "failed",
+        reason: "it has no text layer — a scan or photo rather than a text PDF",
+      };
+    default:
+      return {
+        state: "failed",
+        reason:
+          ingestion.errorCode === "encrypted"
+            ? "it is password-protected"
+            : ingestion.errorCode === "too_large"
+              ? "it is too large to read"
+              : ingestion.errorCode === "unsupported_type"
+                ? "its format cannot be read"
+                : "it could not be read",
+      };
+  }
 }
 
 export default async function ProjectPage({ params }: PageProps<"/projects/[id]">) {
@@ -102,6 +154,32 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
   const role = actor.memberships.find((m) => m.id === project.workspaceId)?.role ?? "viewer";
   const canUpload = can(role, "record:create");
   const canDeleteAnyDocument = can(role, "record:delete");
+  /**
+   * Whether Tiny may be asked about documents here at all.
+   *
+   * `documentIntelligenceEnabled` and not three `isEnabled` calls plus a plan
+   * lookup. A first version did it by hand and
+   * tests/security/document-flag-context.test.ts refused it: exactly one module
+   * may name `documentAi`, so that there is one reader with one set of reasons
+   * about what resolving it safely requires. The tripwire was right — the
+   * hand-rolled version had already drifted from the gate's own order.
+   *
+   * It asserts an ambient tenant context, which the `withTenantContext` below
+   * supplies: `FeatureFlag` is workspace-scoped and under row-level security, so
+   * a workspace override read outside a context is silently filtered and the
+   * built-in default used instead.
+   */
+  const documentQaAvailable = filesEnabled
+    ? await withTenantContext(
+        {
+          workspaceIds: [project.workspaceId],
+          userId: actor.identity.id,
+          restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [project.workspaceId]),
+        },
+        () => documentIntelligenceEnabled(project.workspaceId),
+      )
+    : false;
+
   const documents = project.files.map((file) => ({
     id: file.id,
     name: file.name,
@@ -112,6 +190,7 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
     canDelete:
       canDeleteAnyDocument ||
       (canUpload && file.uploaderId !== null && file.uploaderId === actor.identity.id),
+    intelligence: documentIntelligenceFor(file.mimeType, file.ingestion, documentQaAvailable),
   }));
 
   // The stored target date is still shown; this decides what it means now.

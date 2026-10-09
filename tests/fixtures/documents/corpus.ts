@@ -20,6 +20,16 @@
  * matches* — questions whose terms appear all over the document without the
  * answer being in it anywhere.
  *
+ * ## These are synthetic fixtures, not customer documents
+ *
+ * Every page of text below was written for these tests. None of it comes from a
+ * real document, and no customer file is read, copied or shipped by anything in
+ * this directory. Where a fixture's *name* matches a real upload — the
+ * production canary used a file called "IMPORTANT INFORMATION FOR BIDDERS.pdf"
+ * — the name was chosen to make the comparison legible and the contents are
+ * still invented. An answer that quotes one of these documents demonstrates the
+ * flow; it says nothing about the real file.
+ *
  * `fact` is the exact string an answer must contain. `page` is where it is, and
  * a citation naming a different page is a failure even if the fact is right —
  * a page number the reader cannot check is worse than none.

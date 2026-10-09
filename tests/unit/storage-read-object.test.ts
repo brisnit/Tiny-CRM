@@ -14,7 +14,7 @@ import { createServer as createRawServer, type Server as RawServer, type Address
  *   2. against the bytes actually received, while the stream is consumed.
  *
  * The second is the one that is load-bearing, and it is the one a real S3
- * server cannot be made to exercise — you cannot ask MinIO or R2 to understate
+ * server cannot be made to exercise — you cannot ask Garage or R2 to understate
  * a length or to omit it. So this suite stands up an HTTP server that does
  * exactly that. The driver is pointed at it and signs its requests normally;
  * what is under test is how it treats the response.

@@ -41,7 +41,7 @@ import { restrictedIdsFor } from "../../src/lib/auth/access";
 const configured = isPostgres && Boolean(process.env.S3_ENDPOINT);
 const requirements = configured
   ? undefined
-  : { skip: "needs PostgreSQL with RLS and an S3 endpoint (scripts/minio.mjs start)" };
+  : { skip: "needs PostgreSQL with RLS and an S3 endpoint (scripts/s3.mjs start)" };
 
 /** `%PDF-1.7` and filler: a real signature, and more than sixteen bytes. */
 const PDF: Uint8Array<ArrayBuffer> = new Uint8Array([
@@ -103,7 +103,16 @@ before(async () => {
     return;
   }
 
-  A = await createTenant("Documents");
+  // Plus: uploads are a paid capability, and `requireFileUploadEntitlement`
+  // reads the workspace owner's plan. A Free owner is refused with "Attaching
+  // files to a record is a Plus feature", which is correct and is not what this
+  // suite tests. The outsider tenants below stay Free — they never upload, they
+  // exist to be kept out.
+  //
+  // This suite needs PostgreSQL *and* an S3 endpoint, so it skips in CI (no S3)
+  // and skips locally (no PostgreSQL): the break was latent in both places
+  // rather than caught in either.
+  A = await createTenant("Documents", { plan: "plus" });
   id.grantedProject = A.projectId;
 
   // `files` defaults to off, and the actions enforce it. Enabling it for this

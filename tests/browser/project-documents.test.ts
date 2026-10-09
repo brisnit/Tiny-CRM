@@ -33,9 +33,26 @@ const BASE_URL = process.env.BASE_URL ?? "http://localhost:3123";
 const PASSWORD = "a-long-enough-password-5821";
 
 const configured = Boolean(process.env.S3_ENDPOINT);
+
+/**
+ * In CI, missing storage is a failure rather than a skip.
+ *
+ * This is the suite the upload plan entitlement broke, and nobody saw it: it
+ * needs an S3 endpoint, CI had none, so it skipped and the skip read as a pass.
+ * The Browser regressions job installs object storage now; this is what
+ * complains if
+ * that is ever removed.
+ */
+if (process.env.CI && !configured) {
+  throw new Error(
+    "project documents needs object storage, and CI must provide it: S3_ENDPOINT " +
+      "is unset. A skip here reads as a pass — it is how the upload entitlement " +
+      "regression went unnoticed.",
+  );
+}
 const needsStorage = configured
   ? undefined
-  : { skip: "no S3_ENDPOINT; run scripts/minio.mjs start" };
+  : { skip: "no S3_ENDPOINT; run scripts/s3.mjs start" };
 
 let browser: Browser;
 const users: string[] = [];
@@ -102,13 +119,32 @@ async function openProject(page: Page): Promise<void> {
   await page.waitForTimeout(750); // hydration, before any click lands
 }
 
+/**
+ * Progress, with elapsed time, because a setup hook has no other voice.
+ *
+ * The runner's timeout bounds a whole *file*. A file that expires inside a
+ * `before()` reports `test timed out after …ms` against line 1 and prints no
+ * suite output at all — which is exactly what CI produced for the sibling
+ * document-Q&A file: a 120-second gap and nothing to read. Both hooks in this
+ * file do real work (accounts, a workspace, flags, a sign-in, an upload), so
+ * each stage says when it finished and the last line printed is the last stage
+ * that completed.
+ */
+const setupStartedAt = Date.now();
+const stage = (what: string) =>
+  console.log(
+    `  [setup +${String(Math.round((Date.now() - setupStartedAt) / 100) / 10).padStart(5)}s] ${what}`,
+  );
+
 before(async () => {
   if (!configured) {
     console.log("  (project documents browser suite skipped: no S3_ENDPOINT)");
     return;
   }
 
+  stage("file setup entered");
   browser = await chromium.launch();
+  stage("chromium launched");
 
   const email = `documents-owner-${randomUUID().slice(0, 8)}@render.test`.toLowerCase();
   const owner = await db.user.create({
@@ -118,14 +154,33 @@ before(async () => {
       passwordHash: await bcrypt.hash(PASSWORD, 4),
       emailVerifiedAt: new Date(),
       onboardedAt: new Date(),
+      /**
+       * Plus, because uploads are a paid capability.
+       *
+       * `requireFileUploadEntitlement` reads the workspace owner's plan, and a
+       * Free owner is now refused with "Attaching files to a record is a Plus
+       * feature" — correctly. This suite is about upload *mechanics*: the
+       * two-stage validation, a partial batch, the retry. Leaving the owner on
+       * the default Free made every upload here fail for a reason the suite is
+       * not testing.
+       *
+       * Worth recording how late this was found: the entitlement check landed
+       * in c323db4 and CI never saw it, because this suite needs an S3 endpoint
+       * and CI has none, so it skips there. It only fails on a machine with
+       * object storage installed.
+       */
+      plan: "plus",
     },
     select: { id: true, email: true },
   });
   users.push(owner.id);
   world.ownerEmail = owner.email;
 
+  stage("owner created");
   const { provisionWorkspace } = await import("../../src/lib/workspaces/provision");
+  stage("provision module imported");
   const workspace = await provisionWorkspace(owner.id, { name: "Documents Browser" });
+  stage("workspace provisioned");
   workspaces.push(workspace.id);
   world.workspaceId = workspace.id;
 
@@ -169,6 +224,7 @@ before(async () => {
   await db.workspaceMember.create({
     data: { workspaceId: workspace.id, userId: viewerUser.id, role: "admin" },
   });
+  stage("viewer member added — file setup complete");
 });
 
 after(async () => {
@@ -177,6 +233,41 @@ after(async () => {
   await db.user.deleteMany({ where: { id: { in: users } } });
   await db.$disconnect();
 });
+
+/**
+ * Asserts a row count that has stopped moving.
+ *
+ * `waitForSelector` followed by `count()` is not the assertion it looks like.
+ * The documents list re-renders when an upload is confirmed, swapping the
+ * optimistic queue row for the stored one, so a count taken between those two
+ * renders reads 0 for a row that is present both before and after. That is
+ * exactly how "the successful document is not listed exactly once" failed in
+ * CI with `0 !== 1`, having waited successfully for the very row it then could
+ * not find.
+ *
+ * So the count has to survive a settle. That also keeps the "exactly once"
+ * half honest in the other direction: a duplicate that appears a moment later
+ * still fails, which a single reading would have missed.
+ */
+async function assertSettledCount(
+  page: Page,
+  selector: string,
+  expected: number,
+  message: string,
+): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  let last = -1;
+  while (Date.now() < deadline) {
+    last = await page.locator(selector).count();
+    if (last === expected) {
+      await page.waitForTimeout(750);
+      last = await page.locator(selector).count();
+      if (last === expected) return;
+    }
+    await page.waitForTimeout(250);
+  }
+  assert.fail(`${message} — expected ${expected}, last observed ${last}`);
+}
 
 describe("project documents", { concurrency: false }, () => {
   test("the panel offers an empty state before anything is attached", needsStorage, async () => {
@@ -216,13 +307,15 @@ describe("project documents", { concurrency: false }, () => {
       await page.waitForSelector("text=Retry", { timeout: 60_000 });
       await page.waitForSelector("text=good-proposal.pdf", { timeout: 60_000 });
 
-      assert.equal(
-        await page.locator("text=good-proposal.pdf").count(),
+      await assertSettledCount(
+        page,
+        "text=good-proposal.pdf",
         1,
         "the successful document is not listed exactly once",
       );
-      assert.equal(
-        await page.locator("text=bad-proposal.pdf").count(),
+      await assertSettledCount(
+        page,
+        "text=bad-proposal.pdf",
         1,
         "the failed upload is not shown exactly once",
       );
@@ -271,8 +364,9 @@ describe("project documents", { concurrency: false }, () => {
       await page.waitForTimeout(2500); // the retry runs and fails again
 
       // The retry re-ran only the file that failed.
-      assert.equal(
-        await page.locator("text=good-proposal.pdf").count(),
+      await assertSettledCount(
+        page,
+        "text=good-proposal.pdf",
         1,
         "retrying duplicated the document that had already succeeded",
       );
@@ -337,6 +431,51 @@ describe("project documents", { concurrency: false }, () => {
   });
 });
 
+/**
+ * Console noise `next dev` produces that a production build cannot.
+ *
+ * `favicon` and `DevTools` were already excluded here. The third entry was
+ * added after the Browser regressions job ran this suite in CI for the first
+ * time, and it is narrow deliberately: it matches one React message and
+ * nothing else, so a hydration error, a CSP violation, a failed chunk or any
+ * error the viewer itself raises still fails the test.
+ *
+ * **What it is.** React's development build logs "Encountered a script tag
+ * while rendering React component" when it *creates* a `<script>` element
+ * during a client render. The element is the inline theme script in the root
+ * layout (src/app/layout.tsx), which sets `html.dark` before first paint.
+ *
+ * **Where it comes from.** Bisecting this suite's own setup located it: console
+ * errors were 0 after `signIn` and 0 after `openProject`, and 1 immediately
+ * after `setInputFiles`. So the upload produces it and nothing the viewer does
+ * produces it — this suite is the victim rather than the cause, because the
+ * assertion reads errors accumulated earlier in the same page. A stack captured
+ * at the `console.error` call said the rest: dispatchDiscreteEvent ->
+ * flushSyncWorkAcrossRoots_impl -> performSyncWorkOnRoot -> renderRootSync ->
+ * completeWork. The discrete change event flushes the upload's refresh
+ * synchronously, and in that render React mounts the head script instead of
+ * reusing the server's. It needs a slow machine: it reproduces in CI and under
+ * 8x CPU throttling, and never unthrottled or at 4x.
+ *
+ * **Why filtering it is safe.** The message exists only in react-dom's
+ * development build — `grep` finds it under
+ * node_modules/next/dist/compiled/react-dom/cjs/*.development.js and nowhere
+ * else — and this harness runs `next dev` on purpose. A production build cannot
+ * emit it. The consequence React warns about, that a client-created script
+ * never executes, does not apply: the server's copy already ran during HTML
+ * parse and set the class on `documentElement`, which React does not clear.
+ * There is no supported way to silence it at the source, either; React skips
+ * the warning only for a non-executable `type` (`isScriptDataBlock`), and a
+ * theme script has to execute.
+ *
+ * That argument is only worth as much as the evidence that the theme still
+ * works, so `tests/browser/theme-initialization.test.ts` now asserts the
+ * observable effect in all four directions. This filter cannot hide a theme
+ * that stopped initializing.
+ */
+const DEV_ONLY_CONSOLE_NOISE =
+  /favicon|DevTools|Encountered a script tag while rendering React component/i;
+
 describe("the document viewer", { concurrency: false }, () => {
   /**
    * The viewer renders the file itself — PDF.js onto a canvas — rather than
@@ -360,22 +499,35 @@ describe("the document viewer", { concurrency: false }, () => {
     if (!configured) return;
     page = await browser.newPage();
     page.on("console", (message) => {
-      if (message.type() === "error") consoleErrors.push(message.text());
+      if (message.type() !== "error") return;
+      // With the source location, because these accumulate over the whole
+      // session — sign-in, the project page, then the viewer — and a bare
+      // message cannot say which of those produced it. A CI-only failure here
+      // cost a diagnosis cycle for exactly that reason.
+      const at = message.location();
+      const where = at?.url ? ` @ ${at.url}:${at.lineNumber}:${at.columnNumber}` : "";
+      consoleErrors.push(`${message.text()}${where}`);
     });
     page.on("pageerror", (error) => pageErrors.push(String(error)));
     page.on("requestfailed", (request) => {
       failedRequests.push(`${request.method()} ${request.url().split("?")[0]} — ${request.failure()?.errorText}`);
     });
+    stage("viewer: page opened");
     await signIn(page, world.viewerEmail);
+    stage("viewer: signed in");
     await openProject(page);
+    stage("viewer: project open");
 
     // Two documents, uploaded once: one the viewer can render, one it cannot.
     await page.setInputFiles('input[type="file"]', [
       { name: "viewer-check.pdf", mimeType: "application/pdf", buffer: validPdf() },
       { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("plain text, deliberately unrendered") },
     ]);
+    stage("viewer: files attached");
     await page.waitForSelector("text=viewer-check.pdf", { timeout: 60_000 });
+    stage("viewer: upload listed");
     await page.waitForTimeout(2500); // the list refreshes after confirm
+    stage("viewer: setup complete");
   });
 
   after(async () => {
@@ -401,7 +553,7 @@ describe("the document viewer", { concurrency: false }, () => {
     // Surfaced first, because a console error here is the signal that matters
     // and everything below would otherwise fail with a less useful message.
     assert.deepEqual(
-      consoleErrors.filter((e) => !/favicon|DevTools/i.test(e)),
+      consoleErrors.filter((e) => !DEV_ONLY_CONSOLE_NOISE.test(e)),
       [],
       `console errors while viewing: ${consoleErrors.join(" | ")}`,
     );
