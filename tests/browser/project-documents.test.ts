@@ -119,13 +119,32 @@ async function openProject(page: Page): Promise<void> {
   await page.waitForTimeout(750); // hydration, before any click lands
 }
 
+/**
+ * Progress, with elapsed time, because a setup hook has no other voice.
+ *
+ * The runner's timeout bounds a whole *file*. A file that expires inside a
+ * `before()` reports `test timed out after …ms` against line 1 and prints no
+ * suite output at all — which is exactly what CI produced for the sibling
+ * document-Q&A file: a 120-second gap and nothing to read. Both hooks in this
+ * file do real work (accounts, a workspace, flags, a sign-in, an upload), so
+ * each stage says when it finished and the last line printed is the last stage
+ * that completed.
+ */
+const setupStartedAt = Date.now();
+const stage = (what: string) =>
+  console.log(
+    `  [setup +${String(Math.round((Date.now() - setupStartedAt) / 100) / 10).padStart(5)}s] ${what}`,
+  );
+
 before(async () => {
   if (!configured) {
     console.log("  (project documents browser suite skipped: no S3_ENDPOINT)");
     return;
   }
 
+  stage("file setup entered");
   browser = await chromium.launch();
+  stage("chromium launched");
 
   const email = `documents-owner-${randomUUID().slice(0, 8)}@render.test`.toLowerCase();
   const owner = await db.user.create({
@@ -157,8 +176,11 @@ before(async () => {
   users.push(owner.id);
   world.ownerEmail = owner.email;
 
+  stage("owner created");
   const { provisionWorkspace } = await import("../../src/lib/workspaces/provision");
+  stage("provision module imported");
   const workspace = await provisionWorkspace(owner.id, { name: "Documents Browser" });
+  stage("workspace provisioned");
   workspaces.push(workspace.id);
   world.workspaceId = workspace.id;
 
@@ -202,6 +224,7 @@ before(async () => {
   await db.workspaceMember.create({
     data: { workspaceId: workspace.id, userId: viewerUser.id, role: "admin" },
   });
+  stage("viewer member added — file setup complete");
 });
 
 after(async () => {
@@ -489,16 +512,22 @@ describe("the document viewer", { concurrency: false }, () => {
     page.on("requestfailed", (request) => {
       failedRequests.push(`${request.method()} ${request.url().split("?")[0]} — ${request.failure()?.errorText}`);
     });
+    stage("viewer: page opened");
     await signIn(page, world.viewerEmail);
+    stage("viewer: signed in");
     await openProject(page);
+    stage("viewer: project open");
 
     // Two documents, uploaded once: one the viewer can render, one it cannot.
     await page.setInputFiles('input[type="file"]', [
       { name: "viewer-check.pdf", mimeType: "application/pdf", buffer: validPdf() },
       { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("plain text, deliberately unrendered") },
     ]);
+    stage("viewer: files attached");
     await page.waitForSelector("text=viewer-check.pdf", { timeout: 60_000 });
+    stage("viewer: upload listed");
     await page.waitForTimeout(2500); // the list refreshes after confirm
+    stage("viewer: setup complete");
   });
 
   after(async () => {
