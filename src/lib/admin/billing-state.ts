@@ -33,16 +33,29 @@ import { isLegacyPlan, planFor, type PlanId } from "@/lib/plans";
  * and the dashboard link is there for the authoritative answer.
  */
 
-/** Stripe statuses that mean money is still expected to arrive. */
-const LIVE_SUBSCRIPTION_STATUSES = new Set([
-  "active",
-  "trialing",
-  // Still live: Stripe is retrying the card and the customer usually does not
-  // know yet. `entitlementFor` keeps the plan for the same reason.
-  "past_due",
-  // Cancelling at period end: paid for, and still running.
-  "canceling",
-]);
+/**
+ * The statuses where money has actually been collected and is still being
+ * collected — the only ones this will call "Paid".
+ *
+ * `trialing` and `past_due` are deliberately **not** here, and the distinction
+ * is the point of the label:
+ *
+ *   - **`trialing`** is a subscription nobody has paid for yet. Calling it
+ *     paid, on the screen used to answer billing questions, asserts a payment
+ *     that has not happened.
+ *   - **`past_due`** is a subscription whose payment has *failed*. It keeps
+ *     the entitlement — `entitlementFor` is right to leave access alone while
+ *     Stripe retries — but access and payment are different questions, and
+ *     this column answers the second one.
+ *
+ * Both therefore read "Underlying: <plan>" with the status shown beside them,
+ * which is a weaker claim and the only one the data supports. The entitlement
+ * they confer is unaffected; this changes what is said, not what is allowed.
+ *
+ * `canceling` stays: the period is paid for and still running, which is a
+ * collected payment.
+ */
+const PAID_SUBSCRIPTION_STATUSES = new Set(["active", "canceling"]);
 
 export type BillingState = {
   /** The resolved plan id behind `User.plan`. */
@@ -67,8 +80,8 @@ export function billingStateFor(input: {
   const plan = planFor(input.storedPlan).id;
   const legacy = isLegacyPlan(plan);
   const purchasable = planFor(input.storedPlan).purchasable && plan !== "free";
-  const live = LIVE_SUBSCRIPTION_STATUSES.has(input.planStatus);
-  const paidSubscription = purchasable && live && Boolean(input.billingCustomerId);
+  const collected = PAID_SUBSCRIPTION_STATUSES.has(input.planStatus);
+  const paidSubscription = purchasable && collected && Boolean(input.billingCustomerId);
 
   if (legacy) {
     return {

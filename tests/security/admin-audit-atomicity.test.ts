@@ -27,7 +27,12 @@ let target: Tenant;
 before(async () => {
   admin = await createTenant("AtomicAdmin", { plan: "free" });
   target = await createTenant("AtomicTarget", { plan: "free" });
-  await observer.platformAdmin.create({ data: { userId: admin.ownerId } });
+  const adminEmail = (
+    await observer.user.findUniqueOrThrow({ where: { id: admin.ownerId }, select: { email: true } })
+  ).email;
+  await observer.platformAdmin.create({
+    data: { userId: admin.ownerId, boundEmail: adminEmail },
+  });
 });
 
 after(async () => {

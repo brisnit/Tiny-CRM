@@ -28,7 +28,12 @@ before(async () => {
   admin = await createTenant("AdminOwner", { plan: "free" });
   ordinary = await createTenant("OrdinaryUser", { plan: "free" });
   victim = await createTenant("TargetUser", { plan: "free" });
-  await db.platformAdmin.create({ data: { userId: admin.ownerId, note: "test owner" } });
+  const adminEmail = (
+    await db.user.findUniqueOrThrow({ where: { id: admin.ownerId }, select: { email: true } })
+  ).email;
+  await db.platformAdmin.create({
+    data: { userId: admin.ownerId, boundEmail: adminEmail, note: "test owner" },
+  });
 });
 
 after(async () => {
@@ -165,6 +170,71 @@ describe("the admin may act on other accounts", () => {
       assert.equal(actor, null, "a suspended account still resolved to an actor");
     } finally {
       await asAdmin(() => reinstateAccount({ userId: victim.ownerId, reason: "cleanup" }));
+    }
+  });
+});
+
+describe("the binding is the user id; the address can only deny", () => {
+  test("changing the admin's email refuses the panel rather than transferring it", async () => {
+    const original = (
+      await db.user.findUniqueOrThrow({ where: { id: admin.ownerId }, select: { email: true } })
+    ).email;
+    const moved = `moved-${original}`;
+
+    await db.user.update({ where: { id: admin.ownerId }, data: { email: moved } });
+    try {
+      const result = await asAdmin(() =>
+        suspendAccount({ userId: victim.ownerId, reason: "should be refused" }),
+      );
+      assert.equal(result.ok, false, "a changed address still held administration");
+      assert.match(result.error ?? "", /not found/i);
+    } finally {
+      await db.user.update({ where: { id: admin.ownerId }, data: { email: original } });
+    }
+
+    // And it comes straight back when the account matches again, so this is a
+    // lock rather than a loss.
+    const restored = await asAdmin(() =>
+      suspendAccount({ userId: victim.ownerId, reason: "restored binding" }),
+    );
+    assert.equal(restored.ok, true, `the binding did not recover: ${restored.ok ? "" : restored.error}`);
+    await asAdmin(() => reinstateAccount({ userId: victim.ownerId, reason: "cleanup" }));
+  });
+
+  test("taking the admin's old address does not take the panel with it", async () => {
+    // The property that matters: the row is found by id, so an account that
+    // later uses the bound address is simply a different account.
+    const boundEmail = (
+      await db.platformAdmin.findUniqueOrThrow({
+        where: { userId: admin.ownerId }, select: { boundEmail: true },
+      })
+    ).boundEmail;
+
+    const originalAdminEmail = (
+      await db.user.findUniqueOrThrow({ where: { id: admin.ownerId }, select: { email: true } })
+    ).email;
+    // Free the address, then give it to somebody else entirely.
+    await db.user.update({
+      where: { id: admin.ownerId }, data: { email: `vacated-${originalAdminEmail}` },
+    });
+    const previousOrdinary = (
+      await db.user.findUniqueOrThrow({ where: { id: ordinary.ownerId }, select: { email: true } })
+    ).email;
+    await db.user.update({ where: { id: ordinary.ownerId }, data: { email: boundEmail } });
+
+    try {
+      const result = await asOrdinary(() =>
+        suspendAccount({ userId: victim.ownerId, reason: "impersonation attempt" }),
+      );
+      assert.equal(result.ok, false, "an account that took the bound address gained administration");
+      assert.equal(
+        await db.platformAdmin.count({ where: { userId: ordinary.ownerId } }),
+        0,
+        "administration followed an email address",
+      );
+    } finally {
+      await db.user.update({ where: { id: ordinary.ownerId }, data: { email: previousOrdinary } });
+      await db.user.update({ where: { id: admin.ownerId }, data: { email: originalAdminEmail } });
     }
   });
 });

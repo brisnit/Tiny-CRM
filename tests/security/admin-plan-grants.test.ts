@@ -46,7 +46,10 @@ before(async () => {
   // because the fixture's type only admits resolved plan ids, and the alias is
   // precisely what must not be mishandled.
   await db.user.update({ where: { id: lifetime.ownerId }, data: { plan: "lifetime" } });
-  await db.platformAdmin.create({ data: { userId: admin.ownerId } });
+  const adminEmail = (
+    await db.user.findUniqueOrThrow({ where: { id: admin.ownerId }, select: { email: true } })
+  ).email;
+  await db.platformAdmin.create({ data: { userId: admin.ownerId, boundEmail: adminEmail } });
 });
 
 after(async () => {
@@ -249,6 +252,8 @@ describe("what the panel may claim about billing", () => {
 
     for (const [status, customer] of [
       ["canceled", "cus_1"],
+      ["trialing", "cus_1"],
+      ["past_due", "cus_1"],
       ["unpaid", "cus_1"],
       ["incomplete", "cus_1"],
       ["paused", "cus_1"],
@@ -267,14 +272,28 @@ describe("what the panel may claim about billing", () => {
     }
   });
 
-  test("dunning keeps the paid label, because Stripe is still collecting", async () => {
+  test("a trial and a failed payment are not 'paid', and say which they are", async () => {
     const { billingStateFor } = await import("../../src/lib/admin/billing-state");
-    for (const status of ["trialing", "past_due", "canceling"]) {
+    // Neither has collected money. `trialing` never has; `past_due` tried and
+    // failed. They keep the entitlement — that is `entitlementFor`'s job — but
+    // this column answers "is anyone being charged", and the honest answer is
+    // no, with the status beside it.
+    for (const status of ["trialing", "past_due"]) {
       const state = billingStateFor({
         storedPlan: "plus", planStatus: status, billingCustomerId: "cus_1",
       });
-      assert.equal(state.paidSubscription, true, `status "${status}" was treated as not paying`);
+      assert.equal(state.paidSubscription, false, `"${status}" was labelled as paid`);
+      assert.match(state.label, /^Underlying: Plus$/, `"${status}" did not fall back to underlying`);
+      assert.equal(state.status, status, "the status was not preserved for display");
     }
+  });
+
+  test("a period already paid for keeps the paid label while it runs out", async () => {
+    const { billingStateFor } = await import("../../src/lib/admin/billing-state");
+    const state = billingStateFor({
+      storedPlan: "plus", planStatus: "canceling", billingCustomerId: "cus_1",
+    });
+    assert.equal(state.paidSubscription, true, "a cancelling-but-paid period was not shown as paid");
   });
 
   test("Free is never 'paid', even with a Stripe customer left behind", async () => {

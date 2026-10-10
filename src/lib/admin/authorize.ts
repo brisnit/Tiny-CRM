@@ -74,11 +74,41 @@ export type PlatformAdminActor = Actor & {
  * workspace list rather than no context at all — this read needs an identity,
  * not a tenancy.
  */
-async function adminRowFor(userId: string): Promise<{ userId: string } | null> {
+async function adminRowFor(
+  userId: string,
+): Promise<{ userId: string; boundEmail: string } | null> {
   return withTenantContext(
     { workspaceIds: [], userId, restrictedWorkspaceIds: [] },
-    async (tx) => tx.platformAdmin.findUnique({ where: { userId }, select: { userId: true } }),
+    async (tx) =>
+      tx.platformAdmin.findUnique({
+        where: { userId },
+        select: { userId: true, boundEmail: true },
+      }),
   );
+}
+
+/**
+ * Both conditions, in one place.
+ *
+ * The id is the binding. The address is a second condition that can only
+ * **deny** — it never grants anything, and it cannot transfer administration
+ * to anyone, because the row is found by id and an account that later takes
+ * this address has a different id.
+ *
+ * What it catches is a mis-bound id: a real account, the wrong one, silently
+ * holding the panel because a character was wrong when the row was written.
+ * Without the comparison that is undetectable from inside the product.
+ *
+ * The cost is honest and documented: if the owner changes their email,
+ * administration stops working until an operator re-binds. That is the safer
+ * of the two failures, and `scripts/bind-platform-admin.mjs` is the remedy.
+ */
+function bindingHolds(
+  row: { boundEmail: string } | null,
+  currentEmail: string,
+): row is { userId: string; boundEmail: string } {
+  if (!row) return false;
+  return row.boundEmail.trim().toLowerCase() === currentEmail.trim().toLowerCase();
 }
 
 /**
@@ -92,7 +122,7 @@ export async function isPlatformAdmin(): Promise<boolean> {
   const actor = await getActor();
   if (!actor) return false;
   const row = await adminRowFor(actor.identity.id);
-  return Boolean(row);
+  return bindingHolds(row, actor.identity.email);
 }
 
 /**
@@ -109,12 +139,16 @@ export async function requirePlatformAdmin(): Promise<PlatformAdminActor> {
   if (!actor) throw unauthorized();
 
   const row = await adminRowFor(actor.identity.id);
-  if (!row) {
+  const boundTo = row?.boundEmail ?? null;
+  if (!bindingHolds(row, actor.identity.email)) {
     // "Not found" rather than "forbidden", for the same reason the rest of the
     // codebase does: confirming that an administrative surface exists is itself
     // a disclosure to someone who should not know.
     throw new AppError("not_found", "Not found.", {
-      internal: `platform admin refused for user ${actor.identity.id}`,
+      internal: boundTo
+        ? `platform admin bound for ${boundTo} but the account is now ` +
+          `${actor.identity.email}; re-bind with scripts/bind-platform-admin.mjs`
+        : `platform admin refused for user ${actor.identity.id}`,
     });
   }
 
@@ -132,21 +166,5 @@ export async function requirePlatformAdmin(): Promise<PlatformAdminActor> {
 export function refuseSelfTarget(actor: Actor, targetUserId: string, what: string): void {
   if (actor.identity.id === targetUserId) {
     throw new AppError("validation", `You cannot ${what} your own account.`);
-  }
-}
-
-/**
- * Confirms the bound identity still matches the address it was bound for.
- *
- * Belt and braces for the migration step: the row is written against a user id
- * resolved out of band, and this is what notices if that id was wrong.
- */
-export async function assertAdminEmail(expected: string): Promise<void> {
-  const actor = await getActor();
-  if (!actor) throw unauthorized();
-  if (actor.identity.email.toLowerCase() !== expected.toLowerCase()) {
-    throw new AppError("not_found", "Not found.", {
-      internal: `platform admin id/email mismatch for ${actor.identity.id}`,
-    });
   }
 }

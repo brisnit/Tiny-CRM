@@ -50,14 +50,18 @@ function ask(question) {
 
 async function report(client) {
   const { rows } = await client.query(
-    `SELECT pa."userId", u."email", pa."note", pa."createdAt"
+    `SELECT pa."userId", u."email", pa."boundEmail", pa."note", pa."createdAt"
        FROM "PlatformAdmin" pa JOIN "User" u ON u."id" = pa."userId"
       ORDER BY pa."createdAt"`,
   );
   console.log(`\n  PLATFORM ADMINS (${rows.length})`);
   if (rows.length === 0) console.log("    (none — the panel is unreachable by anyone)");
   for (const r of rows) {
-    console.log(`    ${r.email}  ${r.userId}  ${r.note ?? ""}`);
+    const drift =
+      String(r.email).toLowerCase() === String(r.boundEmail).toLowerCase()
+        ? ""
+        : `  ** BOUND FOR ${r.boundEmail} — the panel will refuse until re-bound **`;
+    console.log(`    ${r.email}  ${r.userId}  ${r.note ?? ""}${drift}`);
   }
   return rows;
 }
@@ -128,11 +132,15 @@ async function main() {
       // `updatedAt` is not on this table, and `id` has no database default —
       // Prisma's `@default(cuid())` is applied client-side, so raw SQL supplies
       // one. The same lesson the feature-flag script learned the hard way.
+      // `boundEmail` is recorded from the account itself, not from anything
+      // typed at this prompt: the point of the second condition is to catch a
+      // mis-typed id, and an operator-supplied address could agree with the
+      // wrong id just as easily as the right one.
       await client.query(
-        `INSERT INTO "PlatformAdmin" ("id", "userId", "note", "createdAt")
-         VALUES ($1, $2, $3, now())
-         ON CONFLICT ("userId") DO NOTHING`,
-        [randomUUID(), userId, "owner"],
+        `INSERT INTO "PlatformAdmin" ("id", "userId", "boundEmail", "note", "createdAt")
+         VALUES ($1, $2, $3, $4, now())
+         ON CONFLICT ("userId") DO UPDATE SET "boundEmail" = $3`,
+        [randomUUID(), userId, account.email, "owner"],
       );
     }
 

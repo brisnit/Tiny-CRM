@@ -51,7 +51,7 @@ export function PlanBadges({
       {/* The status, separately, whenever we are not claiming a live
           subscription — the weaker label is only honest with it beside. */}
       {billingKind !== "paid" && planStatus && planStatus !== "active" ? (
-        <Badge title={`Stored billing status, as of the last webhook`}>{planStatus}</Badge>
+        <Badge title="Stored billing status, as of the last webhook">{planStatus}</Badge>
       ) : null}
 
       {grant ? (

@@ -28,7 +28,13 @@ const BASE_URL = process.env.BASE_URL ?? "http://localhost:3123";
 // can silently drift from it.
 const PASSWORD = "correct-horse-battery";
 
-const world = { adminId: "", adminEmail: "", ordinaryEmail: "", customerId: "", customerEmail: "" };
+const world = {
+  adminId: "", adminEmail: "", ordinaryEmail: "",
+  customerId: "", customerEmail: "",
+  // Separate accounts, so a flow that mutates one cannot disturb the fixture
+  // the display test asserts against.
+  grantTargetId: "", suspendTargetId: "",
+};
 const users: string[] = [];
 const workspaces: string[] = [];
 let browser: Browser;
@@ -71,7 +77,9 @@ before(async () => {
   const admin = await makeAccount("admin");
   world.adminId = admin.id;
   world.adminEmail = admin.email;
-  await db.platformAdmin.create({ data: { userId: admin.id, note: "browser suite" } });
+  await db.platformAdmin.create({
+    data: { userId: admin.id, boundEmail: admin.email, note: "browser suite" },
+  });
 
   const ordinary = await makeAccount("ordinary");
   world.ordinaryEmail = ordinary.email;
@@ -91,6 +99,9 @@ before(async () => {
       reason: "design partner for Q1", grantedById: admin.id,
     },
   });
+
+  world.grantTargetId = (await makeAccount("granted")).id;
+  world.suspendTargetId = (await makeAccount("suspendable")).id;
 });
 
 after(async () => {
@@ -224,38 +235,131 @@ describe("the admin panel in a browser", () => {
     }
   });
 
-  test("suspension asks for a reason before it will proceed", async () => {
+  test("a grant is made and revoked through the UI, and the page reflects both", async () => {
     const page = await browser.newPage();
     try {
       await signIn(page, world.adminEmail);
-      await page.goto(`${BASE_URL}/admin/customers/${world.customerId}`, {
-        waitUntil: "domcontentloaded",
-        timeout: 60_000,
+      await page.goto(`${BASE_URL}/admin/customers/${world.grantTargetId}`, {
+        waitUntil: "domcontentloaded", timeout: 60_000,
       });
       await page.waitForSelector("text=Effective entitlement", { timeout: 30_000 });
       await page.waitForTimeout(750); // hydration, before any click lands
 
-      await page.getByRole("button", { name: /^Suspend$/ }).click();
-      await page.waitForSelector("text=Suspend this account", { timeout: 15_000 });
+      // --- grant -------------------------------------------------------
+      await page.getByRole("button", { name: /Grant complimentary access/i }).click();
+      await page.waitForSelector("text=Grant complimentary access", { timeout: 15_000 });
+      await page.getByLabel("Complimentary plan").selectOption("pro");
+      await page.getByLabel("Reason for the grant").fill("browser flow: pilot access");
+      await page.getByRole("button", { name: "Grant access" }).click();
 
-      const dialog = page.getByRole("dialog");
-      // The confirm button is unusable until a reason is given.
-      const confirm = dialog.getByRole("button", { name: "Suspend account" });
-      assert.equal(await confirm.isDisabled(), true, "suspension was offered with no reason");
+      await page.waitForSelector("text=Complimentary: Pro", { timeout: 30_000 });
+      const granted = await visibleText(page);
+      assert.match(granted, /Effective: Pro/i, "the effective plan did not rise after granting");
+      assert.match(granted, /browser flow: pilot access/i, "the reason is not shown");
 
-      // And the dialog says what it does not do.
-      const text = (await dialog.textContent()) ?? "";
-      assert.match(text, /does not cancel/i, "the dialog does not say Stripe is untouched");
-      assert.match(text, /refund/i);
-
-      await page.keyboard.press("Escape");
-      const after = await db.user.findUniqueOrThrow({
-        where: { id: world.customerId },
-        select: { deactivatedAt: true },
+      // The database agrees, and the stored column was not touched.
+      const afterGrant = await db.user.findUniqueOrThrow({
+        where: { id: world.grantTargetId },
+        select: { plan: true, planGrants: { where: { revokedAt: null }, select: { plan: true } } },
       });
-      assert.equal(after.deactivatedAt, null, "opening a dialog suspended an account");
+      assert.equal(afterGrant.plan, "free", "granting wrote the stored plan Stripe owns");
+      assert.equal(afterGrant.planGrants.length, 1);
+      assert.equal(afterGrant.planGrants[0]!.plan, "pro");
+
+      // --- revoke ------------------------------------------------------
+      await page.getByRole("button", { name: /Revoke complimentary access/i }).click();
+      await page.waitForSelector("text=Revoke complimentary access", { timeout: 15_000 });
+      await page.getByRole("dialog").getByLabel("Reason").fill("browser flow: pilot ended");
+      await page.getByRole("button", { name: "Revoke access" }).click();
+
+      await page.waitForFunction(
+        () => !document.body.innerText.includes("Complimentary: Pro"),
+        undefined,
+        { timeout: 30_000 },
+      );
+
+      const afterRevoke = await db.user.findMany({
+        where: { id: world.grantTargetId },
+        select: { planGrants: { select: { revokedAt: true, revokedReason: true } } },
+      });
+      const grants = afterRevoke[0]!.planGrants;
+      assert.equal(grants.length, 1, "revoking deleted the grant rather than ending it");
+      assert.ok(grants[0]!.revokedAt, "the grant was not revoked");
+      assert.equal(grants[0]!.revokedReason, "browser flow: pilot ended");
+
+      // Both halves are in the administrative history, by their reasons.
+      const history = await visibleText(page);
+      assert.match(history, /Granted complimentary pro/i, "the grant is missing from the history");
+      assert.match(history, /Revoked complimentary pro/i, "the revocation is missing");
     } finally {
       await page.close();
     }
   });
+
+  test("an account is suspended and reinstated through the UI", async () => {
+    const page = await browser.newPage();
+    try {
+      await signIn(page, world.adminEmail);
+      await page.goto(`${BASE_URL}/admin/customers/${world.suspendTargetId}`, {
+        waitUntil: "domcontentloaded", timeout: 60_000,
+      });
+      await page.waitForSelector("text=Effective entitlement", { timeout: 30_000 });
+      await page.waitForTimeout(750); // hydration, before any click lands
+
+      // --- suspend -----------------------------------------------------
+      await page.getByRole("button", { name: /^Suspend$/ }).click();
+      await page.waitForSelector("text=Suspend this account", { timeout: 15_000 });
+
+      const dialog = page.getByRole("dialog");
+      // Unusable until a reason is given — the server requires one too, and
+      // this is the affordance that says so before the attempt.
+      assert.equal(
+        await dialog.getByRole("button", { name: "Suspend account" }).isDisabled(),
+        true,
+        "suspension was offered with no reason",
+      );
+      // And it states what it does not do, where the decision is made.
+      const warning = (await dialog.textContent()) ?? "";
+      assert.match(warning, /does not cancel/i, "the dialog does not say Stripe is untouched");
+      assert.match(warning, /refund/i, "the dialog does not mention refunds");
+
+      await dialog.getByLabel("Reason").fill("browser flow: abuse report");
+      await page.getByRole("button", { name: "Suspend account" }).click();
+
+      await page.waitForSelector("text=Suspended", { timeout: 30_000 });
+      const suspended = await db.user.findUniqueOrThrow({
+        where: { id: world.suspendTargetId },
+        select: { deactivatedAt: true, deactivatedReason: true, sessionEpoch: true },
+      });
+      assert.ok(suspended.deactivatedAt, "the account was not suspended");
+      assert.equal(suspended.deactivatedReason, "browser flow: abuse report");
+      assert.ok(suspended.sessionEpoch > 0, "existing sessions were not invalidated");
+
+      // --- reinstate ---------------------------------------------------
+      await page.getByRole("button", { name: /Reinstate/i }).first().click();
+      await page.waitForSelector("text=Reinstate this account", { timeout: 15_000 });
+      await page.getByRole("dialog").getByLabel("Reason").fill("browser flow: resolved");
+      await page.getByRole("button", { name: "Reinstate account" }).click();
+
+      await page.waitForFunction(
+        () => !document.body.innerText.includes("Suspended:"),
+        undefined,
+        { timeout: 30_000 },
+      );
+
+      const reinstated = await db.user.findUniqueOrThrow({
+        where: { id: world.suspendTargetId },
+        select: { deactivatedAt: true, deactivatedReason: true },
+      });
+      assert.equal(reinstated.deactivatedAt, null, "the account was not reinstated");
+      assert.equal(reinstated.deactivatedReason, null, "the reason outlived the suspension");
+
+      const history = await visibleText(page);
+      assert.match(history, /Suspended /i, "the suspension is missing from the history");
+      assert.match(history, /Reinstated /i, "the reinstatement is missing");
+    } finally {
+      await page.close();
+    }
+  });
+
 });

@@ -34,7 +34,12 @@ before(async () => {
   other = await createTenant("RlsOther", { plan: "free" });
   // Written by the observer: the application role has no INSERT policy on this
   // table, which is itself asserted below.
-  await observer.platformAdmin.create({ data: { userId: admin.ownerId, note: "rls suite" } });
+  const adminEmail = (
+    await observer.user.findUniqueOrThrow({ where: { id: admin.ownerId }, select: { email: true } })
+  ).email;
+  await observer.platformAdmin.create({
+    data: { userId: admin.ownerId, boundEmail: adminEmail, note: "rls suite" },
+  });
 });
 
 after(async () => {
@@ -63,7 +68,9 @@ describe("PlatformAdmin is not writable by the application role", () => {
     let refused = false;
     try {
       await asUser(ordinary, () =>
-        db.platformAdmin.create({ data: { userId: ordinary.ownerId, note: "self-granted" } }),
+        db.platformAdmin.create({
+          data: { userId: ordinary.ownerId, boundEmail: "attacker@example.test", note: "self-granted" },
+        }),
       );
     } catch {
       refused = true;
@@ -83,7 +90,9 @@ describe("PlatformAdmin is not writable by the application role", () => {
     let refused = false;
     try {
       await asUser(admin, () =>
-        db.platformAdmin.create({ data: { userId: other.ownerId, note: "appointed" } }),
+        db.platformAdmin.create({
+          data: { userId: other.ownerId, boundEmail: "appointee@example.test", note: "appointed" },
+        }),
       );
     } catch {
       refused = true;
@@ -109,7 +118,12 @@ describe("PlatformAdmin is not writable by the application role", () => {
   });
 
   test("the admin sees exactly their own row, and no others", pgOnly, async () => {
-    await observer.platformAdmin.create({ data: { userId: other.ownerId, note: "second admin" } });
+    const otherEmail = (
+      await observer.user.findUniqueOrThrow({ where: { id: other.ownerId }, select: { email: true } })
+    ).email;
+    await observer.platformAdmin.create({
+      data: { userId: other.ownerId, boundEmail: otherEmail, note: "second admin" },
+    });
     try {
       const seen = await asUser(admin, () => db.platformAdmin.findMany({ select: { userId: true } }));
       assert.deepEqual(

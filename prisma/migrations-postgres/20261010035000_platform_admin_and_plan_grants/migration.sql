@@ -12,6 +12,7 @@ ALTER TABLE "User" ADD COLUMN "deactivatedReason" TEXT;
 CREATE TABLE "PlatformAdmin" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
+    "boundEmail" TEXT NOT NULL,
     "note" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 

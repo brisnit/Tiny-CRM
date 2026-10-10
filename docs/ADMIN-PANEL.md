@@ -14,13 +14,27 @@ rebuilt; the last two are not in this version.
 ## 1. Authorization
 
 Access is a row in `PlatformAdmin`, keyed by **user id**. Two conditions must
-both hold: the session's user id has a row, and the account's email matches the
-address administration was bound for. Neither alone is sufficient.
+both hold: the session's user id has a row, and the account's current email
+matches the `boundEmail` recorded when the row was written.
 
-It is bound to an id and not an address because an address is something a
-browser supplies and something a new registration can choose. Binding to the id
-means the account holding administration is the account that held it when the
-row was written.
+**The user id is the binding.** The row is found by id, so the address cannot
+transfer administration to anybody: an account that later takes that address
+is a different account with a different id, and the lookup simply misses. The
+second condition can therefore only ever **deny** — it never grants.
+
+What it catches is a mis-bound id: a real account, the wrong one, silently
+holding the panel because a character was wrong when the row was written.
+From inside the product that is otherwise undetectable.
+
+The cost is explicit: **if the owner changes their email, the panel stops
+working** until an operator re-binds with
+`scripts/bind-platform-admin.mjs`. That is the safer of the two failures, the
+refusal names the mismatch in the server log, and
+`bind-platform-admin.mjs` flags the drift when it lists administrators.
+
+`boundEmail` is read from the account at bind time, not typed at the prompt —
+an operator-supplied address would agree with the wrong id just as readily as
+the right one.
 
 It is a table and not an environment variable because the row-level-security
 policy that lets an admin read across tenants must consult the same fact, and a
@@ -216,21 +230,37 @@ It prints the id, the account's plan and whether it is already an admin. If the
 address does not resolve to exactly one account, **stop** — binding the wrong
 id is the failure this step exists to prevent.
 
-**2. Apply the migration.** It is additive and takes no locks of consequence:
+**2. Apply the migration and the policies — one command.**
 
 ```
-npx prisma migrate deploy      # 20261010035000_platform_admin_and_plan_grants
-psql "$DATABASE_URL" -f prisma/postgres/015_platform_admin_policies.sql
+node scripts/migrate-admin-panel.mjs            # inspect only, changes nothing
+node scripts/migrate-admin-panel.mjs --apply
 ```
 
-**3. Bind administration**, with the id from step 1:
+It prompts for the **owner/direct** connection with hidden input, refuses any
+database whose fingerprint is not a known production one, and notes if you
+have given it the pooled endpoint instead.
 
-```
-node scripts/bind-platform-admin.mjs <user-id>
-```
+With `--apply` it switches the local schema to `postgresql`, regenerates,
+runs `prisma migrate deploy`, applies
+`prisma/postgres/015_platform_admin_policies.sql`, and then **restores the
+local schema to `sqlite` and regenerates again in a `finally`** — with a
+byte-for-byte restore as a backstop. An interrupted run leaving the provider
+on `postgresql` is a trap for the next local command, and it has happened in
+this repository.
 
-It refuses an id that does not exist, refuses to bind a second admin, prints
-the before and after, and verifies the row reads back.
+Verification is a read-back, before and after, not an exit code:
+
+- the migration appears exactly once, finished and not rolled back;
+- `PlatformAdmin` and `PlanGrant` exist, and `User.deactivatedReason` does;
+- `PlatformAdmin` has RLS **enabled and FORCEd**;
+- all three policies exist, every one of them is `SELECT`-only, and
+  `PlatformAdmin` has **no** write policy;
+- `app_is_platform_admin()` is SECURITY DEFINER with a pinned `search_path`;
+- **no administrator is bound** — binding is a separate step.
+
+The connection is never read from the environment and never passed in argv,
+where `ps` would show it.
 
 **4. Deploy.** Ordinary push to `main`.
 

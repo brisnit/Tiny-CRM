@@ -5,6 +5,7 @@ ALTER TABLE "User" ADD COLUMN "deactivatedReason" TEXT;
 CREATE TABLE "PlatformAdmin" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "userId" TEXT NOT NULL,
+    "boundEmail" TEXT NOT NULL,
     "note" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "PlatformAdmin_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE

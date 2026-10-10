@@ -1820,8 +1820,23 @@ model SecurityAlert {
 /// by matching an email at runtime: an address a browser supplies, or one a new
 /// registration happens to use, must never confer administration.
 model PlatformAdmin {
-  id        String   @id @default(cuid())
-  userId    String   @unique
+  id     String @id @default(cuid())
+  userId String @unique
+
+  /// The address this binding was made for, recorded at bind time.
+  ///
+  /// **Not** the binding. The binding is `userId`, and nothing here changes
+  /// that: an account that later takes this address gets a different id and
+  /// therefore no administration. What this column does is let the check
+  /// refuse when the stored id and the account's current address disagree,
+  /// which is the shape a mis-typed id at bind time takes — a real user, the
+  /// wrong one, silently holding the panel.
+  ///
+  /// So it can only ever deny. It cannot grant, and an email change does not
+  /// transfer anything; it locks the binding until an operator re-binds
+  /// deliberately, which is the safer of the two failures.
+  boundEmail String
+
   /// Free text for the operator's own record, e.g. "owner".
   note      String?
   createdAt DateTime @default(now())
