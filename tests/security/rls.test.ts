@@ -98,6 +98,10 @@ describe("row-level security", { skip: enabled ? false : "PostgreSQL with RLS_AP
       // The deliberate exclusions, each justified in docs/RLS.md.
       const expected = [
         "AuthToken", "IdempotencyKey", "MfaCredential", "MfaRecoveryCode",
+        // Keyed to a user, not a workspace, and read while resolving the
+        // identity — before any workspace is known. Same reason as `User`,
+        // which it is selected alongside. See docs/RLS.md.
+        "PlanGrant",
         "RateLimitCounter", "UsageCounter", "User", "UserSession",
         "_prisma_migrations",
       ];

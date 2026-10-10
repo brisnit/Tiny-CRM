@@ -44,8 +44,24 @@ export type EffectiveEntitlement = {
   granted: PlanId | null;
   /** What limits and capabilities resolve from. */
   effective: PlanId;
-  /** The grant itself, for display and for the admin panel. */
+  /**
+   * The strongest grant that is live — not revoked, not expired — whether or
+   * not it raises the effective plan.
+   *
+   * Kept even when it changes nothing, because its **expiry still matters**:
+   * an operator looking at an account on Pro with a complimentary Pro grant
+   * needs to see when the grant lapses, since at that moment it stops being
+   * a spare and starts being the only thing. Hiding it until it mattered
+   * would hide it exactly when there was still time to act.
+   */
   grant: LoadedGrant | null;
+  /**
+   * Whether that grant is currently raising the effective plan.
+   *
+   * False when the underlying plan already matches or exceeds it. The panel
+   * says so rather than implying the grant is doing work it is not.
+   */
+  grantInForce: boolean;
 };
 
 /**
@@ -100,7 +116,8 @@ export function effectiveFrom(
   const effective = combinePlans(underlying, bestPlan);
   // A grant that lost to the underlying plan is not *in force*, and saying so
   // keeps the panel honest: "complimentary Plus" on a Pro account would claim
-  // an effect it is not having.
+  // an effect it is not having. It is still returned, because its expiry is
+  // information even while it is doing nothing.
   const inForce = bestPlan !== null && effective === bestPlan && effective !== underlying;
 
   return {
@@ -108,6 +125,7 @@ export function effectiveFrom(
     underlying,
     granted: bestPlan,
     effective,
-    grant: inForce ? best : null,
+    grant: best,
+    grantInForce: inForce,
   };
 }

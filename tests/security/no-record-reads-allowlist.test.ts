@@ -23,6 +23,13 @@ import { join, relative } from "node:path";
  */
 
 const ALLOWED: Record<string, string> = {
+  "src/lib/admin/customers.ts":
+    "The administrative audit read carries the admin's identity so the " +
+    "AuditLog policy can match `actorId = app_user_id()` on an orphaned row; " +
+    "without it the panel renders an empty history and looks correct. The " +
+    "workspace list is empty on purpose — an identity, not a tenancy — and " +
+    "the panel's cross-tenant reads rest on the admin's own RLS policy.",
+
   "src/lib/actions/admin.ts":
     "Administrative writes carry the admin's identity so the AuditLog policy " +
     "can match `actorId = app_user_id()` on an orphaned row. The workspace " +

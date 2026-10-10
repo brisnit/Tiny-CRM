@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { createTenant, cleanupTenants, db as observer, type Tenant } from "../helpers/fixtures";
 import { runAsTestIdentity } from "../../src/lib/auth/context";
 import { suspendAccount, grantComplimentaryPlan } from "../../src/lib/actions/admin";
-import { db as appDb } from "../../src/lib/db";
 import { isPostgres } from "../../src/lib/env";
 
 /**
@@ -53,17 +52,23 @@ after(async () => {
  * a function to throw.
  */
 async function withFailingAudit<T>(fn: () => Promise<T>): Promise<T> {
+  // Installed by the **observer**, not the application client: `tinycrm_app`
+  // has no rights to create functions or triggers in `public`, which is
+  // exactly the restriction being relied on everywhere else. Using the app
+  // role here failed with "permission denied for schema public" and left the
+  // audit sink working, so the actions committed and the test failed for the
+  // wrong reason.
   if (isPostgres) {
-    await appDb.$executeRawUnsafe(`
+    await observer.$executeRawUnsafe(`
       CREATE OR REPLACE FUNCTION tc_test_block_audit() RETURNS trigger
         LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit sink unavailable'; END; $$;
     `);
-    await appDb.$executeRawUnsafe(`
+    await observer.$executeRawUnsafe(`
       CREATE TRIGGER tc_test_block_audit BEFORE INSERT ON "AuditLog"
         FOR EACH ROW EXECUTE FUNCTION tc_test_block_audit();
     `);
   } else {
-    await appDb.$executeRawUnsafe(`
+    await observer.$executeRawUnsafe(`
       CREATE TRIGGER tc_test_block_audit BEFORE INSERT ON "AuditLog"
       BEGIN SELECT RAISE(ABORT, 'audit sink unavailable'); END;
     `);
@@ -71,9 +76,9 @@ async function withFailingAudit<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } finally {
-    await appDb.$executeRawUnsafe(`DROP TRIGGER IF EXISTS tc_test_block_audit ON "AuditLog"`)
+    await observer.$executeRawUnsafe(`DROP TRIGGER IF EXISTS tc_test_block_audit ON "AuditLog"`)
       .catch(async () => {
-        await appDb.$executeRawUnsafe(`DROP TRIGGER IF EXISTS tc_test_block_audit`);
+        await observer.$executeRawUnsafe(`DROP TRIGGER IF EXISTS tc_test_block_audit`);
       });
   }
 }

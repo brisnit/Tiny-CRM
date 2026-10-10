@@ -4,6 +4,8 @@ import { db } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/admin/authorize";
 import { activeGrantWhere, effectiveFrom, GRANT_SELECT } from "@/lib/plan-grants";
 import { isPostgres } from "@/lib/env";
+import { billingStateFor, type BillingState } from "@/lib/admin/billing-state";
+import { NO_RECORD_READS, withTenantContext } from "@/lib/tenant-db";
 
 /**
  * Reads for the admin panel.
@@ -27,8 +29,11 @@ export type CustomerRow = {
   storedPlan: string;
   /** What the account can actually do. */
   effectivePlan: string;
-  /** The complimentary grant in force, if any. */
+  /** The live complimentary grant, whether or not it is adding anything. */
   grant: { plan: string; reason: string; expiresAt: Date | null } | null;
+  grantInForce: boolean;
+  /** What we can honestly claim about billing — never `User.plan` alone. */
+  billing: BillingState;
   planStatus: string;
   billingCustomerId: string | null;
   suspended: boolean;
@@ -100,6 +105,12 @@ export async function listCustomers(options: {
               expiresAt: entitlement.grant.expiresAt,
             }
           : null,
+        grantInForce: entitlement.grantInForce,
+        billing: billingStateFor({
+          storedPlan: u.plan,
+          planStatus: u.planStatus,
+          billingCustomerId: u.billingCustomerId,
+        }),
         planStatus: u.planStatus,
         billingCustomerId: u.billingCustomerId,
         suspended: Boolean(u.deactivatedAt),
@@ -141,7 +152,10 @@ export type CustomerDetail = {
     underlying: string;
     effective: string;
     grant: { id: string; plan: string; reason: string; expiresAt: Date | null } | null;
+    grantInForce: boolean;
   };
+  /** What we can honestly claim about billing. */
+  billingState: BillingState;
   /** Workspaces this account **owns** — whose plan is therefore theirs. */
   owned: { id: string; name: string; members: number }[];
   /**
@@ -222,7 +236,13 @@ export async function customerDetail(userId: string): Promise<CustomerDetail | n
             expiresAt: entitlement.grant.expiresAt,
           }
         : null,
+      grantInForce: entitlement.grantInForce,
     },
+    billingState: billingStateFor({
+      storedPlan: user.plan,
+      planStatus: user.planStatus,
+      billingCustomerId: user.billingCustomerId,
+    }),
     // Owned workspaces come back only because the admin's RLS policy permits
     // it; for any other caller this list is empty, which is the isolation
     // test's subject.
@@ -250,13 +270,21 @@ export async function customerDetail(userId: string): Promise<CustomerDetail | n
  */
 export async function administrativeAudit(limit = 50) {
   const admin = await requirePlatformAdmin();
-  return db.auditLog.findMany({
+  // Inside a context carrying the admin's id, because `AuditLog`'s policy
+  // reads an orphaned row only for `"actorId" = app_user_id()`. Without it
+  // this returns nothing under RLS — the panel would render an empty history
+  // and look correct. The workspace list is empty: an identity, not a
+  // tenancy.
+  return withTenantContext(
+    { workspaceIds: [], userId: admin.identity.id, restrictedWorkspaceIds: NO_RECORD_READS },
+    async (tx) => tx.auditLog.findMany({
     where: { actorId: admin.identity.id, action: { startsWith: "admin." } },
     orderBy: { createdAt: "desc" },
     take: limit,
     select: {
       id: true, action: true, summary: true, entityId: true,
       metadata: true, createdAt: true, actorEmail: true,
-    },
-  });
+      },
+    }),
+  );
 }

@@ -102,7 +102,8 @@ describe("granting complimentary access", () => {
 
     const after = await effectiveFor(free.ownerId);
     assert.equal(after.effective, "free", "revoking did not restore the underlying plan");
-    assert.equal(after.grant, null);
+    assert.equal(after.grant, null, "a revoked grant is still reported as live");
+    assert.equal(after.grantInForce, false);
     // The row survives: history of who was given what, and why.
     const revoked = await db.planGrant.findFirst({
       where: { userId: free.ownerId }, orderBy: { grantedAt: "desc" },
@@ -160,7 +161,8 @@ describe("expiry is resolved on read", () => {
     });
     const after = await effectiveFor(free.ownerId);
     assert.equal(after.effective, "free", "an expired grant was still honoured");
-    assert.equal(after.grant, null);
+    assert.equal(after.grant, null, "an expired grant is still reported as live");
+    assert.equal(after.grantInForce, false);
   });
 
   test("a grant expiring in the future still applies", async () => {
@@ -206,8 +208,11 @@ describe("a Stripe webhook and a grant coexist", () => {
     await applyPlanChange(free.ownerId, "pro", { status: "active" });
     const after = await effectiveFor(free.ownerId);
     assert.equal(after.effective, "pro");
-    // The panel must not claim the grant is doing something it is not.
-    assert.equal(after.grant, null, "an inert grant was reported as in force");
+    // The panel must not claim the grant is doing something it is not — but it
+    // must still show it, because its expiry is the thing worth seeing early.
+    assert.equal(after.grantInForce, false, "an inert grant was reported as in force");
+    assert.ok(after.grant, "a live grant disappeared once it stopped adding anything");
+    assert.equal(after.grant?.plan, "pro");
   });
 
   test("a webhook downgrade falls back to the grant, not to free", async () => {
@@ -216,5 +221,68 @@ describe("a Stripe webhook and a grant coexist", () => {
     assert.equal(after.stored, "free", "the cancellation did not land");
     assert.equal(after.effective, "pro", "a cancelled subscription took the grant with it");
     assert.equal(after.granted, "pro");
+  });
+});
+
+describe("what the panel may claim about billing", () => {
+  test("a legacy entitlement is never shown as a recurring subscription", async () => {
+    const { billingStateFor } = await import("../../src/lib/admin/billing-state");
+    // The real stored value for the original accounts.
+    const state = billingStateFor({
+      storedPlan: "lifetime",
+      planStatus: "active",
+      billingCustomerId: "cus_whatever",
+    });
+    assert.equal(state.paidSubscription, false, "Lifetime was shown as a paid subscription");
+    assert.equal(state.legacy, true);
+    assert.match(state.label, /^Legacy:/, "a legacy entitlement is labelled as paid");
+    assert.doesNotMatch(state.label, /paid/i);
+  });
+
+  test("a purchasable plan is only 'paid' when the status and customer agree", async () => {
+    const { billingStateFor } = await import("../../src/lib/admin/billing-state");
+    const live = billingStateFor({
+      storedPlan: "pro", planStatus: "active", billingCustomerId: "cus_1",
+    });
+    assert.equal(live.paidSubscription, true);
+    assert.match(live.label, /^Paid: Pro$/);
+
+    for (const [status, customer] of [
+      ["canceled", "cus_1"],
+      ["unpaid", "cus_1"],
+      ["incomplete", "cus_1"],
+      ["paused", "cus_1"],
+      // A plan with no Stripe customer behind it cannot be a subscription.
+      ["active", null],
+    ] as const) {
+      const state = billingStateFor({
+        storedPlan: "pro", planStatus: status, billingCustomerId: customer,
+      });
+      assert.equal(
+        state.paidSubscription,
+        false,
+        `status "${status}" with customer ${customer} was claimed as a paid subscription`,
+      );
+      assert.match(state.label, /^Underlying:/, `status "${status}" was not labelled as underlying`);
+    }
+  });
+
+  test("dunning keeps the paid label, because Stripe is still collecting", async () => {
+    const { billingStateFor } = await import("../../src/lib/admin/billing-state");
+    for (const status of ["trialing", "past_due", "canceling"]) {
+      const state = billingStateFor({
+        storedPlan: "plus", planStatus: status, billingCustomerId: "cus_1",
+      });
+      assert.equal(state.paidSubscription, true, `status "${status}" was treated as not paying`);
+    }
+  });
+
+  test("Free is never 'paid', even with a Stripe customer left behind", async () => {
+    const { billingStateFor } = await import("../../src/lib/admin/billing-state");
+    const state = billingStateFor({
+      storedPlan: "free", planStatus: "canceled", billingCustomerId: "cus_old",
+    });
+    assert.equal(state.paidSubscription, false);
+    assert.match(state.label, /^Underlying: Free$/);
   });
 });
