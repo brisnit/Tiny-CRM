@@ -288,12 +288,46 @@ describe("what the panel may claim about billing", () => {
     }
   });
 
-  test("a period already paid for keeps the paid label while it runs out", async () => {
+  test("a scheduled cancellation is not evidence that anything was paid", async () => {
     const { billingStateFor } = await import("../../src/lib/admin/billing-state");
+    const { entitlementFor } = await import("../../src/lib/billing/stripe");
+
+    // The premise first, because the label follows from it: "canceling" is not
+    // a Stripe status. It is written for `active` OR `trialing` once an end is
+    // scheduled, so the stored value cannot tell a paid period running out
+    // from a trial cancelled before it ever billed.
+    const endsAt = new Date(Date.now() + 5 * 86_400_000);
+    assert.equal(
+      entitlementFor("trialing", "plus", endsAt).status,
+      "canceling",
+      "the premise has changed: a cancelled trial no longer collapses into 'canceling'",
+    );
+    assert.equal(
+      entitlementFor("active", "plus", endsAt).status,
+      "canceling",
+      "the premise has changed: a cancelled paid period no longer stores 'canceling'",
+    );
+
+    // Therefore the panel must not claim payment for either of them.
     const state = billingStateFor({
       storedPlan: "plus", planStatus: "canceling", billingCustomerId: "cus_1",
     });
-    assert.equal(state.paidSubscription, true, "a cancelling-but-paid period was not shown as paid");
+    assert.equal(
+      state.paidSubscription,
+      false,
+      "a scheduled cancellation was claimed as a collected payment, which it does not prove",
+    );
+    assert.match(state.label, /^Underlying: Plus$/, "it did not fall back to the underlying plan");
+    assert.equal(state.status, "canceling", "the status was not kept for separate display");
+  });
+
+  test("'active' is the only status that earns the paid label", async () => {
+    const { billingStateFor } = await import("../../src/lib/admin/billing-state");
+    const paid = billingStateFor({
+      storedPlan: "plus", planStatus: "active", billingCustomerId: "cus_1",
+    });
+    assert.equal(paid.paidSubscription, true, "a live subscription is not shown as paid");
+    assert.match(paid.label, /^Paid: Plus$/);
   });
 
   test("Free is never 'paid', even with a Stripe customer left behind", async () => {

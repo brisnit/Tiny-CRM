@@ -4,6 +4,7 @@ import { ArrowLeft, ExternalLink, ShieldAlert } from "lucide-react";
 
 import { requirePlatformAdmin } from "@/lib/admin/authorize";
 import { administrativeAudit, customerDetail } from "@/lib/admin/customers";
+import { NO_EFFECT_LABEL } from "@/lib/admin/grant-label";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -130,7 +131,7 @@ export default async function CustomerPage({ params }: { params: Promise<{ id: s
               value={
                 customer.entitlement.grant
                   ? customer.entitlement.grant.plan +
-                    (customer.entitlement.grantInForce ? "" : " (not adding anything)")
+                    (customer.entitlement.grantInForce ? "" : ` — ${NO_EFFECT_LABEL}`)
                   : "none"
               }
             />

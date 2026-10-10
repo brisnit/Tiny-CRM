@@ -1,6 +1,7 @@
 import { CreditCard, Gift, Landmark } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { complimentaryBadgeLabel, complimentaryBadgeTitle } from "@/lib/admin/grant-label";
 
 /**
  * What a customer is billed for, what they were given, and what applies.
@@ -61,21 +62,20 @@ export function PlanBadges({
               ? "bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-950/40 dark:text-violet-300 dark:ring-violet-900"
               : undefined
           }
-          title={
-            `Complimentary ${titleise(grant.plan)} — ${grant.reason}. ` +
-            `No Stripe subscription, no charge.` +
-            (grant.expiresAt
-              ? ` Expires ${grant.expiresAt.toISOString().slice(0, 10)}.`
-              : " No expiry.") +
-            (grantInForce
-              ? ""
-              : ` Not adding anything at the moment: the account's own plan already matches it.`)
-          }
+          title={complimentaryBadgeTitle(
+            { plan: grant.plan, expiresAt: grant.expiresAt, inForce: grantInForce },
+            grant.reason,
+          )}
         >
           <Gift className="size-3" aria-hidden />
-          Complimentary: {titleise(grant.plan)}
-          {grant.expiresAt ? ` · to ${grant.expiresAt.toISOString().slice(0, 10)}` : " · no expiry"}
-          {grantInForce ? "" : " (inactive)"}
+          {/* Not "inactive": the grant is live, and saying otherwise invites
+              someone to re-issue one that already exists, or to read its
+              expiry as already past. See complimentaryBadgeLabel. */}
+          {complimentaryBadgeLabel({
+            plan: grant.plan,
+            expiresAt: grant.expiresAt,
+            inForce: grantInForce,
+          })}
         </Badge>
       ) : null}
 

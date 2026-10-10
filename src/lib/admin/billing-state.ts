@@ -20,6 +20,8 @@ import { isLegacyPlan, planFor, type PlanId } from "@/lib/plans";
  *     a thing.
  *   - **A purchasable plan with a dead status is not live.** `canceled`,
  *     `unpaid`, `incomplete` and `paused` all mean nothing is being collected.
+ *   - **A pending end is not a payment.** `canceling` says access is scheduled
+ *     to stop; it says nothing about money having changed hands.
  *
  * So "paid" is claimed only where three things agree: the plan is one that is
  * actually sold, the stored status is one Stripe uses for a live
@@ -48,14 +50,23 @@ import { isLegacyPlan, planFor, type PlanId } from "@/lib/plans";
  *     Stripe retries — but access and payment are different questions, and
  *     this column answers the second one.
  *
- * Both therefore read "Underlying: <plan>" with the status shown beside them,
- * which is a weaker claim and the only one the data supports. The entitlement
- * they confer is unaffected; this changes what is said, not what is allowed.
+ *   - **`canceling`** is not a Stripe status at all. `entitlementFor` writes it
+ *     for *either* `active` *or* `trialing` once a cancellation is scheduled
+ *     (see src/lib/billing/stripe.ts), so a trial that was cancelled before it
+ *     ever billed is stored under the same word as a paid period running out.
+ *     Nothing stored distinguishes them, so "Paid" cannot be claimed for the
+ *     pair: it would assert a collected payment for a customer who has never
+ *     been charged. A scheduled cancellation is not evidence of payment.
  *
- * `canceling` stays: the period is paid for and still running, which is a
- * collected payment.
+ * All three therefore read "Underlying: <plan>" with the status shown beside
+ * them, which is a weaker claim and the only one the data supports. The
+ * entitlement they confer is unaffected; this changes what is said, not what is
+ * allowed.
+ *
+ * That leaves `active` as the only status this will call paid — which is the
+ * correct size of the claim, not an oversight.
  */
-const PAID_SUBSCRIPTION_STATUSES = new Set(["active", "canceling"]);
+const PAID_SUBSCRIPTION_STATUSES = new Set(["active"]);
 
 export type BillingState = {
   /** The resolved plan id behind `User.plan`. */

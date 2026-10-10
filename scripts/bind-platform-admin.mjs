@@ -13,11 +13,17 @@
  *
  * Takes an **id**, never an address, for the reason in
  * scripts/resolve-admin-user.mjs. Run that first.
+ *
+ * The id is the binding, but it is not the only condition: the account it
+ * resolves to must be `OWNER_ADMIN_EMAIL`, or this refuses. A mistyped id that
+ * happens to name a real customer is the failure that check exists for — see
+ * scripts/lib/owner-binding.mjs.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
 
+import { bindingRefusal, OWNER_ADMIN_EMAIL } from "./lib/owner-binding.mjs";
 import { promptHidden } from "./lib/prompt-hidden.mjs";
 
 const require = createRequire(import.meta.url);
@@ -72,6 +78,7 @@ async function main() {
   if (!userId) throw new Error("Give the user id. Resolve it with scripts/resolve-admin-user.mjs.");
 
   console.log(`\n${unbind ? "Unbinding" : "Binding"} platform administration: ${userId}`);
+  if (!unbind) console.log(`Only ${OWNER_ADMIN_EMAIL} may be bound; any other account is refused.`);
   console.log("=".repeat(70));
 
   const url = await promptHidden("Connection string (input hidden): ");
@@ -105,16 +112,14 @@ async function main() {
     }
     const account = target.rows[0];
     console.log(`\n  target  ${account.email}`);
-    if (account.deactivatedAt && !unbind) {
-      console.error("\nREFUSED: that account is suspended. Reinstate it first.\n");
-      process.exit(1);
-    }
 
-    if (!unbind && before.length > 0 && !before.some((r) => r.userId === userId)) {
-      console.error(
-        `\nREFUSED: administration is already bound to ${before[0].email}. ` +
-          `This version supports one administrator; unbind the existing one first.\n`,
-      );
+    // Every refusal rule lives in scripts/lib/owner-binding.mjs, where it can
+    // be tested. Chief among them: the account this id resolves to must be
+    // OWNER_ADMIN_EMAIL. Confirming by re-typing the address cannot establish
+    // that — it only proves the operator can read the line above.
+    const refusal = bindingRefusal({ unbind, account, existing: before });
+    if (refusal) {
+      console.error(`\nREFUSED: ${refusal}\n`);
       process.exit(1);
     }
 

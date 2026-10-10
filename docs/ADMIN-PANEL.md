@@ -129,12 +129,29 @@ All four go through `effectiveFrom()`.
 
 ### What the UI shows
 
-Three separate facts, never merged: **Paid through Stripe** (the stored
-column — the only one that corresponds to money), **Complimentary** (the grant,
-with its expiry), and **Effective** (what capabilities resolve from, shown only
-when it differs). The dialogs state plainly that a grant creates no
-subscription and charges nothing, and that suspension cancels nothing and
-refunds nothing.
+Three separate facts, never merged: **billing** (the stored column — the only
+one that corresponds to money), **Complimentary** (the grant, with its expiry),
+and **Effective** (what capabilities resolve from, shown only when it differs).
+The dialogs state plainly that a grant creates no subscription and charges
+nothing, and that suspension cancels nothing and refunds nothing.
+
+The billing badge reads **`Paid: <plan>`** only for a purchasable plan with a
+Stripe customer and the stored status `active`. Everything else reads
+**`Underlying: <plan>`** with the stored status shown as its own badge beside
+it. `trialing`, `past_due` and `canceling` are all in that second group, and
+`canceling` is the one worth spelling out: it is not a Stripe status but a
+value this codebase writes for *either* `active` *or* `trialing` once an end is
+scheduled, so nothing stored distinguishes a paid period running out from a
+trial cancelled before it ever billed. "Paid" would assert a collected payment
+for a customer who has never been charged. A legacy entitlement reads
+**`Legacy: <plan>`**, because nobody is billed for one.
+
+A grant that is live but currently adds nothing is labelled **"No additional
+access currently"** — not "inactive". The grant *is* active: it is stored, it
+still expires on its date, and it resumes adding access the moment the
+account's own plan drops below it. Its expiry stays on screen throughout, which
+is the whole point: an operator needs that date in advance, and hiding it until
+it mattered would hide it while there was still time to act.
 
 ---
 
@@ -262,7 +279,38 @@ Verification is a read-back, before and after, not an exit code:
 The connection is never read from the environment and never passed in argv,
 where `ps` would show it.
 
+**3. Bind administration to the owner's id.**
+
+```
+node scripts/bind-platform-admin.mjs <user-id>
+```
+
+Hidden prompt for the owner/direct connection, same fingerprint refusal. It
+prints the administrators before and after, and takes an **id** — the binding
+is the id, not an address.
+
+It also **refuses any account whose address is not `hello@artifactdigital.co`**
+(`scripts/lib/owner-binding.mjs`). The id is still the binding; the address can
+only ever deny. What it catches is a correctly typed id for the *wrong*
+account — a real customer, silently holding the panel, with every other
+verification passing because the id resolved to somebody. Re-typing the address
+at the confirmation prompt cannot catch that: it only proves the operator can
+read the line above it.
+
+Consequences worth knowing before you run it:
+
+- changing the owner's email later **locks the panel** until it is re-bound,
+  because the stored `boundEmail` no longer matches. There is no override flag;
+  a different address is a reviewed change to `OWNER_ADMIN_EMAIL`.
+- `--unbind` deliberately skips the address, suspension and single-administrator
+  rules. Each exists to stop administration being created in the wrong place,
+  and each would otherwise block the recovery from having done so.
+
 **4. Deploy.** Ordinary push to `main`.
+
+Run steps 2 and 3 **before** the push. Production applies migrations ahead of
+the deployment, and the deployment gate blocks a push whose migrations are not
+yet applied.
 
 **5. Verify.** Sign in as the owner: the Admin link appears. Sign in as any
 other account: it does not, and `/admin` is a 404.
