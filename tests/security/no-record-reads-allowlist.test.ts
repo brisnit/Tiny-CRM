@@ -23,6 +23,12 @@ import { join, relative } from "node:path";
  */
 
 const ALLOWED: Record<string, string> = {
+  "src/lib/admin/authorize.ts":
+    "The platform-admin check reads one row of PlatformAdmin by user id. It " +
+    "declares no workspaces at all — the empty list is the point: this read " +
+    "needs an identity, not a tenancy, and PlatformAdmin is not a " +
+    "workspace-scoped table. It reads no customer records.",
+
   // --- Machinery that writes about records without reading any -------------
   "src/lib/audit.ts":
     "AuditLog is outside record scope; the context exists for the workspace policy alone",

@@ -7,8 +7,7 @@ import { requirePlatformAdmin, refuseSelfTarget } from "@/lib/admin/authorize";
 import { db } from "@/lib/db";
 import { AppError } from "@/lib/errors";
 import { activeGrantWhere, effectiveFrom, GRANT_SELECT } from "@/lib/plan-grants";
-import { GRANTABLE_PLANS, isLegacyPlan, storedPlanId } from "@/lib/plans";
-import { withTenantContext } from "@/lib/tenant-db";
+import { GRANTABLE_PLANS, isLegacyPlan } from "@/lib/plans";
 
 /**
  * Administrative mutations.
@@ -349,23 +348,3 @@ export async function reinstateAccount(input: unknown): Promise<ActionResult> {
     return { ok: true, data: undefined };
   });
 }
-
-/** Re-exported for the detail page, which shows what a revocation would restore. */
-export async function effectiveForAdmin(userId: string) {
-  await requirePlatformAdmin();
-  return withTenantContext({ workspaceIds: [], userId: null, restrictedWorkspaceIds: [] }, async () => {
-    const user = await db.user.findUniqueOrThrow({
-      where: { id: userId },
-      select: { plan: true, planGrants: { where: activeGrantWhere(), select: GRANT_SELECT } },
-    });
-    return effectiveFrom(user.plan, user.planGrants);
-  });
-}
-
-/** The grantable set, for the form. Never includes a legacy plan. */
-export async function grantablePlans(): Promise<readonly string[]> {
-  return GRANTABLE_PLANS;
-}
-
-/** Exposed for tests that assert the stored column is never written. */
-export const __adminInternals = { storedPlanId };
