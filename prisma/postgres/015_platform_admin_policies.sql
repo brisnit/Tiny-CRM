@@ -72,10 +72,23 @@ CREATE POLICY platform_admin_sees_self ON "PlatformAdmin"
 -- cannot be shadowed even if something is created in `public` later.
 --
 -- The answer is derived from `app_user_id()` and nothing else. That setting is
--- written only by `withTenantContext`, from an identity already resolved from
--- a validated session, and no customer-reachable surface can set it — there is
--- no SQL path from a browser. So this reports on the authenticated identity,
--- never on anything the caller supplies.
+-- **trusted application context**: it is written only by `withTenantContext`,
+-- from an identity already resolved from a validated session, and no
+-- customer-facing surface sets it from request data.
+--
+-- What that is not: protection against arbitrary SQL execution. Anything able
+-- to run statements as `tinycrm_app` — a SQL injection, a leaked credential,
+-- a shell on the server — can `SET app.user_id` to any value and this function
+-- will answer accordingly. The same is true of every policy in this schema,
+-- because all of them read the same setting; that is the model, not a
+-- weakness introduced here. It bounds what RLS is for: it isolates tenants
+-- from each other through the application, and it is not a second line of
+-- defence behind the application being compromised.
+--
+-- What the table buys over a GUC is narrower and still worth having: with
+-- membership in `PlatformAdmin`, forging administration takes a *write* to a
+-- table no policy permits writing, rather than one `set_config` call that any
+-- code path opening a transaction could make by accident.
 CREATE OR REPLACE FUNCTION app_is_platform_admin() RETURNS boolean
   LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public

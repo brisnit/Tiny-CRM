@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { AppError } from "@/lib/errors";
 import { activeGrantWhere, effectiveFrom, GRANT_SELECT } from "@/lib/plan-grants";
 import { GRANTABLE_PLANS, isLegacyPlan } from "@/lib/plans";
+import { NO_RECORD_READS, withTenantContext } from "@/lib/tenant-db";
 
 /**
  * Administrative mutations.
@@ -43,6 +44,32 @@ import { GRANTABLE_PLANS, isLegacyPlan } from "@/lib/plans";
  * or not any page rendered, so an action that relies on something upstream is
  * an unauthenticated endpoint with a comment claiming otherwise.
  */
+
+/**
+ * Runs an administrative write with the admin's identity in scope.
+ *
+ * Two things depend on this, and both were found by running the suite against
+ * PostgreSQL as the restricted role rather than as the owner.
+ *
+ * `AuditLog`'s policy admits an orphaned row — no workspace — only when
+ * `"actorId" = app_user_id()`. These actions write exactly such a row, so
+ * without `app.user_id` set the insert is refused with 42501 and the whole
+ * operation fails. A plain `db.$transaction()` sets nothing.
+ *
+ * The workspace list is empty and `NO_RECORD_READS` is explicit: this context
+ * exists to carry an *identity*, not a tenancy. It grants no workspace access,
+ * so the cross-tenant reads the panel performs still rest on the admin's own
+ * RLS policy rather than on anything claimed here.
+ */
+async function adminWrite<T>(
+  adminUserId: string,
+  fn: (tx: Parameters<Parameters<typeof db.$transaction>[0]>[0]) => Promise<T>,
+): Promise<T> {
+  return withTenantContext(
+    { workspaceIds: [], userId: adminUserId, restrictedWorkspaceIds: NO_RECORD_READS },
+    async () => db.$transaction(fn),
+  );
+}
 
 const grantSchema = z.object({
   userId: z.string().min(1).max(64),
@@ -132,7 +159,7 @@ export async function grantComplimentaryPlan(input: unknown): Promise<ActionResu
       );
     }
 
-    await db.$transaction(async (tx) => {
+    await adminWrite(admin.identity.id, async (tx) => {
       // Supersede anything live, so there is never more than one grant in
       // force and the panel never has to explain which of two applies.
       await tx.planGrant.updateMany({
@@ -179,6 +206,7 @@ export async function grantComplimentaryPlan(input: unknown): Promise<ActionResu
           },
         },
         tx,
+        { required: true },
       );
     });
 
@@ -207,7 +235,7 @@ export async function revokeComplimentaryPlan(input: unknown): Promise<ActionRes
     // restore operation that could itself go wrong.
     const after = effectiveFrom(target.plan, []);
 
-    await db.$transaction(async (tx) => {
+    await adminWrite(admin.identity.id, async (tx) => {
       await tx.planGrant.updateMany({
         where: { userId: target.id, ...activeGrantWhere() },
         data: {
@@ -233,6 +261,7 @@ export async function revokeComplimentaryPlan(input: unknown): Promise<ActionRes
           },
         },
         tx,
+        { required: true },
       );
     });
 
@@ -265,7 +294,7 @@ export async function suspendAccount(input: unknown): Promise<ActionResult> {
     const target = await loadTarget(parsed.userId);
     if (target.deactivatedAt) throw new AppError("validation", "That account is already suspended.");
 
-    await db.$transaction(async (tx) => {
+    await adminWrite(admin.identity.id, async (tx) => {
       await tx.user.update({
         where: { id: target.id },
         data: {
@@ -292,6 +321,7 @@ export async function suspendAccount(input: unknown): Promise<ActionResult> {
           },
         },
         tx,
+        { required: true },
       );
     });
 
@@ -314,7 +344,7 @@ export async function reinstateAccount(input: unknown): Promise<ActionResult> {
     const target = await loadTarget(parsed.userId);
     if (!target.deactivatedAt) throw new AppError("validation", "That account is not suspended.");
 
-    await db.$transaction(async (tx) => {
+    await adminWrite(admin.identity.id, async (tx) => {
       await tx.user.update({
         where: { id: target.id },
         data: { deactivatedAt: null, deactivatedReason: null },
@@ -336,6 +366,7 @@ export async function reinstateAccount(input: unknown): Promise<ActionResult> {
           },
         },
         tx,
+        { required: true },
       );
     });
 

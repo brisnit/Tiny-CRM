@@ -23,6 +23,13 @@ import { join, relative } from "node:path";
  */
 
 const ALLOWED: Record<string, string> = {
+  "src/lib/actions/admin.ts":
+    "Administrative writes carry the admin's identity so the AuditLog policy " +
+    "can match `actorId = app_user_id()` on an orphaned row. The workspace " +
+    "list is empty on purpose: this context carries an identity, not a " +
+    "tenancy, and grants no workspace access. The panel's cross-tenant reads " +
+    "rest on the admin's own RLS policy instead.",
+
   "src/lib/admin/authorize.ts":
     "The platform-admin check reads one row of PlatformAdmin by user id. It " +
     "declares no workspaces at all — the empty list is the point: this read " +

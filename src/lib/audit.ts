@@ -70,9 +70,21 @@ export type AuditEntry = {
  * Records an audit entry. Accepts an optional transaction client so the entry
  * commits atomically with the change it describes.
  */
+/**
+ * Options for a caller that cannot accept a missing entry.
+ *
+ * Audit writes are best-effort by default, and that is the right default: an
+ * audit failure must never be the reason somebody cannot sign in or save a
+ * record. Administrative actions are the exception. An entitlement change or a
+ * suspension that happened with no record of who did it, or why, is worse than
+ * the operation failing — so those pass `required` and take the rollback.
+ */
+export type AuditOptions = { required?: boolean };
+
 export async function recordAudit(
   entry: AuditEntry,
   tx?: Prisma.TransactionClient,
+  options: AuditOptions = {},
 ): Promise<void> {
   const context = currentContext();
 
@@ -150,6 +162,12 @@ export async function recordAudit(
     // written inside the caller's transaction via `tx`, where a failure does
     // roll the whole operation back.
     log.error("audit write failed", { action: entry.action, error: String(error) });
+    // ...except where the caller has said it cannot be. The comment above
+    // notes that security-critical events are written inside the caller's
+    // transaction "where a failure does roll the whole operation back" — that
+    // was only true if the failure propagated, and it did not. It does now,
+    // for callers that ask.
+    if (options.required) throw error;
   }
 }
 

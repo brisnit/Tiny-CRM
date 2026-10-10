@@ -28,6 +28,16 @@ import { withTenantContext } from "@/lib/tenant-db";
  * where the drift that matters is the application believing someone is an admin
  * while the database does not, or worse, the reverse.
  *
+ * What this does **not** defend against: arbitrary SQL execution. The policy
+ * resolves administration from `app.user_id`, which is trusted application
+ * context — anything able to run statements as the application role can set it
+ * to any value. That is true of every policy in the schema, since they all read
+ * the same setting. RLS isolates tenants from each other through the
+ * application; it is not a second line of defence behind the application being
+ * compromised. The table is still better than a GUC, for a narrower reason:
+ * forging administration takes a write to a table no policy permits writing,
+ * rather than one `set_config` call any code path could make by accident.
+ *
  * ## Deny by default
  *
  * Every function here throws. There is no boolean variant that a caller can
