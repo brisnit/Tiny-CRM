@@ -115,7 +115,7 @@ export async function assertWithinLimit(
  * from this context is not entitled — failing closed, because the alternative
  * is granting a paid capability because a read came back empty.
  */
-export async function requireFileUploadEntitlement(workspaceId: string): Promise<void> {
+export async function fileUploadsIncluded(workspaceId: string): Promise<boolean> {
   const { planGrants } = await import("@/lib/plans");
 
   const workspace = await db.workspace.findUnique({
@@ -123,7 +123,21 @@ export async function requireFileUploadEntitlement(workspaceId: string): Promise
     select: { owner: { select: { plan: true } } },
   });
 
-  if (workspace && planGrants(workspace.owner.plan, "fileUploads")) return;
+  return Boolean(workspace && planGrants(workspace.owner.plan, "fileUploads"));
+}
+
+/**
+ * The same question, as a refusal.
+ *
+ * Deliberately built on `fileUploadsIncluded` rather than repeating the lookup.
+ * The project page asks the boolean to decide whether to offer an upload
+ * control, and this throws on the two upload steps; if they were separate
+ * implementations they could drift, and the drift that matters is the one
+ * where the control is offered to someone the server will refuse. One read,
+ * one answer, two presentations.
+ */
+export async function requireFileUploadEntitlement(workspaceId: string): Promise<void> {
+  if (await fileUploadsIncluded(workspaceId)) return;
 
   throw new AppError(
     "plan_limit",

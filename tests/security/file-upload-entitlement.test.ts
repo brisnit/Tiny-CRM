@@ -2,7 +2,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { createTenant, cleanupTenants, type Tenant } from "../helpers/fixtures";
-import { requireFileUploadEntitlement } from "../../src/lib/entitlements";
+import { fileUploadsIncluded, requireFileUploadEntitlement } from "../../src/lib/entitlements";
 import { planGrants } from "../../src/lib/plans";
 import { withTenantContext } from "../../src/lib/tenant-db";
 
@@ -87,6 +87,49 @@ describe("the plan half of the upload gate", () => {
       "the legacy plan matrix no longer grants uploads",
     );
     assert.equal((await check(lifetime)).ok, true, "a Lifetime account was refused uploads");
+  });
+
+  /**
+   * The project page asks a boolean to decide whether to offer an upload
+   * control; the two upload steps throw. If those were separate
+   * implementations they could drift, and one direction of drift is the one
+   * that matters: offering the control to somebody the server will refuse.
+   *
+   * So they are asserted against each other on every plan rather than
+   * separately. `requireFileUploadEntitlement` is built on
+   * `fileUploadsIncluded`, which makes this hard to break — and this is what
+   * notices if someone unpicks that.
+   */
+  test("the control's question and the refusal's question cannot disagree", async () => {
+    for (const [name, tenant] of [
+      ["free", free],
+      ["plus", plus],
+      ["pro", pro],
+      ["lifetime", lifetime],
+    ] as const) {
+      const included = await withTenantContext(
+        { workspaceIds: [tenant.workspaceId], userId: tenant.ownerId, restrictedWorkspaceIds: [] },
+        () => fileUploadsIncluded(tenant.workspaceId),
+      );
+      const allowed = (await check(tenant)).ok;
+      assert.equal(
+        included,
+        allowed,
+        `${name}: the UI would ${included ? "offer" : "withhold"} uploading while the server ` +
+          `would ${allowed ? "allow" : "refuse"} it`,
+      );
+    }
+  });
+
+  test("a workspace that is not visible is not entitled", async () => {
+    // Fail closed. `Workspace` is under row-level security, so a read from the
+    // wrong context comes back empty — which must read as "not included"
+    // rather than as "no plan limit found, carry on".
+    const included = await withTenantContext(
+      { workspaceIds: [plus.workspaceId], userId: plus.ownerId, restrictedWorkspaceIds: [] },
+      () => fileUploadsIncluded(free.workspaceId),
+    );
+    assert.equal(included, false, "an invisible workspace was treated as entitled");
   });
 
   test("an unknown plan is refused rather than defaulted upward", async () => {

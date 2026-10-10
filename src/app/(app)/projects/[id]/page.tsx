@@ -27,6 +27,7 @@ import { requireActor, resolveReadScope, restrictedIdsFor } from "@/lib/auth/acc
 import { withTenantContext } from "@/lib/tenant-db";
 import { can } from "@/lib/auth/permissions";
 import { documentIntelligenceEnabled } from "@/lib/documents/gate";
+import { fileUploadsIncluded } from "@/lib/entitlements";
 import { isEnabled } from "@/lib/flags";
 import { UPLOAD_ALLOWLIST } from "@/lib/uploads";
 import { readScope } from "@/lib/scope";
@@ -150,6 +151,27 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
       restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [project.workspaceId]),
     },
     () => isEnabled("files", project.workspaceId),
+  );
+  /**
+   * Whether this workspace's plan includes uploading at all.
+   *
+   * Separate from `canUpload`, which is the *role* question — a viewer may not
+   * upload whatever the plan says. Both have to be true to offer the control,
+   * and neither substitutes for the server check: `requireFileUploadEntitlement`
+   * still runs on both upload steps, from the same `fileUploadsIncluded` read,
+   * so the control and the refusal cannot disagree.
+   *
+   * Inside the tenant context for the same reason `filesEnabled` is: `Workspace`
+   * is under row-level security, and a read without context comes back empty and
+   * would read as "not included".
+   */
+  const uploadsIncludedInPlan = await withTenantContext(
+    {
+      workspaceIds: [project.workspaceId],
+      userId: actor.identity.id,
+      restrictedWorkspaceIds: restrictedIdsFor(actor.memberships, [project.workspaceId]),
+    },
+    () => fileUploadsIncluded(project.workspaceId),
   );
   const role = actor.memberships.find((m) => m.id === project.workspaceId)?.role ?? "viewer";
   const canUpload = can(role, "record:create");
@@ -426,6 +448,7 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[id]"
               documents={documents}
               allowedExtensions={UPLOAD_ALLOWLIST}
               canUpload={canUpload}
+              uploadsIncludedInPlan={uploadsIncludedInPlan}
             />
           ) : null}
 

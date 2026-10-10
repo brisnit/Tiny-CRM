@@ -404,6 +404,66 @@ describe("project documents", { concurrency: false }, () => {
     }
   });
 
+  /**
+   * Free keeps the panel and loses the control.
+   *
+   * The alternative considered was hiding the panel from Free entirely. That
+   * reads as a missing feature rather than a paid one, and it also hides
+   * documents a workspace may already have from a plan it has since left —
+   * which the entitlement deliberately does not do: `requireFileUploadEntitlement`
+   * guards uploading only, never preview, download or delete.
+   *
+   * So the assertion is both halves at once. The panel is there, the upgrade
+   * reason is stated, and there is **no file input in the DOM** — not a
+   * disabled-looking one that still opens a picker. Server enforcement is
+   * covered separately in tests/security/file-upload-entitlement.
+   *
+   * Signed in as the *member*, not the owner, for two reasons. The budget one:
+   * `loginPerAccount` allows five sign-ins per account per fifteen minutes and
+   * the tests above already spend the owner's five — adding a sixth made the
+   * next test's sign-in hang for a minute and fail, which is how this comment
+   * came to be written. The better one: the plan belongs to the workspace
+   * owner while the panel is seen by whoever opens the project, so asserting
+   * through a member is the more honest version of the question.
+   */
+  test("a Free plan keeps the panel, loses the control, and is told why", needsStorage, async () => {
+    const owner = await db.user.findFirst({
+      where: { email: world.ownerEmail },
+      select: { id: true, plan: true },
+    });
+    assert.ok(owner, "the owner went missing");
+    const previousPlan = owner.plan;
+
+    await db.user.update({ where: { id: owner.id }, data: { plan: "free" } });
+
+    const page = await browser.newPage();
+    try {
+      await signIn(page, world.viewerEmail);
+      await openProject(page);
+
+      const body = (await page.textContent("body")) ?? "";
+      assert.match(body, /Upgrade to Plus to upload/i, "Free was not told why it cannot upload");
+      assert.ok(
+        !body.includes("Add documents"),
+        "the upload control was still offered to a plan that cannot use it",
+      );
+      assert.equal(
+        await page.locator('input[type="file"]').count(),
+        0,
+        "a file input survived for a plan the server will refuse",
+      );
+      // The panel itself, and anything already stored, must remain.
+      assert.ok(body.includes("Documents"), "the Documents panel vanished for Free");
+      assert.ok(
+        body.includes("good-proposal.pdf"),
+        "a document uploaded on a paid plan disappeared after downgrading",
+      );
+    } finally {
+      await page.close();
+      await db.user.update({ where: { id: owner.id }, data: { plan: previousPlan } });
+    }
+  });
+
   test("with the flag off the panel does not exist", needsStorage, async () => {
     await db.featureFlag.updateMany({
       where: { key: "files", workspaceId: world.workspaceId },
