@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Download, FileUp, Loader2, Paperclip, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
+import { Download, FileUp, Loader2, Lock, Paperclip, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { DeleteDocumentDialog } from "@/components/app/documents/delete-document-dialog";
@@ -80,12 +81,23 @@ export function DocumentsPanel({
   documents,
   allowedExtensions,
   canUpload,
+  uploadsIncludedInPlan = true,
   variant = "panel",
 }: {
   projectId: string;
   documents: DocumentView[];
   allowedExtensions: readonly string[];
+  /** The role question: may this member add records here at all. */
   canUpload: boolean;
+  /**
+   * The plan question, which is a different one. Free does not include
+   * uploading, so the control is shown disabled with the reason rather than
+   * hidden: a panel that simply has no way to add anything reads as broken,
+   * and a control that accepts a file and then fails reads as worse. Server
+   * enforcement is unchanged either way — `requireFileUploadEntitlement` runs
+   * on both upload steps from the same read that produced this.
+   */
+  uploadsIncludedInPlan?: boolean;
   variant?: "panel" | "page";
 }) {
   const router = useRouter();
@@ -143,7 +155,39 @@ export function DocumentsPanel({
 
   const body = (
     <>
-      {canUpload ? (
+      {canUpload && !uploadsIncludedInPlan ? (
+        <div className="border-t border-hairline p-4">
+          {/*
+            A div, not a disabled <label>: a label wrapping no input is not a
+            control, so nothing here is focusable or clickable and there is no
+            file picker to open. `aria-disabled` states it for assistive
+            technology without claiming to be a button that does nothing.
+          */}
+          <div
+            aria-disabled="true"
+            data-testid="upload-upgrade-prompt"
+            className={cn(
+              "flex items-center gap-3 rounded-lg border border-dashed border-hairline",
+              "px-4 py-3.5 opacity-70",
+            )}
+          >
+            <Lock className="size-4 shrink-0 text-faint" aria-hidden />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-medium text-body">
+                Upgrade to Plus to upload
+              </span>
+              <span className="block text-[12px] text-muted">
+                Documents attached on a paid plan stay available to read and download.
+              </span>
+            </span>
+            <Button asChild variant="outline" size="sm">
+              <Link href="/settings/billing">Upgrade</Link>
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {canUpload && uploadsIncludedInPlan ? (
         <div className="border-t border-hairline p-4">
           <label
             className={cn(
@@ -191,7 +235,7 @@ export function DocumentsPanel({
             compact
             title="No documents yet"
             description={
-              canUpload
+              canUpload && uploadsIncludedInPlan
                 ? "Attach the proposal, the contract, the scope — whatever this project is agreed on."
                 : "Nothing has been attached to this project."
             }
