@@ -117,7 +117,14 @@ export function validateUpload(candidate: UploadCandidate): AcceptedUpload {
   }
 
   if (candidate.sizeBytes <= 0) {
-    throw new AppError("validation", "That file is empty.");
+    // Reached from two callers with different meanings, so the internal detail
+    // carries the size while the customer-facing sentence stays the same: at
+    // request time this is the browser's claim about the chosen file, and at
+    // confirm time the stored-object check above it has already rejected an
+    // empty object with its own, different wording.
+    throw new AppError("validation", "That file is empty.", {
+      internal: `validateUpload: ${candidate.filename} declared ${String(candidate.sizeBytes)} bytes`,
+    });
   }
   if (candidate.sizeBytes > LIMITS.maxUploadBytes) {
     const mb = Math.floor(LIMITS.maxUploadBytes / 1024 / 1024);

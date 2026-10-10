@@ -303,11 +303,48 @@ class S3Storage implements StorageDriver {
 
     const length = response.headers.get("content-length");
     return {
-      // An object with no content-length is not something to guess about.
-      sizeBytes: length === null ? Number.NaN : Number(length),
+      // An object with no content-length is not something to guess about — so
+      // it is measured instead of guessed. See `measureByRange`.
+      sizeBytes: length === null ? await this.measureByRange(key) : Number(length),
       contentType: response.headers.get("content-type"),
       etag: response.headers.get("etag"),
     };
+  }
+
+  /**
+   * The size of an object whose HEAD did not carry `content-length`.
+   *
+   * This used to return `NaN`, on the reasoning that a missing length is not
+   * something to guess about. That part was right and the consequence was
+   * wrong: `confirmUpload` treats a non-finite size as zero, so a provider that
+   * simply declined to state a length had its customer told **"That file is
+   * empty"** — about a file that was not empty — and the stored object was
+   * discarded. An unknown size is not a zero size, and the difference is a
+   * refused upload.
+   *
+   * So ask. A ranged GET for the first byte answers with
+   * `Content-Range: bytes 0-0/<total>`, and that total is the provider's own
+   * authoritative count. One byte crosses the wire. A genuinely empty object
+   * cannot satisfy `bytes=0-0` and answers 416, which is the one case that
+   * really does mean zero.
+   */
+  private async measureByRange(key: string): Promise<number> {
+    const response = await this.client.fetch(this.objectUrl(key).toString(), {
+      method: "GET",
+      headers: { range: "bytes=0-0" },
+    });
+
+    // 416 Range Not Satisfiable is how a zero-length object answers.
+    if (response.status === 416) return 0;
+    if (!response.ok) throw await this.failure("GET range (measure)", key, response);
+
+    const total = /\/(\d+)\s*$/.exec(response.headers.get("content-range") ?? "")?.[1];
+    if (total !== undefined) return Number(total);
+
+    // No Content-Range either: the provider ignored the range and sent the
+    // object, which is legal. Its length is then whatever arrived.
+    const body = new Uint8Array(await response.arrayBuffer());
+    return body.byteLength;
   }
 
   async readRange(key: string, start: number, endInclusive: number): Promise<Uint8Array> {

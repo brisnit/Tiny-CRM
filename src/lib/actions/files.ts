@@ -250,8 +250,25 @@ export async function confirmUpload(input: unknown): Promise<ActionResult<Confir
 
         // --- Authoritative size, from storage, not from the browser ---------
         if (!Number.isFinite(stored.sizeBytes) || stored.sizeBytes <= 0) {
-          await discard(ticket.key, "empty or unmeasurable object");
-          throw new AppError("validation", "That file is empty.");
+          // Deliberately *not* "That file is empty." — three places could say
+          // that, and this is the only one that does not mean what it sounds
+          // like. The two earlier checks (the client precheck in
+          // use-document-upload, and validateUpload at request time) describe
+          // the file the person chose. This one describes the object that
+          // arrived in storage, so it fires when a file that was not empty on
+          // disk reached the bucket with no body — a transfer failure, a
+          // browser extension or local antivirus emptying the stream, not
+          // something the person can fix by choosing a different file.
+          //
+          // Identical copy across all three cost a production diagnosis: an
+          // upload was reported as "empty" and nothing in the message, the
+          // audit log or the response said which stage had refused it.
+          await discard(ticket.key, `empty or unmeasurable object: ${String(stored.sizeBytes)} bytes`);
+          throw new AppError(
+            "validation",
+            "That upload arrived empty, so nothing was stored. Try uploading it again.",
+            { internal: `confirm: stored object ${ticket.key} measured ${String(stored.sizeBytes)} bytes` },
+          );
         }
         if (stored.sizeBytes > LIMITS.maxUploadBytes) {
           // The presigned PUT cannot enforce a ceiling — S3-style signatures do
