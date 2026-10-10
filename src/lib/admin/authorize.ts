@@ -34,9 +34,16 @@ import { withTenantContext } from "@/lib/tenant-db";
  * to any value. That is true of every policy in the schema, since they all read
  * the same setting. RLS isolates tenants from each other through the
  * application; it is not a second line of defence behind the application being
- * compromised. The table is still better than a GUC, for a narrower reason:
- * forging administration takes a write to a table no policy permits writing,
- * rather than one `set_config` call any code path could make by accident.
+ * compromised.
+ *
+ * And be precise about the table's value, because the obvious reading is
+ * wrong: someone executing arbitrary SQL as the application role can set
+ * `app.user_id` to an existing administrator's id and be treated as that
+ * administrator. No write is needed, and `PlatformAdmin` does not prevent it.
+ * What it prevents is the *appointment of a new administrator at runtime* —
+ * there is no INSERT policy, so membership cannot be created through the
+ * application role by any means. An attacker at that level can impersonate an
+ * admin who exists; they cannot mint one.
  *
  * ## Deny by default
  *

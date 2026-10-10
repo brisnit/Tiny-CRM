@@ -85,10 +85,18 @@ CREATE POLICY platform_admin_sees_self ON "PlatformAdmin"
 -- from each other through the application, and it is not a second line of
 -- defence behind the application being compromised.
 --
--- What the table buys over a GUC is narrower and still worth having: with
--- membership in `PlatformAdmin`, forging administration takes a *write* to a
--- table no policy permits writing, rather than one `set_config` call that any
--- code path opening a transaction could make by accident.
+-- Be precise about what the table does and does not buy, because the obvious
+-- reading is wrong. Someone executing arbitrary SQL as `tinycrm_app` can
+-- simply `SET app.user_id` to an existing administrator's id and this function
+-- returns true. No write is required, and `PlatformAdmin` does not stop it.
+--
+-- What the table does stop is the *appointment of a new administrator at
+-- runtime*: there is no INSERT policy, so membership cannot be created through
+-- the application role at all, by application code or by anything that has
+-- taken it over. An attacker at that level can impersonate an admin who
+-- already exists; they cannot mint one, and they cannot do either through any
+-- customer-facing surface. Against a GUC-only design they could have done the
+-- first with one `set_config` call reachable from ordinary application code.
 CREATE OR REPLACE FUNCTION app_is_platform_admin() RETURNS boolean
   LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public
