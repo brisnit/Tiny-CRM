@@ -2,7 +2,7 @@ import "server-only";
 
 import { getActor, type Actor } from "@/lib/auth/access";
 import { AppError, unauthorized } from "@/lib/errors";
-import { withoutTenantContext } from "@/lib/tenant-db";
+import { withTenantContext } from "@/lib/tenant-db";
 
 /**
  * Who may operate the owner-admin panel.
@@ -44,17 +44,23 @@ export type PlatformAdminActor = Actor & {
 /**
  * The admin row for a user id, or null.
  *
- * Runs outside tenant context because `PlatformAdmin` is not workspace-scoped
- * and the caller may have no workspace at all. Under PostgreSQL the table has
- * RLS enabled with **no policy**, so the application role cannot read it —
- * which is deliberate, and is why this goes through the same deny-all path
- * rather than a privileged one. The check that matters at runtime is the
- * application's; the database's copy exists for the RLS policy, which uses a
- * SECURITY DEFINER function to see past the same denial.
+ * Runs inside a tenant context carrying **the user id and no workspaces**, and
+ * that is load-bearing rather than incidental. `PlatformAdmin` is under RLS
+ * with a single `FOR SELECT` policy admitting only `"userId" = app_user_id()`,
+ * and `app.user_id` is set by `withTenantContext` — so a read without it
+ * returns nothing.
+ *
+ * An earlier version used `withoutTenantContext`, which sets no user id. On
+ * SQLite, where there is no RLS, it passed. On PostgreSQL it would have
+ * refused every administrator including the owner: the check and the policy
+ * disagreed, and only one of the two engines showed it. Hence the empty
+ * workspace list rather than no context at all — this read needs an identity,
+ * not a tenancy.
  */
 async function adminRowFor(userId: string): Promise<{ userId: string } | null> {
-  return withoutTenantContext("platform admin check", async (tx) =>
-    tx.platformAdmin.findUnique({ where: { userId }, select: { userId: true } }),
+  return withTenantContext(
+    { workspaceIds: [], userId, restrictedWorkspaceIds: [] },
+    async (tx) => tx.platformAdmin.findUnique({ where: { userId }, select: { userId: true } }),
   );
 }
 
@@ -110,14 +116,6 @@ export function refuseSelfTarget(actor: Actor, targetUserId: string, what: strin
   if (actor.identity.id === targetUserId) {
     throw new AppError("validation", `You cannot ${what} your own account.`);
   }
-}
-
-/** Whether a user id is an admin — for display beside a customer row. */
-export async function adminUserIds(): Promise<Set<string>> {
-  const rows = await withoutTenantContext("platform admin list", async (tx) =>
-    tx.platformAdmin.findMany({ select: { userId: true } }),
-  );
-  return new Set(rows.map((r) => r.userId));
 }
 
 /**

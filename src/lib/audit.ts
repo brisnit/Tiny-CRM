@@ -44,7 +44,14 @@ export type AuditAction =
   // is no FileAsset to attach it to, and the reason is a detection.
   | "security.upload_rejected"
   | "workspace.deletion_requested" | "workspace.deletion_cancelled"
-  | "ai.privacy_changed";
+  | "ai.privacy_changed"
+  // Platform administration. Written with the admin as `actorId` and **no**
+  // workspace, which is what makes them readable by that admin under the
+  // existing AuditLog policy without widening it for anyone: an orphaned row
+  // is visible to the actor who wrote it. The customer they concern is carried
+  // in `entityId`, as data rather than as a tenancy claim.
+  | "admin.plan_grant_created" | "admin.plan_grant_revoked"
+  | "admin.account_suspended" | "admin.account_reinstated";
 
 export type AuditEntry = {
   workspaceId?: string | null;
