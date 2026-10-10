@@ -26,19 +26,19 @@ datasource db {
 // ---------------------------------------------------------------------------
 
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
+  id           String  @id @default(cuid())
+  email        String  @unique
   name         String
   passwordHash String?
   avatarUrl    String?
   jobTitle     String?
-  timezone     String    @default("America/Los_Angeles")
+  timezone     String  @default("America/Los_Angeles")
 
   // Billing. plan: free | pro | lifetime  (src/lib/plans.ts owns the limits)
-  plan               String    @default("free")
-  planStatus         String    @default("active")
-  planRenewsAt       DateTime?
-  billingCustomerId  String?
+  plan              String    @default("free")
+  planStatus        String    @default("active")
+  planRenewsAt      DateTime?
+  billingCustomerId String?
 
   /// Which published terms version this account accepted, and when. Set once at
   /// signup from TERMS_VERSION in src/lib/legal.ts, which is the same string the
@@ -56,8 +56,12 @@ model User {
 
   /// Set when an account is disabled. Checked on every request, so a
   /// deactivated user loses access immediately even while holding a valid JWT.
-  deactivatedAt DateTime?
-  emailVerifiedAt DateTime?
+  deactivatedAt     DateTime?
+  /// Why, in the operator's words. The audit log is the record of *who and
+  /// when*; this is the current state, so the panel can say why an account is
+  /// suspended without reconstructing it from history.
+  deactivatedReason String?
+  emailVerifiedAt   DateTime?
 
   /// Brute-force state. Reset on a successful sign-in.
   failedLoginCount Int       @default(0)
@@ -77,34 +81,37 @@ model User {
   /// this instant is not trusted, independently of the epoch.
   passwordChangedAt DateTime?
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  ownedWorkspaces Workspace[]       @relation("WorkspaceOwner")
-  memberships     WorkspaceMember[]
-  companies       Company[]         @relation("CompanyOwner")
-  contacts        Contact[]         @relation("ContactOwner")
-  projects        Project[]         @relation("ProjectOwner")
-  deals           Deal[]            @relation("DealOwner")
-  opportunities   Opportunity[]     @relation("OpportunityOwner")
-  tasks           Task[]            @relation("TaskOwner")
-  notes           Note[]            @relation("NoteAuthor")
-  activities      Activity[]        @relation("ActivityActor")
-  files           FileAsset[]       @relation("FileUploader")
-  events          CalendarEvent[]   @relation("EventOrganizer")
-  notifications   Notification[]
-  savedViews      SavedView[]
-  integrations    Integration[]
-  aiMessages      AiMessage[]
-  usage           UsageCounter[]
-  auditEvents     AuditLog[]        @relation("AuditActor")
-  authTokens      AuthToken[]
-  sessions        UserSession[]
-  mfaCredentials  MfaCredential[]
-  importBatches   ImportBatch[]     @relation("ImportActor")
+  ownedWorkspaces     Workspace[]           @relation("WorkspaceOwner")
+  memberships         WorkspaceMember[]
+  companies           Company[]             @relation("CompanyOwner")
+  contacts            Contact[]             @relation("ContactOwner")
+  projects            Project[]             @relation("ProjectOwner")
+  deals               Deal[]                @relation("DealOwner")
+  opportunities       Opportunity[]         @relation("OpportunityOwner")
+  tasks               Task[]                @relation("TaskOwner")
+  notes               Note[]                @relation("NoteAuthor")
+  activities          Activity[]            @relation("ActivityActor")
+  files               FileAsset[]           @relation("FileUploader")
+  events              CalendarEvent[]       @relation("EventOrganizer")
+  notifications       Notification[]
+  savedViews          SavedView[]
+  integrations        Integration[]
+  aiMessages          AiMessage[]
+  usage               UsageCounter[]
+  auditEvents         AuditLog[]            @relation("AuditActor")
+  authTokens          AuthToken[]
+  sessions            UserSession[]
+  mfaCredentials      MfaCredential[]
+  importBatches       ImportBatch[]         @relation("ImportActor")
   invitationsSent     WorkspaceInvitation[] @relation("InvitationsSent")
   invitationsAccepted WorkspaceInvitation[] @relation("InvitationsAccepted")
-  recoveryCodes   MfaRecoveryCode[]
+  recoveryCodes       MfaRecoveryCode[]
+  platformAdmin       PlatformAdmin?        @relation("PlatformAdminUser")
+  planGrants          PlanGrant[]           @relation("PlanGrantUser")
+  planGrantsMade      PlanGrant[]           @relation("PlanGrantActor")
 
   @@index([plan])
   @@index([deactivatedAt])
@@ -142,37 +149,37 @@ model Workspace {
 
   owner User @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
 
-  members        WorkspaceMember[]
-  recordGrants   RecordGrant[]
-  companies      Company[]
-  contacts       Contact[]
-  projects       Project[]
+  members         WorkspaceMember[]
+  recordGrants    RecordGrant[]
+  companies       Company[]
+  contacts        Contact[]
+  projects        Project[]
   projectStatuses ProjectStatus[]
-  deals          Deal[]
-  opportunities  Opportunity[]
-  pipelines      Pipeline[]
-  tasks          Task[]
-  notes          Note[]
-  activities     Activity[]
-  files          FileAsset[]
-  tags           Tag[]
-  tagLinks       TagLink[]
-  customFields   CustomFieldDef[]
-  customValues   CustomFieldValue[]
-  savedViews     SavedView[]
-  automations    Automation[]
-  insights       AiInsight[]
-  notifications  Notification[]
-  emails         EmailMessage[]
-  events         CalendarEvent[]
-  integrations   Integration[]
-  aiThreads      AiThread[]
-  auditLogs      AuditLog[]
-  domainEvents   DomainEvent[]
-  featureFlags   FeatureFlag[]
-  securityAlerts SecurityAlert[]
-  importBatches  ImportBatch[]
-  invitations    WorkspaceInvitation[]
+  deals           Deal[]
+  opportunities   Opportunity[]
+  pipelines       Pipeline[]
+  tasks           Task[]
+  notes           Note[]
+  activities      Activity[]
+  files           FileAsset[]
+  tags            Tag[]
+  tagLinks        TagLink[]
+  customFields    CustomFieldDef[]
+  customValues    CustomFieldValue[]
+  savedViews      SavedView[]
+  automations     Automation[]
+  insights        AiInsight[]
+  notifications   Notification[]
+  emails          EmailMessage[]
+  events          CalendarEvent[]
+  integrations    Integration[]
+  aiThreads       AiThread[]
+  auditLogs       AuditLog[]
+  domainEvents    DomainEvent[]
+  featureFlags    FeatureFlag[]
+  securityAlerts  SecurityAlert[]
+  importBatches   ImportBatch[]
+  invitations     WorkspaceInvitation[]
 
   @@unique([ownerId, slug])
   @@index([ownerId, archivedAt])
@@ -194,8 +201,8 @@ model WorkspaceMember {
   scopeMode   String   @default("workspace")
   createdAt   DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   grants    RecordGrant[]
 
   @@unique([workspaceId, userId])
@@ -222,21 +229,21 @@ model WorkspaceMember {
 /// rather than waiting to reattach — that reattachment is a real bug, and the
 /// foreign key below is what makes it impossible rather than merely unlikely.
 model RecordGrant {
-  id          String   @id @default(cuid())
-  workspaceId String
-  userId      String
+  id           String   @id @default(cuid())
+  workspaceId  String
+  userId       String
   /// The membership this grant belongs to. Deleting it takes the grants with
   /// it, in the database, so removal cannot leave anything behind even if the
   /// application forgets — and the application deletes them too.
   membershipId String
   /// opportunity | project
-  anchorType  String
-  anchorId    String
+  anchorType   String
+  anchorId     String
   /// Who granted it. Kept for the audit trail, not for authorization.
-  grantedById String?
-  createdAt   DateTime @default(now())
+  grantedById  String?
+  createdAt    DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace  Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   /// Three columns, one reference. `membershipId` alone would let the row name
   /// one membership while `userId` and `workspaceId` named somebody else — two
   /// independently writable identities that can disagree, and the policies read
@@ -265,7 +272,7 @@ model RecordGrant {
 /// that silently changed meaning between issue and acceptance would be a
 /// security bug rather than an inconvenience.
 model WorkspaceInvitation {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   workspaceId String
   invitedById String?
 
@@ -282,7 +289,7 @@ model WorkspaceInvitation {
   scope     String @default("[]")
 
   /// SHA-256 of the token that was emailed. The token itself is never stored.
-  tokenHash String    @unique
+  tokenHash String   @unique
   expiresAt DateTime
 
   acceptedAt       DateTime?
@@ -304,11 +311,11 @@ model WorkspaceInvitation {
 
 /// Rolling per-period counters that back plan limits (AI calls, etc.)
 model UsageCounter {
-  id      String   @id @default(cuid())
-  userId  String
-  metric  String
-  period  String // e.g. "2026-09" for monthly metrics
-  count   Int      @default(0)
+  id        String   @id @default(cuid())
+  userId    String
+  metric    String
+  period    String // e.g. "2026-09" for monthly metrics
+  count     Int      @default(0)
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -339,7 +346,7 @@ model Company {
   primaryContactId   String?   @unique
   lastActivityAt     DateTime?
   archivedAt         DateTime?
-  version    Int       @default(0)
+  version            Int       @default(0)
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -370,19 +377,19 @@ model Company {
 }
 
 model Contact {
-  id          String  @id @default(cuid())
-  workspaceId String
-  firstName   String
-  lastName    String
+  id               String  @id @default(cuid())
+  workspaceId      String
+  firstName        String
+  lastName         String
   /// Denormalised "First Last" so search and sorting stay index-friendly at scale.
-  fullName    String
-  jobTitle    String?
-  companyId   String?
-  email       String?
-  phone       String?
-  website     String?
-  linkedin    String?
-  location    String?
+  fullName         String
+  jobTitle         String?
+  companyId        String?
+  email            String?
+  phone            String?
+  website          String?
+  linkedin         String?
+  location         String?
   // client | prospect | partner | vendor | investor | colleague | other
   relationshipType String  @default("prospect")
   leadSource       String?
@@ -394,7 +401,7 @@ model Contact {
   lastContactedAt DateTime?
   nextFollowUpAt  DateTime?
   archivedAt      DateTime?
-  version    Int       @default(0)
+  version         Int       @default(0)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -475,7 +482,7 @@ model Project {
 
   lastActivityAt DateTime?
   archivedAt     DateTime?
-  version    Int       @default(0)
+  version        Int       @default(0)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -533,14 +540,14 @@ model Milestone {
 // ---------------------------------------------------------------------------
 
 model Pipeline {
-  id          String  @id @default(cuid())
+  id          String   @id @default(cuid())
   workspaceId String
   name        String
   /// deal | opportunity — decides which record type this pipeline holds.
-  kind        String  @default("deal")
+  kind        String   @default("deal")
   description String?
-  isDefault   Boolean @default(false)
-  order       Int     @default(0)
+  isDefault   Boolean  @default(false)
+  order       Int      @default(0)
   createdAt   DateTime @default(now())
 
   workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -572,7 +579,7 @@ model PipelineStage {
 }
 
 model Deal {
-  id               String @id @default(cuid())
+  id               String  @id @default(cuid())
   workspaceId      String
   name             String
   companyId        String?
@@ -647,11 +654,11 @@ model Opportunity {
   stageId     String?
 
   /// rfp | rfi | grant | partnership | sole_source | idiq | other
-  type              String  @default("rfp")
-  source            String?
+  type               String  @default("rfp")
+  source             String?
   solicitationNumber String?
 
-  postedAt           DateTime?
+  postedAt            DateTime?
   questionsDeadlineAt DateTime?
   proposalDeadlineAt  DateTime?
   deadlineAt          DateTime?
@@ -662,13 +669,13 @@ model Opportunity {
   /// outstanding obligation. Null with submissionStatus "submitted" means an
   /// imported row whose date was never captured: genuinely submitted, but
   /// outside the early/on-time/late arithmetic, which needs a date.
-  submittedAt         DateTime?
+  submittedAt        DateTime?
   /// When we expect to hear. Drives "Decision expected Oct 8" and nothing else:
   /// Tiny never infers a state change from it passing.
-  decisionExpectedAt  DateTime?
+  decisionExpectedAt DateTime?
   /// When the pursuit ended — awarded, not awarded, or withdrawn. With
   /// submittedAt it gives the time from submission to decision.
-  decidedAt           DateTime?
+  decidedAt          DateTime?
 
   estimatedValueCents Int?
   /// 0-100 how well this fits what we do.
@@ -735,14 +742,14 @@ model Task {
   description String?
   ownerId     String?
 
-  dueAt      DateTime?
-  priority   String    @default("medium") // low | medium | high | urgent
-  status     String    @default("open")   // open | in_progress | done | cancelled
+  dueAt       DateTime?
+  priority    String    @default("medium") // low | medium | high | urgent
+  status      String    @default("open") // open | in_progress | done | cancelled
   completedAt DateTime?
   /// none | daily | weekly | biweekly | monthly | quarterly
-  recurrence String    @default("none")
-  reminderAt DateTime?
-  sortOrder  Int       @default(0)
+  recurrence  String    @default("none")
+  reminderAt  DateTime?
+  sortOrder   Int       @default(0)
 
   contactId     String?
   companyId     String?
@@ -751,7 +758,7 @@ model Task {
   opportunityId String?
 
   archivedAt DateTime?
-  version    Int      @default(0)
+  version    Int       @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -798,7 +805,7 @@ model Note {
   opportunityId String?
 
   archivedAt DateTime?
-  version    Int      @default(0)
+  version    Int       @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -823,7 +830,7 @@ model Note {
 
 /// One append-only stream powering every record timeline and the activity feed.
 model Activity {
-  id          String @id @default(cuid())
+  id          String   @id @default(cuid())
   workspaceId String
   /// note | call | meeting | email | task | file | stage_change | project_update
   /// | comment | ai_insight | created | field_change
@@ -868,11 +875,11 @@ model Activity {
 }
 
 model FileAsset {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   workspaceId String
   name        String
-  mimeType    String @default("application/octet-stream")
-  sizeBytes   Int    @default(0)
+  mimeType    String  @default("application/octet-stream")
+  sizeBytes   Int     @default(0)
   /// Storage pointer, generated server-side by `storageKeyFor`. Local
   /// development points src/lib/storage.ts at MinIO; production points the same
   /// driver at Cloudflare R2, without touching this column.
@@ -988,7 +995,7 @@ model DocumentIngestion {
   finishedAt  DateTime?
   /// Extraction attempts made. Distinct from the job's own attempt counter:
   /// this survives the event row being swept.
-  attempts Int @default(0)
+  attempts    Int       @default(0)
 
   /// (fileAssetId, workspaceId) rather than fileAssetId alone, so this row
   /// cannot claim a workspace its file does not belong to.
@@ -1044,10 +1051,10 @@ model DocumentChunk {
 // ---------------------------------------------------------------------------
 
 model Tag {
-  id          String @id @default(cuid())
+  id          String   @id @default(cuid())
   workspaceId String
   name        String
-  color       String @default("#068C28")
+  color       String   @default("#068C28")
   createdAt   DateTime @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -1060,7 +1067,7 @@ model Tag {
 /// so a tag can reach any record type; integrity is enforced in src/lib/tags.ts
 /// and the composite index keeps lookups cheap in both directions.
 model TagLink {
-  id          String @id @default(cuid())
+  id          String   @id @default(cuid())
   workspaceId String
   tagId       String
   /// contact | company | deal | project | opportunity | note | task
@@ -1077,7 +1084,7 @@ model TagLink {
 }
 
 model CustomFieldDef {
-  id          String  @id @default(cuid())
+  id          String   @id @default(cuid())
   workspaceId String
   entityType  String
   key         String
@@ -1087,8 +1094,8 @@ model CustomFieldDef {
   /// JSON array of options for dropdown/multiselect.
   options     String?
   helpText    String?
-  required    Boolean @default(false)
-  order       Int     @default(0)
+  required    Boolean  @default(false)
+  order       Int      @default(0)
   createdAt   DateTime @default(now())
 
   workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -1099,7 +1106,7 @@ model CustomFieldDef {
 }
 
 model CustomFieldValue {
-  id          String @id @default(cuid())
+  id          String    @id @default(cuid())
   workspaceId String
   fieldId     String
   entityType  String
@@ -1123,7 +1130,7 @@ model CustomFieldValue {
 }
 
 model SavedView {
-  id          String  @id @default(cuid())
+  id          String   @id @default(cuid())
   workspaceId String?
   userId      String
   name        String
@@ -1131,11 +1138,11 @@ model SavedView {
   /// contact | company | deal | project | opportunity | task | note
   entityType  String
   /// JSON: { rules: [...], match: "all" | "any" }
-  filters     String  @default("{\"match\":\"all\",\"rules\":[]}")
+  filters     String   @default("{\"match\":\"all\",\"rules\":[]}")
   sort        String?
   columns     String?
-  isShared    Boolean @default(false)
-  order       Int     @default(0)
+  isShared    Boolean  @default(false)
+  order       Int      @default(0)
   createdAt   DateTime @default(now())
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -1232,22 +1239,22 @@ model ImportRow {
 // ---------------------------------------------------------------------------
 
 model Automation {
-  id          String  @id @default(cuid())
+  id          String    @id @default(cuid())
   workspaceId String
   name        String
   description String?
-  enabled     Boolean @default(true)
+  enabled     Boolean   @default(true)
   /// deal_stage_changed | project_status_changed | opportunity_deadline_near
   /// | deal_inactive | contact_created | task_overdue
   trigger     String
   /// JSON array of { field, op, value }
-  conditions  String  @default("[]")
+  conditions  String    @default("[]")
   /// JSON array of { type, ... }
-  actions     String  @default("[]")
+  actions     String    @default("[]")
   lastRunAt   DateTime?
-  runCount    Int     @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  runCount    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   runs      AutomationRun[]
@@ -1274,7 +1281,7 @@ model AutomationRun {
 /// it can be invalidated when the underlying record changes, instead of paying
 /// for a model call on every page view.
 model AiInsight {
-  id          String @id @default(cuid())
+  id          String    @id @default(cuid())
   workspaceId String
   /// The person this insight was generated for, when it belongs to one.
   /// A daily brief is assembled from everything its reader may see, so it is
@@ -1291,11 +1298,11 @@ model AiInsight {
   data        String?
   confidence  Float?
   /// new | accepted | dismissed | applied
-  status      String @default("new")
+  status      String    @default("new")
   model       String?
   /// Hash of the context used to produce this insight.
   fingerprint String?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
   expiresAt   DateTime?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -1307,10 +1314,10 @@ model AiInsight {
 }
 
 model AiThread {
-  id          String @id @default(cuid())
+  id          String   @id @default(cuid())
   workspaceId String?
   userId      String
-  title       String @default("New conversation")
+  title       String   @default("New conversation")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1337,7 +1344,7 @@ model AiMessage {
 }
 
 model Notification {
-  id          String @id @default(cuid())
+  id          String    @id @default(cuid())
   workspaceId String?
   userId      String
   /// task_due | task_overdue | deal_inactive | project_risk | deadline
@@ -1348,7 +1355,7 @@ model Notification {
   entityType  String?
   entityId    String?
   readAt      DateTime?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1365,20 +1372,20 @@ model Notification {
 // ---------------------------------------------------------------------------
 
 model Integration {
-  id          String @id @default(cuid())
-  workspaceId String
-  userId      String
+  id           String    @id @default(cuid())
+  workspaceId  String
+  userId       String
   /// gmail | outlook | google_calendar | outlook_calendar
-  provider    String
+  provider     String
   /// connected | disconnected | error | mock
-  status      String @default("disconnected")
+  status       String    @default("disconnected")
   accountEmail String?
-  scopes      String?
+  scopes       String?
   /// Encrypted at rest by src/lib/crypto.ts before it ever reaches this column.
-  credentials String?
-  connectedAt DateTime?
-  lastSyncAt  DateTime?
-  syncCursor  String?
+  credentials  String?
+  connectedAt  DateTime?
+  lastSyncAt   DateTime?
+  syncCursor   String?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1387,9 +1394,9 @@ model Integration {
 }
 
 model EmailMessage {
-  id          String @id @default(cuid())
+  id          String   @id @default(cuid())
   workspaceId String
-  provider    String @default("mock")
+  provider    String   @default("mock")
   externalId  String?
   threadId    String
   subject     String
@@ -1398,12 +1405,12 @@ model EmailMessage {
   fromEmail   String
   fromName    String?
   /// JSON array of { email, name }
-  toJson      String  @default("[]")
-  direction   String  @default("inbound") // inbound | outbound
+  toJson      String   @default("[]")
+  direction   String   @default("inbound") // inbound | outbound
   sentAt      DateTime
-  isRead      Boolean @default(false)
+  isRead      Boolean  @default(false)
   /// Set by the AI unanswered-thread detector.
-  needsReply  Boolean @default(false)
+  needsReply  Boolean  @default(false)
 
   contactId String?
   companyId String?
@@ -1426,9 +1433,9 @@ model EmailMessage {
 }
 
 model CalendarEvent {
-  id          String @id @default(cuid())
+  id          String   @id @default(cuid())
   workspaceId String
-  provider    String @default("mock")
+  provider    String   @default("mock")
   externalId  String?
   title       String
   description String?
@@ -1436,13 +1443,13 @@ model CalendarEvent {
   meetingUrl  String?
   startAt     DateTime
   endAt       DateTime
-  allDay      Boolean @default(false)
+  allDay      Boolean  @default(false)
   organizerId String?
 
   /// AI-generated prep brief, filled lazily before the meeting.
-  prepBrief   String?
+  prepBrief String?
   /// AI-generated recap, filled after notes are attached.
-  recap       String?
+  recap     String?
 
   contactId String?
   companyId String?
@@ -1467,12 +1474,12 @@ model CalendarEvent {
 }
 
 model EventAttendee {
-  id        String @id @default(cuid())
+  id        String  @id @default(cuid())
   eventId   String
   contactId String?
   email     String
   name      String?
-  status    String @default("needs_action") // accepted | declined | tentative | needs_action
+  status    String  @default("needs_action") // accepted | declined | tentative | needs_action
 
   event   CalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
   contact Contact?      @relation(fields: [contactId], references: [id], onDelete: SetNull)
@@ -1493,25 +1500,25 @@ model EventAttendee {
 /// additionally grant the application role INSERT and SELECT only on this table
 /// (see docs/SECURITY.md).
 model AuditLog {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   workspaceId String?
   actorId     String?
   /// Denormalised so the entry stays readable after a user is deleted.
   actorEmail  String?
 
   /// Dotted action name, e.g. "contact.deleted", "member.role_changed".
-  action      String
-  entityType  String?
-  entityId    String?
-  summary     String
+  action     String
+  entityType String?
+  entityId   String?
+  summary    String
 
   /// JSON blob of before/after values, already redacted.
-  metadata    String?
-  ip          String?
-  userAgent   String?
-  requestId   String?
+  metadata  String?
+  ip        String?
+  userAgent String?
+  requestId String?
 
-  createdAt   DateTime @default(now())
+  createdAt DateTime @default(now())
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   actor     User?      @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
@@ -1527,15 +1534,15 @@ model AuditLog {
 /// Only a hash of the token is stored, so a database disclosure does not hand an
 /// attacker working reset links. `usedAt` makes each token single-use.
 model AuthToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
   /// password_reset | email_verification
   purpose   String
   /// SHA-256 of the token that was emailed. The token itself is never stored.
-  tokenHash String   @unique
+  tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
   requestIp String?
 
   /// The session this token consumed, when it was used. Kept so a reset can be
@@ -1576,7 +1583,7 @@ model IdempotencyKey {
 /// consumer, not the producers. `processedAt` and `attempts` give a worker
 /// at-least-once delivery with retry.
 model DomainEvent {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   workspaceId String
   /// e.g. "deal.stage.changed", "task.completed", "contact.created"
   name        String
@@ -1584,25 +1591,25 @@ model DomainEvent {
   entityId    String
   actorId     String?
   /// JSON payload.
-  payload     String   @default("{}")
+  payload     String  @default("{}")
 
   /// pending | processing | done | failed | dead
-  status      String   @default("pending")
-  processedAt DateTime?
-  attempts    Int      @default(0)
-  maxAttempts Int      @default(5)
+  status       String    @default("pending")
+  processedAt  DateTime?
+  attempts     Int       @default(0)
+  maxAttempts  Int       @default(5)
   /// Not eligible for a worker until this instant. Exponential backoff writes
   /// it forward after each failure.
-  availableAt DateTime @default(now())
+  availableAt  DateTime  @default(now())
   /// Which worker holds the claim, and until when. A claim that expires is
   /// reclaimable, so a worker that dies mid-job does not strand it.
-  claimedBy   String?
+  claimedBy    String?
   claimedUntil DateTime?
-  lastError   String?
+  lastError    String?
   /// Set when attempts are exhausted. A dead event stays for inspection and is
   /// never retried automatically, so one poisoned job cannot block the queue.
-  deadAt      DateTime?
-  createdAt   DateTime @default(now())
+  deadAt       DateTime?
+  createdAt    DateTime  @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   runs      JobRun[]
@@ -1617,16 +1624,16 @@ model DomainEvent {
 /// The event row carries only the latest error; this carries the history, which
 /// is what distinguishes "failed once on a timeout" from "fails every time".
 model JobRun {
-  id        String   @id @default(cuid())
-  eventId   String
-  attempt   Int
-  worker    String
-  startedAt DateTime @default(now())
+  id         String    @id @default(cuid())
+  eventId    String
+  attempt    Int
+  worker     String
+  startedAt  DateTime  @default(now())
   finishedAt DateTime?
   /// success | failure
-  outcome   String?
+  outcome    String?
   durationMs Int?
-  error     String?
+  error      String?
 
   event DomainEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
@@ -1689,10 +1696,10 @@ model UserSession {
   /// stored, so a leaked database does not hand over usable sessions.
   tokenHash String @unique
 
-  createdAt  DateTime  @default(now())
-  lastSeenAt DateTime  @default(now())
-  expiresAt  DateTime
-  revokedAt  DateTime?
+  createdAt     DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+  expiresAt     DateTime
+  revokedAt     DateTime?
   /// signed_out | signed_out_others | password_changed | role_changed |
   /// deactivated | expired | admin_revoked
   revokedReason String?
@@ -1724,9 +1731,9 @@ model MfaCredential {
   secretEncrypted String
   /// Set when the user proved they can generate a valid code. An unconfirmed
   /// row is an enrolment in progress and does not gate sign-in.
-  confirmedAt DateTime?
-  lastUsedAt  DateTime?
-  createdAt   DateTime  @default(now())
+  confirmedAt     DateTime?
+  lastUsedAt      DateTime?
+  createdAt       DateTime  @default(now())
 
   /// The last accepted code's 30-second time step, so a code cannot be replayed
   /// inside its own validity window. Int, not BigInt: a 30-second step fits in
@@ -1740,12 +1747,12 @@ model MfaCredential {
 
 /// Single-use recovery codes, for the authenticator that is lost or wiped.
 model MfaRecoveryCode {
-  id       String    @id @default(cuid())
-  userId   String
+  id        String    @id @default(cuid())
+  userId    String
   /// bcrypt hash. These are credentials; the plaintext is shown once.
-  codeHash String
-  usedAt   DateTime?
-  createdAt DateTime @default(now())
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1793,4 +1800,73 @@ model SecurityAlert {
   @@index([workspaceId, lastSeenAt])
   @@index([severity, acknowledgedAt, lastSeenAt])
   @@index([deliveredAt])
+}
+
+// ---------------------------------------------------------------------------
+// Platform administration
+// ---------------------------------------------------------------------------
+
+/// Who may operate the owner-admin panel.
+///
+/// A table and not an environment variable, for one reason that decides it: the
+/// row-level-security policy that lets an admin read across tenants has to
+/// consult this, and a policy cannot read an env var. The alternative — a
+/// `current_setting('app.is_admin')` GUC — would be settable by any code path
+/// that opens a transaction, which is precisely the property an authorization
+/// check must not have. A row is data: forging it needs write access to this
+/// table, and nothing customer-reachable has that.
+///
+/// Membership is established by migration against a **resolved user id**, never
+/// by matching an email at runtime: an address a browser supplies, or one a new
+/// registration happens to use, must never confer administration.
+model PlatformAdmin {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  /// Free text for the operator's own record, e.g. "owner".
+  note      String?
+  createdAt DateTime @default(now())
+
+  user User @relation("PlatformAdminUser", fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// Complimentary access, granted by the platform owner.
+///
+/// **Never written to `User.plan`.** That column belongs to the Stripe webhook,
+/// which rewrites it on every subscription event and would silently erase a
+/// grant written there. Keeping the grant in its own row is
+/// what makes two of the stated requirements true by construction rather than
+/// by vigilance: a verified webhook cannot erase a valid grant, and revoking a
+/// grant restores the underlying entitlement because the underlying entitlement
+/// was never touched.
+///
+/// Expiry is resolved **on read** — `expiresAt` is compared in the query that
+/// loads the grant — so a lapsed grant stops applying the instant it lapses,
+/// with no scheduled job to run, fail, or be forgotten.
+model PlanGrant {
+  id     String @id @default(cuid())
+  userId String
+
+  /// "plus" | "pro". Never a legacy plan: see `src/lib/plans.ts`. Lifetime is
+  /// deliberately not grantable in this version.
+  plan   String
+  /// Required. An entitlement given without a stated reason is unauditable.
+  reason String
+
+  /// Null means open-ended.
+  expiresAt DateTime?
+
+  grantedAt   DateTime @default(now())
+  grantedById String?
+
+  /// Revocation is a state change, not a delete: the history of who was given
+  /// what, and why, survives the grant ending.
+  revokedAt     DateTime?
+  revokedById   String?
+  revokedReason String?
+
+  user      User  @relation("PlanGrantUser", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy User? @relation("PlanGrantActor", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  /// The lookup every entitlement read performs: this user's live grants.
+  @@index([userId, revokedAt, expiresAt])
 }

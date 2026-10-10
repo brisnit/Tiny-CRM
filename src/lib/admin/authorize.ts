@@ -1,0 +1,137 @@
+import "server-only";
+
+import { getActor, type Actor } from "@/lib/auth/access";
+import { AppError, unauthorized } from "@/lib/errors";
+import { withoutTenantContext } from "@/lib/tenant-db";
+
+/**
+ * Who may operate the owner-admin panel.
+ *
+ * ## The binding is an identity, not an address
+ *
+ * Authorization is a row in `PlatformAdmin` keyed by **user id**. It is never
+ * derived from an email, and that distinction is the whole point: an address
+ * is something a browser supplies and something a new registration can choose.
+ * Binding to the id means the account that holds administration is the account
+ * that held it when the row was written, whatever anyone later signs up as.
+ *
+ * The email is still checked, as a second condition rather than the first. It
+ * costs one comparison on a row already loaded, and it turns "the id was
+ * reused or mistyped at migration time" from a silent grant into a refusal.
+ * Both must match; neither alone is sufficient.
+ *
+ * ## Why this is not an environment variable
+ *
+ * The row-level-security policy that lets an admin read across tenants has to
+ * consult the same fact, and a policy cannot read `process.env`. One source of
+ * truth, in the database, consulted by both — rather than two that can drift,
+ * where the drift that matters is the application believing someone is an admin
+ * while the database does not, or worse, the reverse.
+ *
+ * ## Deny by default
+ *
+ * Every function here throws. There is no boolean variant that a caller can
+ * forget to branch on, except `isPlatformAdmin`, which exists only for
+ * rendering the navigation link and is named so that using it as a gate reads
+ * as wrong.
+ */
+
+export type PlatformAdminActor = Actor & {
+  /** Present only on an actor that has passed the check. */
+  readonly platformAdmin: true;
+};
+
+/**
+ * The admin row for a user id, or null.
+ *
+ * Runs outside tenant context because `PlatformAdmin` is not workspace-scoped
+ * and the caller may have no workspace at all. Under PostgreSQL the table has
+ * RLS enabled with **no policy**, so the application role cannot read it —
+ * which is deliberate, and is why this goes through the same deny-all path
+ * rather than a privileged one. The check that matters at runtime is the
+ * application's; the database's copy exists for the RLS policy, which uses a
+ * SECURITY DEFINER function to see past the same denial.
+ */
+async function adminRowFor(userId: string): Promise<{ userId: string } | null> {
+  return withoutTenantContext("platform admin check", async (tx) =>
+    tx.platformAdmin.findUnique({ where: { userId }, select: { userId: true } }),
+  );
+}
+
+/**
+ * True when the current session belongs to a platform admin.
+ *
+ * For deciding whether to *render* something. Never for deciding whether to
+ * allow something — use `requirePlatformAdmin`, which throws, so that a
+ * forgotten `if` is a crash rather than an open door.
+ */
+export async function isPlatformAdmin(): Promise<boolean> {
+  const actor = await getActor();
+  if (!actor) return false;
+  const row = await adminRowFor(actor.identity.id);
+  return Boolean(row);
+}
+
+/**
+ * Asserts that the caller is the platform admin, and returns the actor.
+ *
+ * Called by every admin page, every admin server action and every admin route
+ * handler — there is no layout-level check standing in for it, because a layout
+ * does not run for a server action and a reader cannot tell from an action's
+ * source whether something upstream protected it.
+ */
+export async function requirePlatformAdmin(): Promise<PlatformAdminActor> {
+  const actor = await getActor();
+  // No session at all: the same answer an ordinary protected page gives.
+  if (!actor) throw unauthorized();
+
+  const row = await adminRowFor(actor.identity.id);
+  if (!row) {
+    // "Not found" rather than "forbidden", for the same reason the rest of the
+    // codebase does: confirming that an administrative surface exists is itself
+    // a disclosure to someone who should not know.
+    throw new AppError("not_found", "Not found.", {
+      internal: `platform admin refused for user ${actor.identity.id}`,
+    });
+  }
+
+  return Object.assign(actor, { platformAdmin: true as const });
+}
+
+/**
+ * The accounts an admin may not act on: their own.
+ *
+ * Suspending yourself locks you out of the panel that would reinstate you, and
+ * revoking your own administration cannot be undone from inside the product.
+ * Both are refused rather than confirmed, because a confirmation dialog is not
+ * a safeguard against a mistake you are about to make deliberately.
+ */
+export function refuseSelfTarget(actor: Actor, targetUserId: string, what: string): void {
+  if (actor.identity.id === targetUserId) {
+    throw new AppError("validation", `You cannot ${what} your own account.`);
+  }
+}
+
+/** Whether a user id is an admin — for display beside a customer row. */
+export async function adminUserIds(): Promise<Set<string>> {
+  const rows = await withoutTenantContext("platform admin list", async (tx) =>
+    tx.platformAdmin.findMany({ select: { userId: true } }),
+  );
+  return new Set(rows.map((r) => r.userId));
+}
+
+/**
+ * Confirms the bound identity still matches the address it was bound for.
+ *
+ * Belt and braces for the migration step: the row is written against a user id
+ * resolved out of band, and this is what notices if that id was wrong.
+ */
+export async function assertAdminEmail(expected: string): Promise<void> {
+  const actor = await getActor();
+  if (!actor) throw unauthorized();
+  if (actor.identity.email.toLowerCase() !== expected.toLowerCase()) {
+    throw new AppError("not_found", "Not found.", {
+      internal: `platform admin id/email mismatch for ${actor.identity.id}`,
+    });
+  }
+}

@@ -10,6 +10,7 @@ import { enrichContext } from "@/lib/logger";
 import { unauthorized } from "@/lib/errors";
 import type { Role } from "@/lib/auth/permissions";
 import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
+import { activeGrantWhere, effectiveFrom, GRANT_SELECT } from "@/lib/plan-grants";
 
 /**
  * The authentication boundary.
@@ -25,7 +26,17 @@ export type Identity = {
   email: string;
   name: string;
   avatarUrl: string | null;
+  /**
+   * The **effective** plan: the stronger of what this account pays for and any
+   * complimentary grant in force. This is what entitlement checks read.
+   */
   plan: string;
+  /**
+   * The raw `User.plan` column — what Stripe owns and what billing charges
+   * for. Kept beside the effective plan so a surface describing *billing* does
+   * not accidentally describe a grant, and vice versa.
+   */
+  storedPlan: string;
   onboardedAt: Date | null;
   /// Null until the address has been confirmed. Gates the capabilities listed
   /// in src/lib/auth/verification.ts.
@@ -121,6 +132,16 @@ export const getIdentity = cache(async (): Promise<Identity | null> => {
     select: {
       id: true, email: true, name: true, avatarUrl: true, plan: true, onboardedAt: true,
       deactivatedAt: true, emailVerifiedAt: true,
+      // Complimentary access, folded in below. Selected here rather than
+      // fetched separately so the effective plan costs no extra round trip,
+      // and filtered by `activeGrantWhere` so expiry is resolved on this read
+      // rather than by a job that might not have run.
+      planGrants: {
+        where: activeGrantWhere(),
+        orderBy: { grantedAt: "desc" },
+        take: 5,
+        select: GRANT_SELECT,
+      },
     },
   });
   // A deactivated account must lose access immediately, even while holding a
@@ -147,7 +168,13 @@ export const getIdentity = cache(async (): Promise<Identity | null> => {
   enrichContext({ userId: user.id });
   return {
     id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl,
-    plan: user.plan, onboardedAt: user.onboardedAt,
+    // The *effective* plan: what this account may actually do. Every
+    // `planFor(actor.identity.plan)` call site therefore honours a grant with
+    // no change of its own. `storedPlan` keeps the billing truth beside it, so
+    // a surface that must show what Stripe charges for has it.
+    plan: effectiveFrom(user.plan, user.planGrants).effective,
+    storedPlan: user.plan,
+    onboardedAt: user.onboardedAt,
     emailVerifiedAt: user.emailVerifiedAt, sessionId,
   };
 });

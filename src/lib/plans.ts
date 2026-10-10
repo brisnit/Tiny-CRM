@@ -388,6 +388,65 @@ export const PRE_STRIPE_PLAN_ALIASES: Readonly<Record<string, PlanId>> = {
   lifetime: "legacy_lifetime",
 };
 
+/**
+ * Which plans may be given away, and which may never be overridden.
+ *
+ * Grantable is `plus` and `pro` only. Lifetime is deliberately absent: it
+ * carries unlimited ceilings that no purchasable plan offers, and handing it
+ * out from an admin panel is not a decision to make through a dropdown.
+ */
+export const GRANTABLE_PLANS = ["plus", "pro"] as const;
+export type GrantablePlan = (typeof GRANTABLE_PLANS)[number];
+
+/**
+ * Capability ordering, for choosing between an underlying plan and a grant.
+ *
+ * Not a general-purpose ranking of worth — it exists for exactly one question:
+ * *given two entitlements, which one is the superset?* The legacy plans sit
+ * above `pro` because they carry ceilings no purchasable plan has, which is
+ * what makes `combinePlans` unable to downgrade them.
+ */
+const PLAN_RANK: Readonly<Record<PlanId, number>> = {
+  free: 0,
+  plus: 1,
+  pro: 2,
+  legacy_pro: 3,
+  legacy_lifetime: 4,
+};
+
+/** True for the entitlements that predate Stripe and must never be reduced. */
+export function isLegacyPlan(plan: PlanId): boolean {
+  return plan === "legacy_pro" || plan === "legacy_lifetime";
+}
+
+/**
+ * The entitlement in force, given what the customer pays for and what they
+ * have been given.
+ *
+ * Whichever is the superset wins, so a grant can only ever add. Two
+ * consequences are the point of it:
+ *
+ *   - **A grant cannot downgrade anyone.** Someone on Pro who is handed a
+ *     complimentary Plus keeps Pro, and a legacy account keeps its legacy
+ *     ceilings outright — `isLegacyPlan` short-circuits before the comparison,
+ *     so no future reordering of the ranks can erode a Lifetime account.
+ *   - **Revocation needs no restore step.** The underlying plan was never
+ *     written to, so removing the grant simply stops it being considered.
+ *
+ * This selects between existing `PLANS` entries and introduces no limits of its
+ * own; there is one plan system and this chooses a member of it.
+ */
+export function combinePlans(underlying: PlanId, granted: PlanId | null): PlanId {
+  if (!granted) return underlying;
+  if (isLegacyPlan(underlying)) return underlying;
+  return PLAN_RANK[granted] > PLAN_RANK[underlying] ? granted : underlying;
+}
+
+/** The alias-resolved plan id for a stored `User.plan` value. */
+export function storedPlanId(stored: string | null | undefined): PlanId {
+  return planFor(stored).id;
+}
+
 export function planFor(id: string | null | undefined): Plan {
   const stored = id ?? "free";
   const resolved = PRE_STRIPE_PLAN_ALIASES[stored] ?? stored;
