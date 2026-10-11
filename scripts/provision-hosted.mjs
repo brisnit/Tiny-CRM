@@ -212,6 +212,7 @@ async function main() {
     "012_grant_integrity.sql",
     "013_membership_write_integrity.sql",
     "014_document_intelligence.sql",
+    "015_platform_admin_policies.sql",
   ]) {
     const out = run("node", ["scripts/apply-sql.mjs", `prisma/postgres/${file}`], {
       DATABASE_URL: ownerUrl,

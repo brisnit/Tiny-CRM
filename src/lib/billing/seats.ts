@@ -75,9 +75,21 @@ export async function seatUsage(workspaceId: string): Promise<SeatUsage> {
   return withTenantContext(
     { workspaceIds: [workspaceId], userId: null, restrictedWorkspaceIds: [] },
     async () => {
+      const { activeGrantWhere, effectiveFrom, GRANT_SELECT } = await import("@/lib/plan-grants");
       const workspace = await db.workspace.findUniqueOrThrow({
         where: { id: workspaceId },
-        select: { id: true, owner: { select: { plan: true } } },
+        select: {
+          id: true,
+          owner: {
+            select: {
+              plan: true,
+              // Seats come from the owner's plan, so a complimentary upgrade
+              // raises them too — and lapses with the grant, because
+              // `activeGrantWhere` resolves expiry on this read.
+              planGrants: { where: activeGrantWhere(), take: 5, select: GRANT_SELECT },
+            },
+          },
+        },
       });
 
       const [used, pending] = await Promise.all([
@@ -87,7 +99,8 @@ export async function seatUsage(workspaceId: string): Promise<SeatUsage> {
         }),
       ]);
 
-      const plan = planFor(workspace.owner.plan);
+      const effectivePlan = effectiveFrom(workspace.owner.plan, workspace.owner.planGrants).effective;
+      const plan = planFor(effectivePlan);
 
       return {
         workspaceId,

@@ -289,7 +289,12 @@ policy on these would deny the very lookup that establishes the context.
 | `UsageCounter` | Keyed to a user; consulted while establishing entitlements, before context. |
 | `IdempotencyKey` | Written by the billing webhook, authenticated by signature, with no user or workspace. |
 | `RateLimitCounter` | Keys are keyed digests, values are integers. Nothing to isolate, and the limiter runs before authentication on the paths that need it most. |
+| `PlanGrant` | Complimentary access, keyed to a user and not a workspace. Selected alongside `User` while resolving the identity, before any workspace is known, so a workspace-scoped policy could not be satisfied — and a policy keyed to `app.user_id` would return nothing on that path and silently drop the grant, turning a Pro account back into a Free one with no error. Written only by the admin actions, which are authorized in the application and audited. |
 | `_prisma_migrations` | Schema bookkeeping. |
+
+`PlatformAdmin` is **not** on this list: it has RLS enabled and forced, with a
+single `FOR SELECT` policy admitting only the caller's own row and no write
+policy at all. See `prisma/postgres/015_platform_admin_policies.sql`.
 
 The exclusion list is **asserted by a test**. `tests/security/rls.test.ts` reads
 `pg_class` for every table without `FORCE ROW LEVEL SECURITY` and compares it to

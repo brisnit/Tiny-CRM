@@ -117,13 +117,28 @@ export async function assertWithinLimit(
  */
 export async function fileUploadsIncluded(workspaceId: string): Promise<boolean> {
   const { planGrants } = await import("@/lib/plans");
+  const { activeGrantWhere, effectiveFrom, GRANT_SELECT } = await import("@/lib/plan-grants");
 
   const workspace = await db.workspace.findUnique({
     where: { id: workspaceId },
-    select: { owner: { select: { plan: true } } },
+    select: {
+      owner: {
+        select: {
+          plan: true,
+          // The owner's complimentary access counts: this reads the *owner's*
+          // plan because the owner is who pays, so it must read the owner's
+          // grant for the same reason. Resolving the effective plan for the
+          // acting user alone would leave a complimentary Plus owner's
+          // workspace still refused uploads.
+          planGrants: { where: activeGrantWhere(), take: 5, select: GRANT_SELECT },
+        },
+      },
+    },
   });
+  if (!workspace) return false;
 
-  return Boolean(workspace && planGrants(workspace.owner.plan, "fileUploads"));
+  const effective = effectiveFrom(workspace.owner.plan, workspace.owner.planGrants).effective;
+  return planGrants(effective, "fileUploads");
 }
 
 /**
