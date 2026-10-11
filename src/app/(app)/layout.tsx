@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
+import { isPlatformAdmin } from "@/lib/admin/authorize";
 import { AppShell } from "@/components/app/shell";
 import { getShellData } from "@/lib/data/shell";
 import { getActor, resolveReadScope } from "@/lib/auth/access";
@@ -45,5 +46,11 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
 
   const data = await getShellData(actor, scope, read, projectFocus);
 
-  return <AppShell data={data}>{children}</AppShell>;
+  // Decided here, from the session, never from anything the client sends. It
+  // governs whether the link is drawn and nothing else — `/admin` and every
+  // action behind it check authorization themselves, because a server action
+  // is reachable by POST whether or not any navigation rendered.
+  const platformAdmin = await isPlatformAdmin();
+
+  return <AppShell data={{ ...data, isPlatformAdmin: platformAdmin }}>{children}</AppShell>;
 }

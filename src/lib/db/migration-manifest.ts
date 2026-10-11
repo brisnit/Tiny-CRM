@@ -20,6 +20,7 @@ export const SQLITE_MIGRATIONS = [
   "20260921210000_file_asset_storage_key_unique",
   "20260923120000_document_intelligence",
   "20261005120000_terms_acceptance",
+  "20261010034922_platform_admin_and_plan_grants",
 ] as const;
 
 /** prisma/migrations-postgres — PostgreSQL, every deployed environment. */
@@ -34,4 +35,5 @@ export const POSTGRES_MIGRATIONS = [
   "20260921210100_file_asset_storage_key_unique",
   "20260923120100_document_intelligence",
   "20261005120100_terms_acceptance",
+  "20261010035000_platform_admin_and_plan_grants",
 ] as const;

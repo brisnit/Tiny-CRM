@@ -25,7 +25,7 @@ import { CommandBar } from "@/components/app/command-bar";
 import { QuickAddDialog, type QuickAddContext, type QuickAddKind } from "@/components/app/quick-add";
 import { TinyAiPanel, type AiFocus } from "@/components/app/tiny-ai-panel";
 import { NotificationsPanel, type NotificationItem } from "@/components/app/notifications";
-import { FOOTER_NAV, PRIMARY_NAV, SECONDARY_NAV, isActive, type NavItem } from "@/lib/nav";
+import { ADMIN_NAV, FOOTER_NAV, PRIMARY_NAV, SECONDARY_NAV, isActive, type NavItem } from "@/lib/nav";
 import { useStoredValue } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 
@@ -42,6 +42,13 @@ export type ShellData = {
   unreadCount: number;
   quickAdd: QuickAddContext;
   ai: { providerLabel: string; modelBacked: boolean };
+  /**
+   * Whether to render the owner-admin link. Decided by the layout from
+   * `isPlatformAdmin()`, never from anything the client supplies — and it
+   * governs only what is drawn. The pages and actions behind it check for
+   * themselves.
+   */
+  isPlatformAdmin?: boolean;
 };
 
 const SIDEBAR_KEY = "tc-sidebar-collapsed";
@@ -227,7 +234,12 @@ export function AppShell({ data, children }: { data: ShellData; children: React.
             badge={data.unreadCount || undefined}
             onClick={() => setNotificationsOpen(true)}
           />
-          <NavGroup items={FOOTER_NAV} pathname={pathname} collapsed={collapsed} counts={data.counts} />
+          <NavGroup
+            items={data.isPlatformAdmin ? [...FOOTER_NAV, ADMIN_NAV] : FOOTER_NAV}
+            pathname={pathname}
+            collapsed={collapsed}
+            counts={data.counts}
+          />
 
           <UserMenu user={data.user} collapsed={collapsed} />
 

@@ -162,16 +162,30 @@ export async function documentQaEntitled(workspaceId: string): Promise<boolean> 
   // context. Every caller is already inside one — assertTenantContext above has
   // just insisted on it — so this does not open its own: a gate that establishes
   // its own authority is not a gate.
+  const { activeGrantWhere, effectiveFrom, GRANT_SELECT } = await import("@/lib/plan-grants");
+
   const workspace = await db.workspace.findUnique({
     where: { id: workspaceId },
-    select: { owner: { select: { plan: true } } },
+    select: {
+      owner: {
+        select: {
+          plan: true,
+          // The owner's complimentary access, for the same reason this reads
+          // the owner's plan at all: the owner is who pays. `activeGrantWhere`
+          // resolves expiry here, on the read, so a lapsed grant stops
+          // granting document questions immediately.
+          planGrants: { where: activeGrantWhere(), take: 5, select: GRANT_SELECT },
+        },
+      },
+    },
   });
 
   // A workspace that is not visible from this context is not entitled. Failing
   // closed is right here: the alternative is granting a paid capability because a
   // read came back empty.
   if (!workspace) return false;
-  return planGrants(workspace.owner.plan, "documentQa");
+  const effective = effectiveFrom(workspace.owner.plan, workspace.owner.planGrants).effective;
+  return planGrants(effective, "documentQa");
 }
 
 /**

@@ -272,6 +272,7 @@ export async function audit(
   actor: Actor | WorkspaceActor,
   entry: Omit<AuditEntry, "actorId" | "actorEmail" | "ip" | "userAgent">,
   tx?: Prisma.TransactionClient,
+  options: { required?: boolean } = {},
 ): Promise<void> {
   const meta = await requestMeta();
   await recordAudit(
@@ -283,6 +284,7 @@ export async function audit(
       userAgent: meta.userAgent,
     },
     tx,
+    options,
   );
 }
 

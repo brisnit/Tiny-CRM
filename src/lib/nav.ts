@@ -1,7 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   BarChart3, Bot, Building2, CalendarDays, CheckSquare, FileText, FolderKanban,
-  Home, Landmark, Settings, Target, Users,
+  Home, Landmark, Settings, ShieldCheck, Target, Users,
 } from "lucide-react";
 
 export type NavItem = {
@@ -48,6 +48,17 @@ export const SECONDARY_NAV: NavItem[] = [
 ];
 
 export const FOOTER_NAV: NavItem[] = [{ href: "/settings", label: "Settings", icon: Settings }];
+
+/**
+ * The owner-admin entry, rendered only for the account bound to it.
+ *
+ * Kept out of `FOOTER_NAV` rather than filtered out of it, so that showing it
+ * takes a deliberate act by the layout. A link is not a control — every admin
+ * page and action checks authorization itself — but a link nobody else can see
+ * is still the right default: there is no reason to advertise a door to people
+ * who cannot open it.
+ */
+export const ADMIN_NAV: NavItem = { href: "/admin", label: "Admin", icon: ShieldCheck };
 
 export const AI_NAV: NavItem = { href: "/ai", label: "Tiny AI", icon: Bot, shortcut: "⌘K" };
 
