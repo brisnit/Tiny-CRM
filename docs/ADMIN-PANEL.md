@@ -260,9 +260,22 @@ have given it the pooled endpoint instead.
 
 With `--apply` it switches the local schema to `postgresql`, regenerates,
 runs `prisma migrate deploy`, applies
+`prisma/postgres/003_deferrable_constraints.sql` and then
 `prisma/postgres/015_platform_admin_policies.sql`, and then **restores the
 local schema to `sqlite` and regenerates again in a `finally`** — with a
-byte-for-byte restore as a backstop. An interrupted run leaving the provider
+byte-for-byte restore as a backstop.
+
+**Why 003 is in that list.** It is not part of the migration history — SQLite
+has no equivalent — and it only affects the foreign keys that exist at the
+moment it runs. This migration adds three (two on `PlanGrant`, one on
+`PlatformAdmin`), so without re-applying it they are non-deferrable and the
+deployment gate refuses the next production build, because a logical restore
+of a schema with a circular foreign key is impossible without deferrable
+constraints. That is not hypothetical: it blocked this release's first
+production build, with the migration already applied and nothing else wrong.
+Any future migration that adds a foreign key needs the same step, and
+`scripts/apply-deferrable-constraints.mjs` is the repair for a database
+already in that state. An interrupted run leaving the provider
 on `postgresql` is a trap for the next local command, and it has happened in
 this repository.
 
@@ -274,6 +287,11 @@ Verification is a read-back, before and after, not an exit code:
 - all three policies exist, every one of them is `SELECT`-only, and
   `PlatformAdmin` has **no** write policy;
 - `app_is_platform_admin()` is SECURITY DEFINER with a pinned `search_path`;
+- `app_user_id()` exists — the RLS foundation 015's policies call, checked as a
+  **precondition**: without it the migration would be recorded as applied and
+  the policy file would then fail, leaving `PlatformAdmin` deny-all;
+- **every foreign key is deferrable**, which is the deployment gate's own
+  check, asked here so the script fails where the gate would;
 - **no administrator is bound** — binding is a separate step.
 
 The connection is never read from the environment and never passed in argv,

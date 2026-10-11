@@ -250,6 +250,52 @@ describe("the production scripts work against a database that has not been migra
     );
   });
 
+  test("the migration script re-applies 003, because this migration adds foreign keys", () => {
+    // This is the gap the deployment gate caught in production: the procedure
+    // applied only the new policy file, so the three foreign keys the migration
+    // added (two on PlanGrant, one on PlatformAdmin) stayed non-deferrable and
+    // the gate refused the build — with the migration already applied. 003 is
+    // not in the migration history and only affects the foreign keys that exist
+    // when it runs, so any migration that adds one has to re-apply it.
+    const source = readFileSync("scripts/migrate-admin-panel.mjs", "utf8");
+    assert.match(
+      source,
+      /003_deferrable_constraints\.sql/,
+      "the migration script does not apply the deferrable-constraints file",
+    );
+    assert.match(
+      source,
+      /run\("node", \["scripts\/apply-sql\.mjs", DEFERRABLE_FILE\], url\)/,
+      "003 is named but never applied",
+    );
+    // After the migration that creates them, and before the run is declared done.
+    assert.ok(
+      source.indexOf('"migrate", "deploy"') < source.indexOf("DEFERRABLE_FILE], url"),
+      "003 is applied before the migration that adds the foreign keys",
+    );
+    // And verified, so the script fails where the gate would have.
+    assert.match(source, /NOT con\.condeferrable/, "deferrability is applied but not verified");
+    assert.match(
+      source,
+      /every foreign key is deferrable \(the deployment gate's own check\)/,
+      "the verification does not report on deferrability",
+    );
+  });
+
+  test("the repair script asks for its connection and never takes it from the environment", () => {
+    const source = readFileSync("scripts/apply-deferrable-constraints.mjs", "utf8");
+    assert.match(source, /promptHidden\(/, "the connection is not read from a hidden prompt");
+    assert.match(source, /PRODUCTION_FINGERPRINTS/, "any database would be accepted");
+    assert.match(source, /REFUSED\. Not a known production database/);
+    // Both names, so a stray DIRECT_URL cannot redirect the repair.
+    assert.match(source, /DATABASE_URL: url/);
+    assert.match(source, /DIRECT_URL: url/);
+    // It must verify from the database, not from the exit code of apply-sql.
+    assert.match(source, /VERIFICATION FAILED: some foreign keys are still not deferrable/);
+    // And it must never print a connection string on an error path.
+    assert.match(source, /\[connection string redacted\]/);
+  });
+
   test("the typed connection decides which database is migrated", () => {
     // prisma7.config.ts resolves its target as DIRECT_URL || DATABASE_URL and
     // calls dotenv/config, so a DIRECT_URL left in .env would otherwise pick

@@ -60,6 +60,22 @@ const PRODUCTION_FINGERPRINTS = new Map([
 const MIGRATION = "20261010035000_platform_admin_and_plan_grants";
 const POLICY_FILE = "prisma/postgres/015_platform_admin_policies.sql";
 
+/**
+ * Re-applied because this migration adds foreign keys.
+ *
+ * 003 is not in the migration history — SQLite has no equivalent — and it only
+ * affects the foreign keys that exist when it runs. This release adds three
+ * (two on PlanGrant, one on PlatformAdmin), so without re-applying it they are
+ * non-deferrable and the deployment gate refuses the next production build: a
+ * logical restore of a schema with a circular foreign key is impossible
+ * without deferrable constraints.
+ *
+ * That is not hypothetical. It blocked this release's first production build,
+ * with the migration already applied. Generic and idempotent — it alters every
+ * non-deferrable foreign key in `public` and nothing else.
+ */
+const DEFERRABLE_FILE = "prisma/postgres/003_deferrable_constraints.sql";
+
 function fingerprint(url) {
   const parsed = new URL(url);
   return createHash("sha256")
@@ -200,6 +216,24 @@ async function verify(client) {
   // BEFORE pass against a database that has not been migrated yet — where an
   // unguarded `count(*)` raises 42P01 and takes the whole script down before it
   // has inspected, let alone applied, anything.
+  const stragglers = await client.query(
+    `SELECT con.conrelid::regclass::text AS tbl, con.conname AS name
+       FROM pg_constraint con
+       JOIN pg_class rel ON rel.oid = con.conrelid
+      WHERE con.contype = 'f'
+        AND rel.relnamespace = 'public'::regnamespace
+        AND NOT con.condeferrable
+      ORDER BY 1, 2`,
+  );
+  checks.push([
+    "every foreign key is deferrable (the deployment gate's own check)",
+    stragglers.rowCount === 0,
+    stragglers.rowCount === 0
+      ? ""
+      : `${stragglers.rows.map((r) => `${r.tbl}.${r.name}`).join(", ")} — ` +
+        `run scripts/apply-deferrable-constraints.mjs`,
+  ]);
+
   const bound = byName.PlatformAdmin
     ? (await client.query(`SELECT count(*)::int AS n FROM "PlatformAdmin"`)).rows[0].n
     : null;
@@ -291,6 +325,9 @@ async function main() {
 
       console.log("\n  Applying migrations…");
       run("npx", ["prisma", "migrate", "deploy"], url);
+
+      console.log(`\n  Applying ${DEFERRABLE_FILE} (this migration adds foreign keys)…`);
+      run("node", ["scripts/apply-sql.mjs", DEFERRABLE_FILE], url);
 
       console.log(`\n  Applying ${POLICY_FILE}…`);
       run("node", ["scripts/apply-sql.mjs", POLICY_FILE], url);
