@@ -84,12 +84,27 @@ function providerIn(source) {
   return /datasource db \{[^}]*provider\s*=\s*"([a-z]+)"/s.exec(source)?.[1] ?? "unknown";
 }
 
-/** Runs a command with the connection in the environment, never in argv. */
+/**
+ * Runs a command with the connection in the environment, never in argv.
+ *
+ * Both names are set to the connection that was typed at the prompt.
+ * `prisma7.config.ts` resolves its target as `DIRECT_URL || DATABASE_URL`, and
+ * it calls `dotenv/config` — so a `DIRECT_URL` left in `.env` or exported in
+ * the shell would otherwise decide which database gets migrated, while this
+ * script's own verification read the one the operator actually typed. Setting
+ * both is what makes the prompt authoritative; it is also what
+ * scripts/migrate-production.mjs does, for the same reason.
+ */
 function run(command, args, url) {
   execFileSync(command, args, {
     cwd: ROOT,
     stdio: "inherit",
-    env: { ...process.env, DATABASE_URL: url, PRISMA_HIDE_UPDATE_MESSAGE: "1" },
+    env: {
+      ...process.env,
+      DATABASE_URL: url,
+      DIRECT_URL: url,
+      PRISMA_HIDE_UPDATE_MESSAGE: "1",
+    },
   });
 }
 
@@ -163,11 +178,19 @@ async function verify(client) {
     String(fn.rows[0]?.proconfig ?? "none"),
   ]);
 
-  const admins = await client.query(`SELECT count(*)::int AS n FROM "PlatformAdmin"`);
+  // Conditional on the table existing, because this same function runs as the
+  // BEFORE pass against a database that has not been migrated yet — where an
+  // unguarded `count(*)` raises 42P01 and takes the whole script down before it
+  // has inspected, let alone applied, anything.
+  const bound = byName.PlatformAdmin
+    ? (await client.query(`SELECT count(*)::int AS n FROM "PlatformAdmin"`)).rows[0].n
+    : null;
   checks.push([
     "no administrator is bound yet",
-    admins.rows[0].n === 0,
-    "binding is a separate, deliberate step",
+    bound === null || bound === 0,
+    bound === null
+      ? "the table does not exist yet, so nobody can be bound"
+      : "binding is a separate, deliberate step",
   ]);
 
   console.log("\n  VERIFICATION");

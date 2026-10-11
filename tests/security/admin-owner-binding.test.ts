@@ -171,3 +171,54 @@ describe("a live grant that adds nothing says so without calling itself inactive
     assert.doesNotMatch(title, /inactive/i);
   });
 });
+
+describe("the production scripts work against a database that has not been migrated yet", () => {
+  // Production is in exactly that state until step 2 of the procedure runs,
+  // and both scripts read `PlatformAdmin`. An unguarded reference raises
+  // 42P01 — proven against a real PostgreSQL — which killed the resolver at
+  // step 1 and the migration script's own BEFORE pass before it applied
+  // anything. Source assertions, because the guard is a query shape inside a
+  // CLI that needs a database to run.
+
+  test("the resolver asks whether the table exists before reading it", () => {
+    const source = readFileSync("scripts/resolve-admin-user.mjs", "utf8");
+    assert.match(
+      source,
+      /to_regclass\('public\."PlatformAdmin"'\) IS NOT NULL/,
+      "the resolver does not test for the table before querying it",
+    );
+    // And the read is built from that answer, not issued regardless.
+    // Specifically: the subquery text must sit *inside* the interpolation that
+    // the guard controls. Matching "adminTable ... ?" anywhere is not enough —
+    // it also matches the unrelated ternary that prints the result, so that
+    // weaker assertion passed with the guard removed.
+    assert.match(
+      source,
+      /\$\{adminTable[\s\S]{0,80}FROM "PlatformAdmin" pa/,
+      "the is_admin subquery is issued regardless of whether the table exists",
+    );
+    assert.ok(
+      source.indexOf("to_regclass") < source.indexOf('FROM "PlatformAdmin" pa'),
+      "the guard runs after the read it is supposed to guard",
+    );
+  });
+
+  test("the migration script's BEFORE pass counts admins only if it can", () => {
+    const source = readFileSync("scripts/migrate-admin-panel.mjs", "utf8");
+    assert.match(
+      source,
+      /byName\.PlatformAdmin[\s\S]{0,8}\?[\s\S]{0,8}\(await client\.query/,
+      "the admin count is not conditional on the table existing",
+    );
+    assert.match(source, /bound === null \|\| bound === 0/, "a missing table is not treated as unbound");
+  });
+
+  test("the typed connection decides which database is migrated", () => {
+    // prisma7.config.ts resolves its target as DIRECT_URL || DATABASE_URL and
+    // calls dotenv/config, so a DIRECT_URL left in .env would otherwise pick
+    // the database while the script verified a different one.
+    const source = readFileSync("scripts/migrate-admin-panel.mjs", "utf8");
+    assert.match(source, /DATABASE_URL: url/, "DATABASE_URL is not set from the prompt");
+    assert.match(source, /DIRECT_URL: url/, "DIRECT_URL is not set from the prompt");
+  });
+});

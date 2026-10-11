@@ -67,9 +67,21 @@ async function main() {
     // Case-insensitive, because an address typed into a prompt is not
     // necessarily cased as it was stored, and binding the wrong id is the
     // failure this script exists to prevent.
+    // `PlatformAdmin` does not exist until this release's migration has run,
+    // and this script is step 1 of a procedure whose step 2 creates it. An
+    // unguarded subquery on it raises 42P01 and makes resolving an id
+    // impossible before migrating — which is the wrong way round, because the
+    // whole point of resolving first is to find out whether to migrate at all.
+    const { rows: present } = await client.query(
+      `SELECT to_regclass('public."PlatformAdmin"') IS NOT NULL AS exists`,
+    );
+    const adminTable = present[0].exists === true;
+
     const { rows } = await client.query(
       `SELECT u."id", u."email", u."name", u."plan", u."createdAt", u."deactivatedAt",
-              (SELECT count(*)::int FROM "PlatformAdmin" pa WHERE pa."userId" = u."id") AS is_admin,
+              ${adminTable
+                ? `(SELECT count(*)::int FROM "PlatformAdmin" pa WHERE pa."userId" = u."id")`
+                : `0`} AS is_admin,
               (SELECT count(*)::int FROM "Workspace" w WHERE w."ownerId" = u."id") AS owned
          FROM "User" u
         WHERE lower(u."email") = lower($1)`,
@@ -94,7 +106,11 @@ async function main() {
     console.log(`    registered      ${u.createdAt?.toISOString?.().slice(0, 10) ?? u.createdAt}`);
     console.log(`    suspended       ${u.deactivatedAt ? "YES" : "no"}`);
     console.log(`    workspaces owned ${u.owned}`);
-    console.log(`    already admin   ${u.is_admin > 0 ? "YES" : "no"}`);
+    console.log(
+      `    already admin   ${
+        adminTable ? (u.is_admin > 0 ? "YES" : "no") : "n/a — not migrated yet"
+      }`,
+    );
     console.log(`\n  To bind:  node scripts/bind-platform-admin.mjs ${u.id}\n`);
   } finally {
     await client.end();
