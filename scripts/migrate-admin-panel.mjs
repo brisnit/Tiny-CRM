@@ -166,6 +166,24 @@ async function verify(client) {
     "administration cannot be granted through the application role",
   ]);
 
+  // The precondition. 015 creates policies whose predicates call app_user_id(),
+  // which is created by 002_row_level_security.sql — part of the RLS foundation
+  // that every deployed environment already has. Checked rather than assumed,
+  // because without it `migrate deploy` succeeds, the migration is *recorded as
+  // applied*, and then the policy file fails partway: `PlatformAdmin` is left
+  // RLS-enabled and FORCEd with no policy, which is deny-all. That is the safe
+  // direction, but it means a release that reads as applied whose panel refuses
+  // everyone. Refusing up front is better than recovering from that.
+  const foundation = await client.query(
+    `SELECT count(*)::int AS n FROM pg_proc WHERE proname = 'app_user_id'`,
+  );
+  const hasFoundation = foundation.rows[0].n > 0;
+  checks.push([
+    "app_user_id() exists (the RLS foundation 015 builds on)",
+    hasFoundation,
+    hasFoundation ? "" : "apply prisma/postgres/002_row_level_security.sql first",
+  ]);
+
   const fn = await client.query(
     `SELECT p.prosecdef, p.proconfig FROM pg_proc p
       WHERE p.proname = 'app_is_platform_admin'`,
@@ -199,7 +217,7 @@ async function verify(client) {
     console.log(`    ${passed ? "PASS" : "FAIL"}  ${label}${detail ? `  — ${detail}` : ""}`);
     if (!passed) ok = false;
   }
-  return ok;
+  return { ok, hasFoundation };
 }
 
 async function main() {
@@ -238,7 +256,19 @@ async function main() {
   await client.connect();
   try {
     console.log("\n--- BEFORE ---");
-    await verify(client);
+    const beforeState = await verify(client);
+
+    if (apply && !beforeState.hasFoundation) {
+      console.error(
+        "\nREFUSED: app_user_id() is not present, so " +
+          `${POLICY_FILE} cannot be applied.\n` +
+          "  Nothing was written. This database is missing the row-level security\n" +
+          "  foundation (prisma/postgres/002_row_level_security.sql); applying the\n" +
+          "  migration first would record it as applied and then fail on the\n" +
+          "  policies, leaving PlatformAdmin deny-all.\n",
+      );
+      process.exit(1);
+    }
 
     if (!apply) {
       console.log("\n  Inspect only. Nothing was changed. Re-run with --apply.\n");
@@ -277,7 +307,7 @@ async function main() {
     }
 
     console.log("\n--- AFTER ---");
-    const ok = await verify(client);
+    const { ok } = await verify(client);
     if (!ok) {
       console.error("\n  VERIFICATION FAILED. Investigate before binding administration.\n");
       process.exit(1);

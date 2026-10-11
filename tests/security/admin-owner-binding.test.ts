@@ -213,6 +213,43 @@ describe("the production scripts work against a database that has not been migra
     assert.match(source, /bound === null \|\| bound === 0/, "a missing table is not treated as unbound");
   });
 
+  test("it refuses to apply without the RLS foundation 015 builds on", () => {
+    // Proven by rehearsal: without app_user_id(), `migrate deploy` succeeds and
+    // is RECORDED as applied, then the policy file fails partway — leaving
+    // PlatformAdmin RLS-enabled, FORCEd and with no policy. Deny-all is the
+    // safe direction, but it is a release that reads as applied whose panel
+    // refuses everyone. The check turns that into a refusal that writes nothing.
+    const source = readFileSync("scripts/migrate-admin-panel.mjs", "utf8");
+    assert.match(source, /proname = 'app_user_id'/, "the foundation is assumed, not checked");
+    assert.match(source, /hasFoundation/, "the check's result is not carried out of verify()");
+    assert.match(
+      source,
+      /if \(apply && !beforeState\.hasFoundation\)/,
+      "a missing foundation does not stop the apply",
+    );
+    // And it must refuse before the provider switch, not after.
+    assert.ok(
+      source.indexOf("beforeState.hasFoundation") <
+        source.indexOf('run("node", ["scripts/use-provider.mjs", "postgresql"]'),
+      "the refusal comes after the first thing that writes",
+    );
+  });
+
+  test("the schema backup is not shadowed by anything verify() returns", () => {
+    // The restore backstop writes `before` into schema.prisma. An inner
+    // `const before = await verify(client)` — which this change first
+    // introduced — would have written an object into the schema file on the
+    // interrupted-run path. Names kept distinct on purpose.
+    const source = readFileSync("scripts/migrate-admin-panel.mjs", "utf8");
+    assert.match(source, /const before = readFileSync\(SCHEMA, "utf8"\)/);
+    assert.match(source, /writeFileSync\(SCHEMA, before, "utf8"\)/);
+    assert.doesNotMatch(
+      source,
+      /const before = await verify/,
+      "verify()'s result shadows the schema backup used by the restore backstop",
+    );
+  });
+
   test("the typed connection decides which database is migrated", () => {
     // prisma7.config.ts resolves its target as DIRECT_URL || DATABASE_URL and
     // calls dotenv/config, so a DIRECT_URL left in .env would otherwise pick
