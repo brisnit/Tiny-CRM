@@ -86,6 +86,16 @@ const serverEnv = {
   // No mail provider is configured, so the reset notification falls through to
   // the logging adapter. That is deliberate: a test must not send real email.
   NODE_ENV: "development",
+  // Microsoft connector credentials, so the Connect button renders enabled and
+  // the authorisation URL can be built. **Fake, and overriding whatever is in a
+  // local .env**: the browser suite must never be able to reach a real
+  // provider, and the test asserts the URL it would navigate to rather than
+  // following it. The client and tenant ids are the canary's real ones because
+  // they appear in the URL being asserted and are not secrets; the secret is
+  // not used at all, because no token exchange happens in this suite.
+  MICROSOFT_CLIENT_ID: "080880ad-f468-4e83-bf08-b117e13deba5",
+  MICROSOFT_TENANT_ID: "4883aac4-8e9b-42fe-a7cf-78b9183ddc99",
+  MICROSOFT_CLIENT_SECRET: "browser-suite-fake-secret",
 };
 
 console.log(`Starting the app on ${BASE_URL}…`);
