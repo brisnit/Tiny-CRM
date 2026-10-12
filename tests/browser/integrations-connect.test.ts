@@ -22,9 +22,33 @@ import { db } from "../helpers/fixtures";
  *     not the redirect target, so it read as a same-origin refusal;
  *   - the page just sat there.
  *
- * Only a browser sees this. The unit test
- * tests/unit/csp-oauth-origins.test.ts covers the policy's *content*; this
- * covers the click.
+ * ## What this file does and does not prove — read before trusting it
+ *
+ * It proves the click path: the form is wired, our start route really runs, the
+ * authorisation URL it answers with is correct, the verifier cookie is set, and
+ * no CSP violation occurs for the submission.
+ *
+ * It does **not** prove the policy permits the final hop. Mutation testing
+ * settled that: reverting `form-action` to `'self'` alone leaves every test in
+ * this file passing. The reason is structural rather than fixable here — the
+ * provider must not be contacted in CI, so the 303 is intercepted, and
+ * intercepting the redirect is exactly what stops the browser attempting the
+ * cross-origin navigation the policy governs. Any mock that prevents the
+ * contact prevents the check.
+ *
+ * So the division of labour is deliberate:
+ *
+ *   - `tests/unit/csp-oauth-origins.test.ts` is the guard against the
+ *     regression returning. It fails if an authorisation origin is missing from
+ *     `form-action`, and also if a stale one lingers. Both directions verified
+ *     by mutation.
+ *   - this file is the guard against the *click* breaking — a form that posts
+ *     nowhere, a disabled button, a missing cookie, a wrong authority.
+ *   - the final hop, a browser actually following the 303 to
+ *     login.microsoftonline.com under this policy, is verified **manually**
+ *     against the canary tenant. It is the one step that needs the real
+ *     provider, and it is recorded as manual in docs/INTEGRATIONS.md rather
+ *     than implied to be covered here.
  *
  * ## Mocked, and it does not follow the redirect
  *
@@ -99,6 +123,85 @@ async function signIn(page: Page, email: string): Promise<void> {
 }
 
 describe("connecting a mailbox, in a browser", () => {
+  /**
+   * How the provider is mocked, and why it is done at *our* redirect rather
+   * than at the provider's URL.
+   *
+   * Two earlier attempts both let the real provider be contacted:
+   *
+   *   - `page.route("https://login.microsoftonline.com/**")` never fired. The
+   *     navigation to the provider is the redirect *target* of the POST to our
+   *     own route, and Playwright does not match a route pattern against a
+   *     redirect hop of a main-frame navigation.
+   *   - a catch-all `page.route("**\/*")` did not fire for it either, for the
+   *     same reason — while `waitForURL` still passed, because the browser
+   *     really did navigate. The test would have gone green having talked to
+   *     Microsoft.
+   *
+   * So the interception is on **our own** start route, which is same-origin and
+   * is matched. The handler lets the real server answer (`route.fetch()`), reads
+   * the `Location` of the genuine 303, and then fulfils the browser with a plain
+   * 200 carrying the real `Set-Cookie`. The click is real, our route really
+   * runs, the authorisation URL is the one we would actually have sent — and the
+   * browser never leaves localhost.
+   */
+  async function clickConnectAndCaptureRedirect(page: Page): Promise<{
+    location: string | null;
+    setCookie: string[];
+    cspMessages: string[];
+  }> {
+    const cspMessages: string[] = [];
+    page.on("console", (message) => {
+      if (/Content Security Policy/i.test(message.text())) cspMessages.push(message.text());
+    });
+
+    let location: string | null = null;
+    let setCookie: string[] = [];
+    await page.route("**/api/integrations/*/start", async (route) => {
+      const real = await route.fetch({ maxRedirects: 0 });
+      const headers = real.headers();
+      location = headers["location"] ?? null;
+      const raw = await real.headersArray();
+      setCookie = raw.filter((h) => h.name.toLowerCase() === "set-cookie").map((h) => h.value);
+      // A 200 instead of the 303, so the browser has nowhere to go.
+      await route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        headers: Object.fromEntries(
+          raw
+            .filter((h) => h.name.toLowerCase() === "set-cookie")
+            .map((h) => ["set-cookie", h.value]),
+        ),
+        body: "<html><body>redirect intercepted — no provider was contacted</body></html>",
+      });
+    });
+
+    // A belt-and-braces guarantee: if anything still tries to reach a provider,
+    // the request fails rather than succeeding quietly.
+    await page.route("https://login.microsoftonline.com/**", (route) => route.abort());
+    await page.route("https://accounts.google.com/**", (route) => route.abort());
+
+    await signIn(page, world.email);
+    await page.goto(`${BASE_URL}/settings/integrations`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await page.waitForSelector("text=Email & calendar", { timeout: 30_000 });
+    await page.waitForTimeout(750); // hydration, before any click lands
+
+    const connect = page.getByRole("button", { name: /^Connect$/ }).first();
+    assert.ok(await connect.isVisible(), "no Connect button was rendered");
+    assert.ok(await connect.isEnabled(), "the Connect button was disabled");
+    await connect.click();
+    await page.waitForFunction(
+      () => document.body.textContent?.includes("redirect intercepted") === true,
+      undefined,
+      { timeout: 30_000 },
+    );
+
+    return { location, setCookie, cspMessages };
+  }
+
   test("the global flag is off, so this is proving a per-workspace override", async () => {
     const global = await db.featureFlag.findFirst({
       where: { key: "integrations", workspaceId: null },
@@ -110,47 +213,23 @@ describe("connecting a mailbox, in a browser", () => {
     );
   });
 
-  test("clicking Connect navigates to the provider's authorisation URL", async () => {
+  test("clicking Connect redirects to the provider's authorisation URL", async () => {
     const page = await browser.newPage();
-    const cspMessages: string[] = [];
-    page.on("console", (message) => {
-      if (/Content Security Policy/i.test(message.text())) cspMessages.push(message.text());
-    });
-
-    // Catch the navigation instead of following it. This is the mock: the
-    // provider is never contacted.
-    let authorizeUrl: string | null = null;
-    await page.route("https://login.microsoftonline.com/**", async (route) => {
-      authorizeUrl = route.request().url();
-      await route.fulfill({
-        status: 200,
-        contentType: "text/html",
-        body: "<html><body><h1>Stub consent screen</h1></body></html>",
-      });
-    });
-
     try {
-      await signIn(page, world.email);
-      await page.goto(`${BASE_URL}/settings/integrations`, {
-        waitUntil: "domcontentloaded",
-        timeout: 60_000,
-      });
-      await page.waitForSelector("text=Email & calendar", { timeout: 30_000 });
-      await page.waitForTimeout(750);
+      const { location, cspMessages } = await clickConnectAndCaptureRedirect(page);
 
-      const connect = page.getByRole("button", { name: /^Connect$/ }).first();
-      assert.ok(await connect.isVisible(), "no enabled Connect button was rendered");
-      assert.ok(await connect.isEnabled(), "the Connect button was disabled");
+      // The regression: with `form-action 'self'` the click produced no request
+      // at all and exactly one console line naming the wrong URL.
+      assert.deepEqual(
+        cspMessages,
+        [],
+        `the Content Security Policy blocked the submission: ${cspMessages.join(" | ")}`,
+      );
+      assert.ok(location, "the start route did not answer with a redirect");
 
-      await connect.click();
-      // The stub page, reached through our 303.
-      await page.waitForURL(/login\.microsoftonline\.com/, { timeout: 30_000 });
-
-      assert.ok(authorizeUrl, "the browser never requested an authorisation URL");
-      const url = new URL(authorizeUrl!);
-
-      // The tenant-specific authority, not /common.
+      const url = new URL(location!);
       assert.equal(url.origin, "https://login.microsoftonline.com");
+      // Tenant-specific, not /common.
       assert.ok(
         url.pathname.startsWith(`/${TENANT_ID}/`),
         `the authority was ${url.pathname} rather than the tenant-specific one`,
@@ -167,16 +246,10 @@ describe("connecting a mailbox, in a browser", () => {
         url.searchParams.get("redirect_uri"),
         `${BASE_URL}/api/integrations/microsoft/callback`,
       );
-      // Read-only scopes, in any form.
+
       const scope = url.searchParams.get("scope") ?? "";
       assert.match(scope, /Mail\.Read/);
-      assert.doesNotMatch(scope, /Mail\.Send|ReadWrite|\.write/i);
-
-      assert.deepEqual(
-        cspMessages,
-        [],
-        `the Content Security Policy blocked the submission: ${cspMessages.join(" | ")}`,
-      );
+      assert.doesNotMatch(scope, /Mail\.Send|ReadWrite|\.write/i, "a write scope was requested");
     } finally {
       await page.close();
     }
@@ -184,24 +257,15 @@ describe("connecting a mailbox, in a browser", () => {
 
   test("the verifier cookie is set, httpOnly, and scoped to the callback path", async () => {
     const page = await browser.newPage();
-    await page.route("https://login.microsoftonline.com/**", (route) =>
-      route.fulfill({ status: 200, contentType: "text/html", body: "<html></html>" }),
-    );
     try {
-      await signIn(page, world.email);
-      await page.goto(`${BASE_URL}/settings/integrations`, {
-        waitUntil: "domcontentloaded",
-        timeout: 60_000,
-      });
-      await page.waitForTimeout(750);
-      await page.getByRole("button", { name: /^Connect$/ }).first().click();
-      await page.waitForURL(/login\.microsoftonline\.com/, { timeout: 30_000 });
-
-      const cookie = (await page.context().cookies()).find((c) => c.name === "tc_oauth_verifier");
-      assert.ok(cookie, "no PKCE verifier cookie was set, so the callback would be refused");
-      assert.equal(cookie!.httpOnly, true, "the verifier is readable by script");
-      assert.equal(cookie!.path, "/api/integrations", "the verifier is sent more widely than needed");
-      assert.ok(cookie!.value.length > 20, "the verifier is too short to be a PKCE verifier");
+      const { setCookie } = await clickConnectAndCaptureRedirect(page);
+      const verifier = setCookie.find((c) => c.startsWith("tc_oauth_verifier="));
+      assert.ok(verifier, "no PKCE verifier cookie was set, so the callback would be refused");
+      assert.match(verifier!, /HttpOnly/i, "the verifier is readable by script");
+      assert.match(verifier!, /Path=\/api\/integrations/i, "the verifier is sent more widely than needed");
+      assert.match(verifier!, /SameSite=Lax/i, "SameSite=Strict would withhold it on the way back");
+      const value = verifier!.split(";")[0]!.split("=")[1] ?? "";
+      assert.ok(value.length > 20, "the verifier is too short to be a PKCE verifier");
     } finally {
       await page.close();
     }

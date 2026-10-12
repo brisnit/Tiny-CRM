@@ -184,7 +184,16 @@ describe("what cannot widen connect-src", () => {
       "style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline'; " +
       "style-src-attr 'unsafe-inline'; " +
       "img-src 'self' data: blob: https://avatars.githubusercontent.com https://lh3.googleusercontent.com; " +
-      "font-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; " +
+      "font-src 'self' data:; connect-src 'self'; " +
+      // `form-action` carries the two OAuth authorisation origins. The Connect
+      // button posts same-origin and the route answers with a 303 to the
+      // provider's consent screen, and `form-action` applies across redirects —
+      // with `'self'` alone the click did nothing at all and the only evidence
+      // was one console line naming the wrong URL. Pinned here as part of the
+      // whole policy; the list itself is checked against PROVIDERS in
+      // tests/unit/csp-oauth-origins.test.ts.
+      "form-action 'self' https://login.microsoftonline.com https://accounts.google.com; " +
+      "frame-ancestors 'none'; " +
       "frame-src 'none'; object-src 'none'; media-src 'none'; base-uri 'none'; " +
       "worker-src 'self' blob:; manifest-src 'self'" +
       (process.env.NODE_ENV === "production" ? "; upgrade-insecure-requests" : "");
