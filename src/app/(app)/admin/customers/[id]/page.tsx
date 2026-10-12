@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, ExternalLink, ShieldAlert } from "lucide-react";
 
-import { requirePlatformAdmin } from "@/lib/admin/authorize";
+import { requirePlatformAdminPage } from "@/lib/admin/authorize";
 import { administrativeAudit, customerDetail } from "@/lib/admin/customers";
 import { NO_EFFECT_LABEL } from "@/lib/admin/grant-label";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +16,7 @@ import { stripeDashboardUrls } from "@/lib/admin/stripe-links";
 export const dynamic = "force-dynamic";
 
 export default async function CustomerPage({ params }: { params: Promise<{ id: string }> }) {
-  const admin = await requirePlatformAdmin();
+  const admin = await requirePlatformAdminPage();
   const { id } = await params;
   const customer = await customerDetail(id);
   if (!customer) notFound();
