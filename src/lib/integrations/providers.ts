@@ -36,6 +36,8 @@ export type ProviderConfig = {
   id: ProviderId;
   /** What a customer sees. */
   label: string;
+  /** One line describing what connecting it does, for the Settings list. */
+  blurb: string;
   kind: ProviderKind;
   /** Which vendor's OAuth server, since two providers share each. */
   vendor: "google" | "microsoft";
@@ -108,6 +110,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
   outlook: {
     id: "outlook",
     label: "Outlook email",
+    blurb: "Read-only. Imports threads and files them against the contact they are with.",
     kind: "email",
     vendor: "microsoft",
     authorizeUrl: MS_AUTHORIZE,
@@ -131,6 +134,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
   outlook_calendar: {
     id: "outlook_calendar",
     label: "Outlook Calendar",
+    blurb: "Brings meetings in and attaches them to the right contact, company or project.",
     kind: "calendar",
     vendor: "microsoft",
     authorizeUrl: MS_AUTHORIZE,
@@ -147,6 +151,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
   google_calendar: {
     id: "google_calendar",
     label: "Google Calendar",
+    blurb: "Brings meetings in and attaches them to the right contact, company or project.",
     kind: "calendar",
     vendor: "google",
     authorizeUrl: GOOGLE_AUTHORIZE,
@@ -159,6 +164,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
   gmail: {
     id: "gmail",
     label: "Gmail",
+    blurb: "Read-only. Imports threads and files them against the contact they are with.",
     kind: "email",
     vendor: "google",
     authorizeUrl: GOOGLE_AUTHORIZE,

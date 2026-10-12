@@ -8,12 +8,12 @@ import { log } from "@/lib/logger";
 import { assertTenantContext } from "@/lib/documents/gate";
 import { requireIntegrations } from "@/lib/integrations/gate";
 import {
-  assertTenant,
   accountEmailFrom,
   exchangeAuthorizationCode,
   missingScopes,
   OAuthExchangeError,
   refreshAccessToken,
+  validateIdTokenClaims,
   type TokenSet,
   type Transport,
 } from "@/lib/integrations/oauth-client";
@@ -93,6 +93,11 @@ export async function beginConnection(input: {
   url.searchParams.set("state", state);
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", method);
+  // The OIDC nonce, echoed back in the id_token. The same value is inside the
+  // signed state, so the token, the state and the verifier cookie all have to
+  // belong to one flow. Sending the state alone would leave the id_token
+  // unbound: one captured from an earlier flow passes every other check.
+  url.searchParams.set("nonce", nonce);
   // Forces a refresh token even on a re-consent, which Google otherwise omits —
   // and a connection without one stops syncing in an hour.
   if (input.provider.vendor === "google") {
@@ -186,7 +191,11 @@ export async function completeConnection(input: {
     transport: input.transport,
   });
 
-  assertTenant(input.provider, tokens.claims);
+  validateIdTokenClaims({
+    provider: input.provider,
+    claims: tokens.claims,
+    expectedNonce: state.nonce,
+  });
 
   const missing = missingScopes(input.provider, tokens.scope);
   if (missing.length > 0) {

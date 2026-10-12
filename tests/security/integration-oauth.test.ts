@@ -1,6 +1,6 @@
 // MUST be first: it sets the canary identifiers before src/lib/env.ts and
 // src/lib/integrations/providers.ts capture them at module load.
-import { CANARY_TENANT_ID } from "../helpers/microsoft-test-env";
+import { CANARY_CLIENT_ID, CANARY_TENANT_ID } from "../helpers/microsoft-test-env";
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -45,6 +45,12 @@ import { PROVIDERS } from "../../src/lib/integrations/providers";
 
 const ORIGIN = "http://localhost:3000";
 const TENANT = CANARY_TENANT_ID;
+/**
+ * The nonce every state in this suite carries, so a token fixture can echo it.
+ * Real flows use a random one per attempt; fixing it here is what lets a test
+ * assert the *mismatch* case deliberately rather than by accident.
+ */
+const FIXED_NONCE = "nonce-for-tests";
 
 let owner: Tenant;
 let other: Tenant;
@@ -56,6 +62,27 @@ function fakeEndpoint(body: Record<string, unknown>, status = 200): Transport {
       status,
       headers: { "content-type": "application/json" },
     });
+}
+
+/**
+ * A complete, valid claim set. Tests that care about one claim override it, so
+ * each failure is attributable to the claim under test rather than to a
+ * fixture that was never valid.
+ */
+function validClaims(overrides: Record<string, unknown> = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    tid: TENANT,
+    iss: `https://login.microsoftonline.com/${TENANT}/v2.0`,
+    aud: CANARY_CLIENT_ID,
+    exp: now + 3600,
+    iat: now,
+    nbf: now,
+    nonce: FIXED_NONCE,
+    sub: "subject-id",
+    preferred_username: "hello@artifactdigital.co",
+    ...overrides,
+  };
 }
 
 function idTokenWith(claims: Record<string, unknown>): string {
@@ -72,11 +99,7 @@ function microsoftSuccess(overrides: Record<string, unknown> = {}) {
     scope:
       "openid profile email offline_access https://graph.microsoft.com/User.Read " +
       "https://graph.microsoft.com/Mail.Read",
-    id_token: idTokenWith({
-      tid: TENANT,
-      iss: `https://login.microsoftonline.com/${TENANT}/v2.0`,
-      preferred_username: "hello@artifactdigital.co",
-    }),
+    id_token: idTokenWith(validClaims()),
     ...overrides,
   };
 }
@@ -190,7 +213,7 @@ describe("the callback refuses anything it cannot verify", () => {
 
   test("a tampered state is refused", async () => {
     const good = encodeState({
-      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: "n",
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
     });
     const parts = good.split(".");
     const tampered = `${parts[0]}.${parts[1]}.${"A".repeat(parts[2]!.length)}`;
@@ -202,7 +225,7 @@ describe("the callback refuses anything it cannot verify", () => {
     // so their mailbox lands in your workspace — or yours in theirs.
     const theirs = decodeState(
       encodeState({
-        provider: "outlook", workspaceId: other.workspaceId, userId: other.ownerId, nonce: "n",
+        provider: "outlook", workspaceId: other.workspaceId, userId: other.ownerId, nonce: FIXED_NONCE,
       }),
     );
     const reason = refusalReason(() => assertStateMatchesSession(theirs, session(owner)));
@@ -212,7 +235,7 @@ describe("the callback refuses anything it cannot verify", () => {
   test("a state naming a workspace I cannot reach is refused", async () => {
     const elsewhere = decodeState(
       encodeState({
-        provider: "outlook", workspaceId: other.workspaceId, userId: owner.ownerId, nonce: "n",
+        provider: "outlook", workspaceId: other.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
       }),
     );
     const reason = refusalReason(() => assertStateMatchesSession(elsewhere, session(owner)));
@@ -221,7 +244,7 @@ describe("the callback refuses anything it cannot verify", () => {
 
   test("an expired state is refused", async () => {
     const stale = encodeState({
-      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: "n",
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
     });
     const [, payload] = stale.split(".");
     const decoded = JSON.parse(Buffer.from(payload!, "base64url").toString("utf8"));
@@ -239,7 +262,7 @@ describe("the callback refuses anything it cannot verify", () => {
 
   test("a callback with no PKCE verifier is refused rather than downgraded", async () => {
     const state = encodeState({
-      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: "n",
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
     });
     await assert.rejects(
       () =>
@@ -271,7 +294,7 @@ describe("the callback refuses anything it cannot verify", () => {
       provider: "outlook",
       workspaceId: other.workspaceId,
       userId: other.ownerId,
-      nonce: "n",
+      nonce: FIXED_NONCE,
     });
     await assert.rejects(
       () =>
@@ -302,7 +325,7 @@ describe("the callback refuses anything it cannot verify", () => {
     // directly. A handshake that completes against an unexpected tenant must
     // not produce a stored connection.
     const state = encodeState({
-      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: "n",
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
     });
     const foreign = "11111111-2222-3333-4444-555555555555";
     const before = await db.integration.count({ where: { workspaceId: owner.workspaceId } });
@@ -318,11 +341,13 @@ describe("the callback refuses anything it cannot verify", () => {
             origin: ORIGIN,
             transport: fakeEndpoint(
               microsoftSuccess({
-                id_token: idTokenWith({
-                  tid: foreign,
-                  iss: `https://login.microsoftonline.com/${foreign}/v2.0`,
-                  preferred_username: "someone@elsewhere.test",
-                }),
+                id_token: idTokenWith(
+                  validClaims({
+                    tid: foreign,
+                    iss: `https://login.microsoftonline.com/${foreign}/v2.0`,
+                    preferred_username: "someone@elsewhere.test",
+                  }),
+                ),
               }),
             ),
           }),
@@ -375,7 +400,7 @@ describe("the callback refuses anything it cannot verify", () => {
     assert.deepEqual(declined, ["https://graph.microsoft.com/Mail.Read"]);
 
     const state = encodeState({
-      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: "n",
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
     });
     await assert.rejects(
       () =>
@@ -401,7 +426,7 @@ describe("the callback refuses anything it cannot verify", () => {
 
   test("a response with no refresh token is refused", async () => {
     const state = encodeState({
-      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: "n",
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
     });
     await assert.rejects(
       () =>
@@ -422,7 +447,7 @@ describe("the callback refuses anything it cannot verify", () => {
 
   test("the provider's own error text never reaches the customer", async () => {
     const state = encodeState({
-      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: "n",
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
     });
     try {
       await inContext(owner, () =>
@@ -452,10 +477,225 @@ describe("the callback refuses anything it cannot verify", () => {
   });
 });
 
+describe("the whole OIDC claim set is checked, not just the tenant", () => {
+  /**
+   * One test per claim, each starting from a complete and valid set and
+   * breaking exactly one thing. `tid` and `iss` alone were what the first
+   * version checked, and each of these is a token that passes those two.
+   */
+  const cases: { claim: string; claims: Record<string, unknown>; expect: RegExp }[] = [
+    {
+      claim: "audience — minted for a different application",
+      claims: { aud: "99999999-0000-0000-0000-000000000000" },
+      expect: /is not this client/,
+    },
+    {
+      claim: "audience — absent entirely",
+      claims: { aud: undefined },
+      expect: /is not this client/,
+    },
+    {
+      claim: "expiry — already expired",
+      claims: { exp: Math.floor(Date.now() / 1000) - 600 },
+      expect: /expired at/,
+    },
+    {
+      claim: "expiry — no exp claim, so it would never expire",
+      claims: { exp: undefined },
+      expect: /never expires/,
+    },
+    {
+      claim: "not-before — not yet valid",
+      claims: { nbf: Math.floor(Date.now() / 1000) + 600 },
+      expect: /not valid before/,
+    },
+    {
+      claim: "issued-at — dated in the future",
+      claims: { iat: Math.floor(Date.now() / 1000) + 600 },
+      expect: /in the future/,
+    },
+    {
+      claim: "nonce — from a different authorisation attempt",
+      claims: { nonce: "a-nonce-from-another-flow" },
+      expect: /nonce does not match/,
+    },
+    {
+      claim: "nonce — absent, so the token is bound to nothing",
+      claims: { nonce: undefined },
+      expect: /carries no nonce/,
+    },
+  ];
+
+  for (const { claim, claims, expect } of cases) {
+    test(`refuses a token whose ${claim}`, async () => {
+      const state = encodeState({
+        provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
+      });
+      const before = await db.integration.count({ where: { workspaceId: owner.workspaceId } });
+      let internal = "";
+      try {
+        await inContext(owner, () =>
+          completeConnection({
+            provider: PROVIDERS.outlook,
+            code: "any",
+            state,
+            codeVerifier: "verifier",
+            session: session(owner),
+            origin: ORIGIN,
+            transport: fakeEndpoint(
+              microsoftSuccess({ id_token: idTokenWith(validClaims(claims)) }),
+            ),
+          }),
+        );
+        assert.fail(`a token with a bad ${claim} was accepted`);
+      } catch (error) {
+        internal = String((error as { internal?: unknown }).internal ?? "");
+      }
+      assert.match(internal, expect, `the refusal was for the wrong reason: ${internal}`);
+      assert.equal(
+        await db.integration.count({ where: { workspaceId: owner.workspaceId } }),
+        before,
+        "a connection was stored despite the refusal",
+      );
+    });
+  }
+
+  test("a complete and valid claim set is accepted", async () => {
+    // The control. Without it, every test above would also pass if
+    // validateIdTokenClaims simply threw on everything.
+    const state = encodeState({
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
+    });
+    const result = await inContext(owner, () =>
+      completeConnection({
+        provider: PROVIDERS.outlook,
+        code: "any",
+        state,
+        codeVerifier: "verifier",
+        session: session(owner),
+        origin: ORIGIN,
+        transport: fakeEndpoint(microsoftSuccess()),
+      }),
+    );
+    assert.equal(result.accountEmail, "hello@artifactdigital.co");
+    await db.integration.deleteMany({ where: { workspaceId: owner.workspaceId } });
+  });
+});
+
+describe("replay, and a session that changed mid-flow", () => {
+  test("the same callback cannot be completed twice", async () => {
+    // The signed state is replayable until it expires — nothing records that
+    // it was used — so the single-use verifier cookie is what closes it. This
+    // asserts the half that lives in this layer: with the verifier gone, the
+    // second attempt is refused before the code is exchanged.
+    const state = encodeState({
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
+    });
+    const complete = (verifier: string | null) =>
+      inContext(owner, () =>
+        completeConnection({
+          provider: PROVIDERS.outlook,
+          code: "the-same-code",
+          state,
+          codeVerifier: verifier,
+          session: session(owner),
+          origin: ORIGIN,
+          transport: fakeEndpoint(microsoftSuccess()),
+        }),
+      );
+
+    await complete("verifier-present");
+    // The route clears the cookie on every exit path, so a replay arrives
+    // without it.
+    await assert.rejects(() => complete(null), /could not be verified/i);
+    assert.equal(
+      await db.integration.count({ where: { workspaceId: owner.workspaceId } }),
+      1,
+      "a replayed callback created a second connection",
+    );
+    await db.integration.deleteMany({ where: { workspaceId: owner.workspaceId } });
+  });
+
+  test("a replay that still has the verifier is refused by the provider, not by us", async () => {
+    // Worth being honest about where this boundary is: if a verifier somehow
+    // survived, our checks would pass and the *provider* would refuse the
+    // second exchange, because an authorisation code is single-use. That is a
+    // real defence but it is not ours, so it is asserted as the provider's.
+    const state = encodeState({
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
+    });
+    await assert.rejects(
+      () =>
+        inContext(owner, () =>
+          completeConnection({
+            provider: PROVIDERS.outlook,
+            code: "already-redeemed",
+            state,
+            codeVerifier: "verifier",
+            session: session(owner),
+            origin: ORIGIN,
+            transport: fakeEndpoint(
+              { error: "invalid_grant", error_description: "AADSTS54005: code already redeemed" },
+              400,
+            ),
+          }),
+        ),
+      /expired or been revoked/i,
+    );
+  });
+
+  test("signing in as somebody else mid-flow does not complete the connection", async () => {
+    // The person starts the flow, and by the time the provider sends them back
+    // the browser holds a different session. The state still verifies — it is
+    // correctly signed — so only the session comparison catches this.
+    const state = encodeState({
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
+    });
+    await assert.rejects(
+      () =>
+        inContext(other, () =>
+          completeConnection({
+            provider: PROVIDERS.outlook,
+            code: "any",
+            state,
+            codeVerifier: "verifier",
+            session: session(other),
+            origin: ORIGIN,
+            transport: fakeEndpoint(microsoftSuccess()),
+          }),
+        ),
+      /could not be verified/i,
+    );
+    assert.equal(await db.integration.count({ where: { workspaceId: other.workspaceId } }), 0);
+    assert.equal(await db.integration.count({ where: { workspaceId: owner.workspaceId } }), 0);
+  });
+
+  test("a state for one provider cannot complete another's callback", async () => {
+    const state = encodeState({
+      provider: "outlook_calendar", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
+    });
+    await assert.rejects(
+      () =>
+        inContext(owner, () =>
+          completeConnection({
+            provider: PROVIDERS.outlook,
+            code: "any",
+            state,
+            codeVerifier: "verifier",
+            session: session(owner),
+            origin: ORIGIN,
+            transport: fakeEndpoint(microsoftSuccess()),
+          }),
+        ),
+      /could not be verified/i,
+    );
+  });
+});
+
 describe("a successful connection, and ending it", () => {
   test("stores the token encrypted and never in clear", async () => {
     const state = encodeState({
-      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: "n",
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
     });
     const result = await inContext(owner, () =>
       completeConnection({
@@ -494,7 +734,7 @@ describe("a successful connection, and ending it", () => {
     });
 
     const state = encodeState({
-      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: "n2",
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
     });
     await inContext(owner, () =>
       completeConnection({

@@ -41,7 +41,15 @@ export type IdTokenClaims = {
   /** Tenant the token was minted by. Microsoft only. */
   tid?: string;
   iss?: string;
-  aud?: string;
+  /** Must be this client. A token minted for another app is not ours to trust. */
+  aud?: string | string[];
+  /** Seconds since the epoch. */
+  exp?: number;
+  iat?: number;
+  nbf?: number;
+  /** Echoed from the authorisation request, binding the token to this flow. */
+  nonce?: string;
+  sub?: string;
   /** The signed-in account, in rough order of usefulness. */
   preferred_username?: string;
   email?: string;
@@ -71,21 +79,43 @@ function credentialsFor(provider: ProviderConfig): { id: string; secret: string 
 }
 
 /**
- * Reads the id_token's claims **without verifying its signature**, and the
- * reason that is correct here is specific rather than general.
+ * Reads an id_token's claims **without verifying its signature**.
  *
- * This id_token did not arrive from a browser or any other party we do not
- * trust. It came back in the body of our own server-to-server POST to the
- * provider's token endpoint over TLS, with the client secret in the request.
- * OpenID Connect Core 3.1.3.7 says so explicitly: where the token is received
- * by direct communication with the token endpoint, TLS server validation may
- * be used in place of checking the signature.
+ * ## The exact conditions that make this sound, all of which must hold
  *
- * What is *not* optional is checking the claims, which is why
- * `assertTenant` exists below. Skipping the signature is a judgement about the
- * channel; skipping the claims would be a failure to check anything at all.
+ * OpenID Connect Core 3.1.3.7 ("ID Token Validation") permits skipping
+ * signature validation only for a token obtained by direct communication with
+ * the token endpoint, where TLS server authentication stands in for it. Every
+ * one of these is true of this call site and none of them is incidental:
+ *
+ *   1. **The token arrives in a response body we requested**, not in a request
+ *      somebody made to us. There is no attacker-chosen path into this
+ *      function.
+ *   2. **The connection is server-to-server HTTPS to a hard-coded host** from
+ *      `PROVIDERS` — not a URL from a discovery document, a redirect, or any
+ *      other value an attacker could influence. TLS certificate validation is
+ *      therefore what authenticates the issuer.
+ *   3. **The request carried our client secret**, so the response is to an
+ *      authenticated client.
+ *   4. **The claims are still fully validated** by `validateIdTokenClaims`
+ *      below — audience, expiry, not-before, issuer, tenant and nonce.
+ *      Skipping the signature is a judgement about the *channel*; skipping the
+ *      claims would be checking nothing at all.
+ *
+ * ## Where this must never be used
+ *
+ * **Never on a token that reached us through a browser** — a query parameter,
+ * a fragment, a form post, a header, a websocket frame, or anything a client
+ * supplied. In those cases none of conditions 1 to 3 holds: the channel proves
+ * nothing about who minted the document, so the signature is the only thing
+ * that does, and it must be verified against the provider's JWKS.
+ *
+ * This codebase has no implicit or hybrid flow and no client-side token
+ * handling, so no such path exists today. The name of this function says where
+ * it may be called from, and that is deliberate: `readIdTokenClaims` would
+ * have been an invitation to call it on anything shaped like a JWT.
  */
-function readIdTokenClaims(idToken: string | undefined): IdTokenClaims | null {
+function claimsFromDirectTokenResponse(idToken: string | undefined): IdTokenClaims | null {
   if (!idToken) return null;
   const parts = idToken.split(".");
   if (parts.length !== 3) return null;
@@ -97,6 +127,113 @@ function readIdTokenClaims(idToken: string | undefined): IdTokenClaims | null {
 }
 
 /**
+ * The full set of id_token checks, in one place so none can be forgotten.
+ *
+ * `tid` and `iss` alone are not OIDC validation, which is what the first
+ * version of this file settled for. A token can name the right tenant and
+ * still not be ours: minted for a different application, minted an hour ago
+ * and replayed, or minted for a different authorisation attempt entirely.
+ * Each check below answers one of those.
+ *
+ * Sixty seconds of clock skew is allowed on the time-based claims. Both
+ * providers' clocks are good, but a server a second behind must not refuse a
+ * valid connection.
+ */
+const CLOCK_SKEW_SECONDS = 60;
+
+export function validateIdTokenClaims(input: {
+  provider: ProviderConfig;
+  claims: IdTokenClaims | null;
+  /** The nonce sent in the authorisation request, where the vendor echoes it. */
+  expectedNonce: string;
+  now?: Date;
+}): void {
+  const { provider, claims } = input;
+  const now = Math.floor((input.now?.getTime() ?? Date.now()) / 1000);
+
+  // Microsoft issues an id_token whenever `openid` is requested, which it
+  // always is. Google does too. An absent one means something is wrong with
+  // the request, not that validation may be skipped.
+  if (!claims) {
+    throw new OAuthExchangeError(
+      "That connection could not be verified. Please try again.",
+      "no_id_token",
+      "the token response carried no id_token, so none of the claims could be checked",
+    );
+  }
+
+  // --- Audience -----------------------------------------------------------
+  // A token minted for another application is not ours to accept, even from
+  // the right tenant. `aud` may be a string or an array.
+  const expectedAudience =
+    provider.vendor === "microsoft" ? env.microsoftClientId : env.googleClientId;
+  if (!expectedAudience) {
+    throw new AppError("internal", "That connection is not available right now.", {
+      internal: `${provider.vendor} client id is unset, so the audience cannot be validated`,
+    });
+  }
+  const audiences = Array.isArray(claims.aud) ? claims.aud : claims.aud ? [claims.aud] : [];
+  if (!audiences.includes(expectedAudience)) {
+    throw new OAuthExchangeError(
+      "That connection could not be verified. Please try again.",
+      "audience_mismatch",
+      `id_token aud ${JSON.stringify(claims.aud)} is not this client`,
+    );
+  }
+
+  // --- Expiry and not-before ---------------------------------------------
+  if (typeof claims.exp !== "number") {
+    throw new OAuthExchangeError(
+      "That connection could not be verified. Please try again.",
+      "no_exp",
+      "id_token has no exp claim, so it never expires — refused",
+    );
+  }
+  if (claims.exp + CLOCK_SKEW_SECONDS < now) {
+    throw new OAuthExchangeError(
+      "That connection attempt took too long. Please try again.",
+      "id_token_expired",
+      `id_token expired at ${claims.exp}, now ${now}`,
+    );
+  }
+  if (typeof claims.nbf === "number" && claims.nbf - CLOCK_SKEW_SECONDS > now) {
+    throw new OAuthExchangeError(
+      "That connection could not be verified. Please try again.",
+      "id_token_not_yet_valid",
+      `id_token is not valid before ${claims.nbf}, now ${now}`,
+    );
+  }
+  if (typeof claims.iat === "number" && claims.iat - CLOCK_SKEW_SECONDS > now) {
+    throw new OAuthExchangeError(
+      "That connection could not be verified. Please try again.",
+      "id_token_future_dated",
+      `id_token was issued at ${claims.iat}, in the future relative to ${now}`,
+    );
+  }
+
+  // --- Nonce --------------------------------------------------------------
+  // Binds this token to this authorisation request. Without it, an id_token
+  // captured from an earlier flow satisfies every other check here.
+  if (!claims.nonce) {
+    throw new OAuthExchangeError(
+      "That connection could not be verified. Please try again.",
+      "no_nonce",
+      "id_token carries no nonce, so it cannot be tied to this authorisation request",
+    );
+  }
+  if (claims.nonce !== input.expectedNonce) {
+    throw new OAuthExchangeError(
+      "That connection could not be verified. Please start again.",
+      "nonce_mismatch",
+      "id_token nonce does not match the one sent in the authorisation request",
+    );
+  }
+
+  // --- Tenant and issuer --------------------------------------------------
+  assertTenant(provider, claims);
+}
+
+/**
  * Refuses a token that was not minted by the tenant we are configured for.
  *
  * The check this exists for: a single-tenant app on a tenant-specific
@@ -105,9 +242,22 @@ function readIdTokenClaims(idToken: string | undefined): IdTokenClaims | null {
  * importing a stranger's mailbox is the wrong response to "the handshake
  * completed". `/common` would have left nothing to compare against, which is
  * the real reason it was the wrong authority.
+ *
+ * Google issues no `tid`, and its issuer is fixed, so that is checked instead.
  */
 export function assertTenant(provider: ProviderConfig, claims: IdTokenClaims | null): void {
-  if (provider.vendor !== "microsoft") return;
+  if (provider.vendor === "google") {
+    const issuer = claims?.iss ?? "";
+    if (issuer !== "https://accounts.google.com" && issuer !== "accounts.google.com") {
+      throw new OAuthExchangeError(
+        "That connection could not be verified. Please try again.",
+        "issuer_mismatch",
+        `id_token issuer ${JSON.stringify(issuer)} is not Google`,
+      );
+    }
+    return;
+  }
+
   const expected = expectedMicrosoftTenant();
   if (!expected) {
     throw new AppError("internal", "That connection is not available right now.", {
@@ -218,7 +368,7 @@ async function post(
     refreshToken: typeof parsed.refresh_token === "string" ? parsed.refresh_token : null,
     expiresAt: new Date(Date.now() + expiresIn * 1000),
     scope: typeof parsed.scope === "string" ? parsed.scope : "",
-    claims: readIdTokenClaims(
+    claims: claimsFromDirectTokenResponse(
       typeof parsed.id_token === "string" ? parsed.id_token : undefined,
     ),
   };

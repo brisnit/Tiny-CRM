@@ -51,7 +51,15 @@ export type AuditAction =
   // is visible to the actor who wrote it. The customer they concern is carried
   // in `entityId`, as data rather than as a tenancy claim.
   | "admin.plan_grant_created" | "admin.plan_grant_revoked"
-  | "admin.account_suspended" | "admin.account_reinstated";
+  | "admin.account_suspended" | "admin.account_reinstated"
+  /**
+   * Connecting and disconnecting a mailbox or calendar.
+   *
+   * Audited because it changes what leaves a provider and enters the CRM, and
+   * because a disconnect can destroy imported data on request — which is
+   * exactly the kind of thing a customer asks about afterwards.
+   */
+  | "integration.connected" | "integration.disconnected";
 
 export type AuditEntry = {
   workspaceId?: string | null;

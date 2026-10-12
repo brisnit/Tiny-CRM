@@ -6,92 +6,70 @@ import { Button } from "@/components/ui/button";
 import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
-import { timeAgo } from "@/lib/dates";
 import { scopedRead } from "@/lib/data/scoped";
+import { integrationsEnabled } from "@/lib/integrations/gate";
+import { isConfigured, isOfferable, PROVIDERS } from "@/lib/integrations/providers";
+import { CALLBACK_MESSAGES, summarise, type ConnectionView } from "@/lib/integrations/status";
+import { DisconnectControl } from "@/components/app/integrations/disconnect-control";
 
 export const metadata = { title: "Integrations" };
+export const dynamic = "force-dynamic";
 
-/**
- * What each connector does and whether it can be offered yet.
- *
- * `availability` is not cosmetic. Gmail read access needs a Google scope that
- * only clears review after an annual third-party security assessment, so it is
- * listed and explicitly unavailable rather than offered and then failing at the
- * consent screen. Saying so is more useful than a disabled button with no
- * reason.
- */
-const PROVIDERS = [
-  {
-    id: "google_calendar",
-    name: "Google Calendar",
-    icon: Calendar,
-    availability: "soon",
-    blurb: "Bring meetings in and attach them to the right contact, company or project.",
-  },
-  {
-    id: "outlook_calendar",
-    name: "Outlook Calendar",
-    icon: Calendar,
-    availability: "soon",
-    blurb: "The same, for Microsoft 365 calendars.",
-  },
-  {
-    id: "outlook",
-    name: "Outlook email",
-    icon: Mail,
-    availability: "soon",
-    blurb: "Read-only. Imports threads and files them against the contact they are with.",
-  },
-  {
-    id: "gmail",
-    name: "Gmail",
-    icon: Mail,
-    availability: "blocked",
-    blurb: "Read-only. Imports threads and files them against the contact they are with.",
-  },
-] as const;
+const ICONS = { email: Mail, calendar: Calendar } as const;
 
-const CONNECTED_TONE =
-  "bg-emerald-50 text-emerald-800 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-900";
-
-/**
- * Every stored status, in the words a customer should read.
- *
- * Keyed by the column's own values so an unrecognised one falls through to
- * "Not connected" rather than being rendered raw. `mock` is deliberately not
- * "Connected", not "Active" and not blank.
- */
-const STATUS_LABEL: Record<string, string> = {
-  none: "Not connected",
-  connected: "Connected",
-  disconnected: "Not connected",
-  error: "Needs attention",
-  reauth_required: "Reconnect needed",
-  mock: "Demo data — not a real connection",
+const TONES: Record<string, string | undefined> = {
+  connected:
+    "bg-emerald-50 text-emerald-800 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-900",
+  attention:
+    "bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-900",
+  demo: undefined,
+  none: undefined,
 };
 
-export default async function IntegrationSettings() {
+export default async function IntegrationSettings({
+  searchParams,
+}: {
+  searchParams: Promise<{ connection?: string }>;
+}) {
   const actor = await requireActor();
   const read = await resolveReadScope(await readScope());
+  const params = await searchParams;
+  const banner = params.connection ? CALLBACK_MESSAGES[params.connection] : undefined;
 
-  const connected = await scopedRead(read, () =>
-    db.integration.findMany({
+  // One workspace owns a connection, and it has to be an explicit one rather
+  // than "whichever is first". With a single workspace in scope that is
+  // unambiguous; with several, the connection belongs to the one being viewed.
+  const workspaceId = read.workspaceIds[0] ?? null;
+
+  const [connections, available] = await scopedRead(read, async () => [
+    await db.integration.findMany({
       where: { workspaceId: { in: read.workspaceIds }, userId: actor.identity.id },
-      select: { provider: true, status: true, accountEmail: true, lastSyncAt: true },
-      distinct: ["provider"],
+      select: {
+        provider: true, status: true, accountEmail: true, lastSyncAt: true,
+        syncState: true, backfillCompletedAt: true, lastError: true,
+      },
     }),
-  );
-  const byProvider = new Map(connected.map((c) => [c.provider, c]));
+    workspaceId ? await integrationsEnabled(workspaceId) : false,
+  ]);
 
-  const [emailCount, eventCount] = await scopedRead(read, () =>
-    Promise.all([
-      db.emailMessage.count({ where: { workspaceId: { in: read.workspaceIds } } }),
-      db.calendarEvent.count({ where: { workspaceId: { in: read.workspaceIds } } }),
-    ]),
+  const byProvider = new Map<string, ConnectionView>(
+    connections.map((c) => [c.provider, c as ConnectionView]),
   );
 
   return (
     <div className="space-y-5">
+      {banner ? (
+        <Panel>
+          <p
+            className={`p-4 text-[13px] leading-relaxed ${
+              banner.tone === "ok" ? "text-body" : "text-amber-800 dark:text-amber-300"
+            }`}
+          >
+            {banner.text}
+          </p>
+        </Panel>
+      ) : null}
+
       <Panel>
         <PanelHeader
           title="Email & calendar"
@@ -99,54 +77,78 @@ export default async function IntegrationSettings() {
           icon={<Plug />}
         />
         <ul className="divide-y divide-hairline border-t border-hairline">
-          {PROVIDERS.map((provider) => {
-            const state = byProvider.get(provider.id);
+          {Object.values(PROVIDERS).map((provider) => {
+            const Icon = ICONS[provider.kind];
+            const state = summarise(byProvider.get(provider.id) ?? null);
+            const connection = byProvider.get(provider.id);
+            const offerable = isOfferable(provider);
+            const configured = isConfigured(provider);
+
             return (
               <li key={provider.id} className="flex flex-wrap items-start gap-3 px-4 py-3.5">
                 <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-sunken text-faint">
-                  <provider.icon className="size-4" />
+                  <Icon className="size-4" />
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-[13.5px] font-semibold text-body">{provider.name}</p>
-                    {/*
-                      The green tone is reserved for `connected`, which only a
-                      real OAuth grant writes. `mock` is seeded demonstration
-                      data and says so in plain words with no tone at all — a
-                      status badge is the one place a customer will take at face
-                      value, so it must not imply a connection that does not
-                      exist. Any other stored status is shown through
-                      STATUS_LABEL rather than printed raw, so an internal value
-                      cannot leak into the interface.
-                    */}
-                    <Badge tone={state?.status === "connected" ? CONNECTED_TONE : undefined}>
-                      {STATUS_LABEL[state?.status ?? "none"] ?? "Not connected"}
-                    </Badge>
+                    <p className="text-[13.5px] font-semibold text-body">{provider.label}</p>
+                    <Badge tone={TONES[state.tone]}>{state.label}</Badge>
                   </div>
-                  <p className="mt-1 text-[12.5px] leading-relaxed text-muted">{provider.blurb}</p>
-                  {state?.accountEmail ? (
-                    <p className="mt-1 text-[11.5px] text-faint">
-                      {state.accountEmail} · last synced {timeAgo(state.lastSyncAt)}
+                  {connection?.accountEmail ? (
+                    <p className="mt-1 text-[11.5px] text-faint">{connection.accountEmail}</p>
+                  ) : null}
+                  {/*
+                    The second line exists so "Connected" cannot be read as
+                    "your mail is in here". See src/lib/integrations/status.ts.
+                  */}
+                  {state.importLine ? (
+                    <p className="mt-1 text-[12.5px] leading-relaxed text-muted">{state.importLine}</p>
+                  ) : (
+                    <p className="mt-1 text-[12.5px] leading-relaxed text-muted">{provider.blurb}</p>
+                  )}
+                  {state.problem ? (
+                    <p className="mt-1 text-[12px] leading-relaxed text-amber-800 dark:text-amber-300">
+                      {state.problem}
+                    </p>
+                  ) : null}
+                  {!offerable ? (
+                    <p className="mt-1 text-[12px] leading-relaxed text-faint">
+                      {provider.blockedReason}
                     </p>
                   ) : null}
                 </div>
-                {/*
-                  Disabled with a reason attached, rather than a dead control.
-                  "Connect" is not offered for a provider whose consent screen
-                  would refuse — see `availability` on PROVIDERS.
-                */}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled
-                  title={
-                    provider.availability === "blocked"
-                      ? "Awaiting Google's review of restricted Gmail access"
-                      : "Awaiting provider review — not yet available to connect"
-                  }
-                >
-                  {provider.availability === "blocked" ? "Not yet available" : "Coming soon"}
-                </Button>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  {state.canDisconnect ? (
+                    <DisconnectControl provider={provider.id} label={provider.label} />
+                  ) : null}
+                  {state.canConnect ? (
+                    offerable && configured && available ? (
+                      <form method="post" action={`/api/integrations/${provider.vendor}/start`}>
+                        <input type="hidden" name="provider" value={provider.id} />
+                        <input type="hidden" name="workspaceId" value={workspaceId ?? ""} />
+                        <Button size="sm" variant="outline" type="submit">
+                          {connection ? "Reconnect" : "Connect"}
+                        </Button>
+                      </form>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled
+                        title={
+                          !offerable
+                            ? "Awaiting the provider's review"
+                            : !configured
+                              ? "This environment has no credentials for that provider"
+                              : "Not switched on for this workspace"
+                        }
+                      >
+                        {offerable ? "Unavailable" : "Not yet available"}
+                      </Button>
+                    )
+                  ) : null}
+                </div>
               </li>
             );
           })}
@@ -154,64 +156,36 @@ export default async function IntegrationSettings() {
       </Panel>
 
       <Panel>
-        <PanelHeader
-          title="What connecting does"
-          description="Read-only in this release"
-        />
+        <PanelHeader title="What connecting does" description="Read-only in this release" />
         <div className="space-y-3 border-t border-hairline p-4 text-[12.5px] leading-relaxed text-muted">
           <p>
             Connecting brings your messages and meetings <strong className="font-semibold text-body">in</strong>.
-            Tiny does not send email, create events or change anything in your mailbox or
-            calendar — this release reads only.
+            Tiny does not send email, create events or change anything in your mailbox or calendar.
           </p>
           <p>
-            <strong className="font-semibold text-body">What you import stays yours.</strong>{" "}
-            Imported mail and meetings are visible to you alone, even to people who share this
-            workspace. They become visible to the workspace only when you attach one to a
-            contact, company, deal or project yourself.
+            <strong className="font-semibold text-body">Connecting is not importing.</strong> Granting
+            access lets Tiny read; it does not move anything by itself. Each connection above says
+            whether anything has been imported yet, and nothing has until it says so.
+          </p>
+          <p>
+            <strong className="font-semibold text-body">What you import stays yours.</strong> Imported
+            mail and meetings are visible to you alone, even to people who share this workspace. They
+            become visible to the workspace only when you attach one to a contact, company, deal or
+            project yourself.
           </p>
           <p>
             <strong className="font-semibold text-body">Imported mail is not sent to Tiny AI.</strong>{" "}
-            Connecting a mailbox is not permission to send your correspondence to a model
-            provider, so imported messages and meetings are excluded from the daily brief,
-            from answers and from everything else that leaves this server.
+            Connecting a mailbox is not permission to send your correspondence to a model provider, so
+            imported messages and meetings are excluded from the daily brief, from answers and from
+            everything else that leaves this server.
           </p>
           <p>
-            You can disconnect at any time. Disconnecting stops any sync that is queued or
-            already running, and asks you what to do with what has already been imported —
-            nothing is deleted without you saying so.
+            Disconnecting destroys the stored access immediately and stops any import that is queued or
+            already running. It asks what to do with anything already imported — nothing is deleted
+            unless you say so.
           </p>
         </div>
       </Panel>
-
-      <Panel>
-        <PanelHeader
-          title="Availability"
-          description="Why some of these cannot be switched on yet"
-        />
-        <div className="space-y-3 border-t border-hairline p-4 text-[12.5px] leading-relaxed text-muted">
-          <p>
-            The four connectors above need an application registered with Google and with
-            Microsoft, and each provider reviews that application before the public may grant
-            it access. Calendar and Outlook mail need that review. Gmail additionally needs a
-            scope Google classes as restricted, which it grants only after an annual
-            independent security assessment, so Gmail will arrive after the others.
-          </p>
-          {emailCount + eventCount > 0 ? (
-            <p>
-              This workspace currently holds{" "}
-              <strong className="font-semibold text-body">{emailCount}</strong>{" "}
-              {emailCount === 1 ? "message" : "messages"} and{" "}
-              <strong className="font-semibold text-body">{eventCount}</strong>{" "}
-              {eventCount === 1 ? "meeting" : "meetings"} of seeded example data, so the
-              contact and project pages have something to show. None of it came from a real
-              mailbox, and it will not be mixed up with anything that does: imported records
-              are marked as imported at the moment they arrive.
-            </p>
-          ) : null}
-        </div>
-      </Panel>
-
     </div>
   );
 }
