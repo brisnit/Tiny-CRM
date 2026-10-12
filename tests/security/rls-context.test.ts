@@ -108,6 +108,16 @@ const EXCEPTIONS: Record<string, string> = {
     "workspace and the owner is who pays for it. Reading the caller's plan " +
     "instead would refuse a Free member of a Pro workspace and admit a Pro " +
     "member of a Free one. Returns a boolean, never a row",
+  "src/lib/integrations/gate.ts":
+    "integrationsEntitled reads the workspace OWNER's plan, for exactly the " +
+    "reason documents/gate.ts does: the capability belongs to the workspace and " +
+    "the owner is who pays, so reading the caller's plan would refuse a Free " +
+    "member of a Pro workspace and admit a Pro member of a Free one. It is " +
+    "reached only through requireIntegrations/integrationsEnabled, both of which " +
+    "call assertTenantContext first and throw rather than read a workspace-scoped " +
+    "flag outside a context. Opening a context here would be wrong: the caller " +
+    "has earned the workspace from their own memberships, and a gate that " +
+    "establishes its own authority is not a gate. Returns a boolean, never a row",
   "src/lib/documents/read.ts":
     "every export begins with requireDocumentIntelligence(), which asserts a " +
     "tenant context before any read, for the same reason as ingest.ts",

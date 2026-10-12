@@ -18,7 +18,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +99,8 @@ model User {
   notifications       Notification[]
   savedViews          SavedView[]
   integrations        Integration[]
+  ownedEmails         EmailMessage[]  @relation("EmailOwner")
+  ownedEvents         CalendarEvent[] @relation("EventOwner")
   aiMessages          AiMessage[]
   usage               UsageCounter[]
   auditEvents         AuditLog[]            @relation("AuditActor")
@@ -1374,23 +1376,70 @@ model Notification {
 model Integration {
   id           String    @id @default(cuid())
   workspaceId  String
+  /// The connecting person. A connection belongs to them, not to the workspace:
+  /// see the RLS policy, which scopes this table to `app_user_id()` rather than
+  /// to workspace membership. A teammate must not be able to read somebody
+  /// else's mailbox connection, let alone its credentials.
   userId       String
   /// gmail | outlook | google_calendar | outlook_calendar
   provider     String
-  /// connected | disconnected | error | mock
+  /// connected | disconnected | error | reauth_required | mock
+  ///
+  /// `mock` is the seeded demonstration data and means exactly that; it is
+  /// never written by a real connection and the UI must not render it as one.
+  /// `reauth_required` is distinct from `error`: the token is gone or the grant
+  /// was revoked, so the remedy is the customer reconnecting rather than us
+  /// retrying.
   status       String    @default("disconnected")
   accountEmail String?
   scopes       String?
-  /// Encrypted at rest by src/lib/crypto.ts before it ever reaches this column.
+  /// Encrypted at rest by src/lib/crypto.ts, purpose `integration-credentials`,
+  /// before it ever reaches this column. Holds the access token, the refresh
+  /// token and the grant's own metadata as one encrypted JSON document.
   credentials  String?
+  /// When the access token expires, in clear, so a refresh can be scheduled
+  /// without decrypting anything. Not a secret: a timestamp grants nothing.
+  tokenExpiresAt DateTime?
   connectedAt  DateTime?
+  disconnectedAt DateTime?
   lastSyncAt   DateTime?
   syncCursor   String?
+  /// idle | backfilling | syncing
+  syncState    String    @default("idle")
+  /// Set when the bounded initial import has finished, so incremental sync
+  /// knows it may rely on the cursor.
+  backfillCompletedAt DateTime?
+  /// The last failure, as something a customer can act on. Never a provider
+  /// response body, a token or a URL carrying one.
+  lastError    String?
+  lastErrorAt  DateTime?
+  /// Bumped by every connect, disconnect and reconnect.
+  ///
+  /// This is how disconnecting stops work that is already queued. A sync job
+  /// carries the generation it was enqueued under and exits if it no longer
+  /// matches, so a job that was mid-flight, or sitting in the queue, or being
+  /// retried with backoff cannot keep importing into a connection the customer
+  /// has already removed. Cancelling queue rows alone cannot achieve that — a
+  /// claimed job is already running, and `DomainEvent` rows are not the only
+  /// place a retry can live.
+  syncGeneration Int     @default(0)
+
+  createdAt DateTime @default(now())
+  /// `@default(now())` as well as `@updatedAt`, because this column is being
+  /// *added* to a table that already has rows. Prisma's `@updatedAt` is applied
+  /// client-side, so without a database default the generated migration adds a
+  /// NOT NULL column with no value for existing rows and fails — which the
+  /// first generated version of this migration did.
+  updatedAt DateTime @default(now()) @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  emails EmailMessage[]
+  events CalendarEvent[]
+
   @@unique([workspaceId, userId, provider])
+  @@index([status, tokenExpiresAt])
 }
 
 model EmailMessage {
@@ -1417,19 +1466,58 @@ model EmailMessage {
   dealId    String?
   projectId String?
 
+  /// Which connection imported this, or null for seeded demonstration data and
+  /// for rows whose connection has since been removed.
+  ///
+  /// `SetNull` rather than `Cascade` on purpose: disconnecting a mailbox must
+  /// not silently delete a year of correspondence a customer has been filing
+  /// against deals. The row is kept and unlinked, and `source` below is what
+  /// still records where it came from.
+  integrationId String?
+  /// seed | imported
+  ///
+  /// Immutable provenance, and deliberately *not* derived from
+  /// `integrationId`. Disconnecting nulls the link, so a derived test would
+  /// quietly reclassify imported mail as ordinary CRM data — and the one thing
+  /// that must never happen to imported mail is becoming eligible for AI
+  /// context by accident.
+  source    String  @default("seed")
+  /// The person whose mailbox this came from. Null for seeded data.
+  ownerUserId String?
+  /// private | workspace
+  ///
+  /// Imported mail starts `private`: visible to `ownerUserId` alone, never to
+  /// the rest of the workspace. Workspace membership is not consent to read a
+  /// colleague's inbox. It becomes `workspace` only when that person
+  /// deliberately shares the thread.
+  visibility String  @default("workspace")
+  sharedAt   DateTime?
+  sharedById String?
+
   createdAt DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  contact   Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  company   Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  deal      Deal?     @relation(fields: [dealId], references: [id], onDelete: SetNull)
-  project   Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  integration Integration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  owner       User?        @relation("EmailOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
-  @@unique([provider, externalId])
+  /// Scoped to the workspace, not global.
+  ///
+  /// This was `[provider, externalId]` across every tenant. One Google Calendar
+  /// event carries the same provider id in every invitee's calendar and a mail
+  /// thread can reach two customers, so the second workspace to import a shared
+  /// item hit a unique violation and silently imported nothing. Proven against
+  /// PostgreSQL: 23505 on EmailMessage_provider_externalId_key.
+  @@unique([workspaceId, provider, externalId])
   @@index([workspaceId, sentAt])
   @@index([threadId, sentAt])
   @@index([contactId, sentAt])
   @@index([workspaceId, needsReply])
+  @@index([integrationId, sentAt])
+  @@index([ownerUserId, sentAt])
 }
 
 model CalendarEvent {
@@ -1456,21 +1544,38 @@ model CalendarEvent {
   dealId    String?
   projectId String?
 
+  /// See the same fields on EmailMessage for why each of these exists.
+  integrationId String?
+  /// seed | imported — immutable provenance, not derived from integrationId.
+  source      String  @default("seed")
+  ownerUserId String?
+  /// private | workspace. Imported events start private to `ownerUserId`.
+  visibility  String  @default("workspace")
+  sharedAt    DateTime?
+  sharedById  String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  organizer User?           @relation("EventOrganizer", fields: [organizerId], references: [id], onDelete: SetNull)
-  contact   Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  company   Company?        @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  deal      Deal?           @relation(fields: [dealId], references: [id], onDelete: SetNull)
-  project   Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  attendees EventAttendee[]
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  integration Integration?    @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  owner       User?           @relation("EventOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  organizer   User?           @relation("EventOrganizer", fields: [organizerId], references: [id], onDelete: SetNull)
+  contact     Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  company     Company?        @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal        Deal?           @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  project     Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  attendees   EventAttendee[]
 
-  @@unique([provider, externalId])
+  /// Workspace-scoped: the same Google event id appears in every invitee's
+  /// calendar, so a global constraint made a shared meeting importable by
+  /// exactly one customer.
+  @@unique([workspaceId, provider, externalId])
   @@index([workspaceId, startAt])
   @@index([projectId, startAt])
   @@index([contactId, startAt])
+  @@index([integrationId, startAt])
+  @@index([ownerUserId, startAt])
 }
 
 model EventAttendee {

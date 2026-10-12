@@ -1,4 +1,5 @@
 import "server-only";
+import { EXCLUDE_IMPORTED } from "@/lib/ai/imported-data";
 import { POST_SUBMISSION_STATUSES, TERMINAL_SUBMISSION_STATUSES } from "@/lib/enums";
 
 import { db } from "@/lib/db";
@@ -148,7 +149,13 @@ export async function findRecommendations(scope: ContextScope, limit = 25): Prom
         take: PER_CHECK,
       }),
       db.emailMessage.findMany({
-        where: { ...where, needsReply: true, sentAt: { lte: new Date(now.getTime() - 3 * 86_400_000) } },
+        // EXCLUDE_IMPORTED — see src/lib/ai/imported-data.ts.
+        where: {
+          ...where,
+          ...EXCLUDE_IMPORTED,
+          needsReply: true,
+          sentAt: { lte: new Date(now.getTime() - 3 * 86_400_000) },
+        },
         select: { id: true, subject: true, sentAt: true, contact: { select: { id: true, fullName: true } } },
         orderBy: { sentAt: "asc" },
         take: PER_CHECK,

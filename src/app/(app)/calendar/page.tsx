@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { NewRecordButton } from "@/components/app/new-record-button";
+import { visibleToUser } from "@/lib/integrations/visibility";
 import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
@@ -23,7 +24,11 @@ export default async function CalendarPage() {
   const [upcoming, past, unanswered, integrations] = await scopedRead(read, async () => {
     return Promise.all([
       db.calendarEvent.findMany({
-        where: { workspaceId: { in: read.workspaceIds }, startAt: { gte: now } },
+        where: {
+          workspaceId: { in: read.workspaceIds },
+          startAt: { gte: now },
+          ...visibleToUser(read.userId),
+        },
         select: {
           id: true, title: true, startAt: true, endAt: true, meetingUrl: true, location: true,
           contact: { select: { id: true, fullName: true } },
@@ -35,7 +40,11 @@ export default async function CalendarPage() {
         take: 40,
       }),
       db.calendarEvent.findMany({
-        where: { workspaceId: { in: read.workspaceIds }, startAt: { lt: now } },
+        where: {
+          workspaceId: { in: read.workspaceIds },
+          startAt: { lt: now },
+          ...visibleToUser(read.userId),
+        },
         select: {
           id: true, title: true, startAt: true,
           contact: { select: { id: true, fullName: true } },
@@ -45,7 +54,14 @@ export default async function CalendarPage() {
         take: 10,
       }),
       db.emailMessage.findMany({
-        where: { workspaceId: { in: read.workspaceIds }, needsReply: true },
+        // Imported mail is private to its owner — see
+        // src/lib/integrations/visibility.ts. Seeded rows are workspace-visible
+        // and unaffected.
+        where: {
+          workspaceId: { in: read.workspaceIds },
+          needsReply: true,
+          ...visibleToUser(read.userId),
+        },
         select: {
           id: true, subject: true, snippet: true, sentAt: true, direction: true,
           contact: { select: { id: true, fullName: true } },

@@ -72,6 +72,17 @@ export type PlanCapabilities = {
    * with page citations. Requires the `files`, `ai` and `documentAi` flags too.
    */
   documentQa: boolean;
+  /**
+   * Connecting a mailbox or calendar so its messages and meetings appear
+   * against CRM records. Requires the `integrations` flag too.
+   *
+   * Gated at Pro and the legacy plans, for the same reason `documentQa` is: a
+   * connection costs real compute on every poll and consumes a provider quota
+   * that is shared across all customers, so it is not something to hand to
+   * every free account the day it ships. It is also the feature a buyer at this
+   * tier is actually paying for.
+   */
+  emailCalendarSync: boolean;
 };
 
 export const UNLIMITED = Number.POSITIVE_INFINITY;
@@ -160,7 +171,7 @@ export const PLANS: Record<PlanId, Plan> = {
       customFields: 3,
       seats: 1,
     },
-    capabilities: { fileUploads: false, documentQa: false },
+    capabilities: { fileUploads: false, documentQa: false, emailCalendarSync: false },
     features: [
       "1 workspace, just you",
       "100 contacts and 50 companies",
@@ -193,7 +204,7 @@ export const PLANS: Record<PlanId, Plan> = {
       customFields: 20,
       seats: 3,
     },
-    capabilities: { fileUploads: true, documentQa: false },
+    capabilities: { fileUploads: true, documentQa: false, emailCalendarSync: false },
     features: [
       "3 workspaces, up to 3 people in each",
       "2,000 contacts and 750 companies",
@@ -229,7 +240,7 @@ export const PLANS: Record<PlanId, Plan> = {
     // documentQa is true here, and still dark until the `documentAi` flag is
     // enabled. The plan grants the entitlement; the flag decides whether the
     // capability exists yet. Advertising copy is gated on the flag, not on this.
-    capabilities: { fileUploads: true, documentQa: true },
+    capabilities: { fileUploads: true, documentQa: true, emailCalendarSync: true },
     features: [
       "Everything in Plus, with more room",
       "10 workspaces, up to 10 people in each",
@@ -273,7 +284,7 @@ export const PLANS: Record<PlanId, Plan> = {
       customFields: UNLIMITED,
       seats: 5,
     },
-    capabilities: { fileUploads: true, documentQa: true },
+    capabilities: { fileUploads: true, documentQa: true, emailCalendarSync: true },
     features: ["Your original Pro entitlements, preserved"],
   },
   legacy_lifetime: {
@@ -297,7 +308,7 @@ export const PLANS: Record<PlanId, Plan> = {
       customFields: UNLIMITED,
       seats: 5,
     },
-    capabilities: { fileUploads: true, documentQa: true },
+    capabilities: { fileUploads: true, documentQa: true, emailCalendarSync: true },
     features: ["Everything you paid once for, preserved"],
   },
 };

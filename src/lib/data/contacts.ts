@@ -1,5 +1,6 @@
 import "server-only";
 
+import { visibleToUser } from "@/lib/integrations/visibility";
 import type { ReadScope } from "@/lib/auth/access";
 import { contains, db, isSearchable } from "@/lib/db";
 import { scoreRelationship } from "@/lib/scoring";
@@ -255,11 +256,15 @@ export async function getContact(read: ReadScope, id: string) {
           take: 30,
         },
         emails: {
+          // Imported mail is private to the person whose mailbox it came from.
+          // Applied here as well as in RLS: see src/lib/integrations/visibility.ts.
+          where: visibleToUser(read.userId),
           select: { id: true, subject: true, snippet: true, sentAt: true, direction: true, needsReply: true },
           orderBy: { sentAt: "desc" },
           take: 6,
         },
         events: {
+          where: visibleToUser(read.userId),
           select: { id: true, title: true, startAt: true, meetingUrl: true },
           orderBy: { startAt: "desc" },
           take: 6,

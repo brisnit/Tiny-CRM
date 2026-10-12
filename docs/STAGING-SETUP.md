@@ -80,6 +80,7 @@ node scripts/apply-sql.mjs prisma/postgres/012_grant_integrity.sql
 node scripts/apply-sql.mjs prisma/postgres/013_membership_write_integrity.sql
 node scripts/apply-sql.mjs prisma/postgres/014_document_intelligence.sql
 node scripts/apply-sql.mjs prisma/postgres/015_platform_admin_policies.sql
+node scripts/apply-sql.mjs prisma/postgres/016_integration_privacy.sql
 ```
 
 `003` is not optional. `Company.primaryContactId` and `Contact.companyId` form a

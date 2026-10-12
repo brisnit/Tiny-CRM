@@ -250,6 +250,37 @@ Gated on `app.user_id` **and** the workspace when one is set. A saved view belon
 to a person, not to a workspace, and a workspace filter alone would show one
 colleague another's.
 
+### Narrowed by a RESTRICTIVE policy — `Integration`, `EmailMessage`, `CalendarEvent`
+
+Workspace membership is not consent to read a colleague's inbox. These three
+keep their ordinary `tenant_isolation` policy and are then narrowed by
+`prisma/postgres/016_integration_privacy.sql`:
+
+| Table | Additional condition |
+|---|---|
+| `Integration` | `"userId" = app_user_id()` — a connection belongs to the person who made it, and nobody else can read it or its `credentials` |
+| `EmailMessage` | `"visibility" <> 'private' OR "ownerUserId" = app_user_id()` |
+| `CalendarEvent` | the same |
+
+**They are RESTRICTIVE, and that is the whole technique.** PostgreSQL combines
+PERMISSIVE policies with `OR`, so adding a second permissive policy to narrow
+access *widens* it instead — the most natural-looking way to write this is also
+backwards. RESTRICTIVE policies are `AND`ed, so they can only subtract.
+
+They live in their own file rather than as an edit to `tenant_isolation` in
+`010_record_scope.sql` for a second reason: 010 drops and recreates that policy,
+and an operator re-applies 010 after any migration that adds a table. The
+narrowing would silently vanish, with every test still green because the
+permissive policy alone looks right.
+
+Imported rows start `private`. A row becomes workspace-visible only when its
+owner deliberately shares it. Seeded demonstration rows are `workspace` and
+behave exactly as they did before this existed.
+
+`src/lib/integrations/visibility.ts` applies the same rule in the application,
+which is the layer that exists on SQLite and the layer that stops a page asking
+for rows the database will then filter out of a `take: 50`.
+
 ### Nullable-workspace — `AiInsight`, `AuditLog`, `SecurityAlert`, `FeatureFlag`
 
 A `NULL` workspace means "not tied to one", and each needs its own answer:
