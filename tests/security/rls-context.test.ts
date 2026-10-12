@@ -108,6 +108,16 @@ const EXCEPTIONS: Record<string, string> = {
     "workspace and the owner is who pays for it. Reading the caller's plan " +
     "instead would refuse a Free member of a Pro workspace and admit a Pro " +
     "member of a Free one. Returns a boolean, never a row",
+  "src/lib/integrations/connections.ts":
+    "every export asserts a tenant context before touching Integration, " +
+    "EmailMessage or CalendarEvent: completeConnection through " +
+    "requireIntegrations(), and disconnectConnection/accessTokenFor/" +
+    "generationIsCurrent through assertTenantContext() directly. It does not " +
+    "open one, for the reason documents/retrieve.ts gives: the context belongs " +
+    "to the route or the job, which earned the workspace from the caller's own " +
+    "memberships, and a module that opens its own grants itself the scope it " +
+    "should be verifying. Writes are scoped to one Integration row by id, and " +
+    "the deletes are scoped to that row's integrationId",
   "src/lib/integrations/gate.ts":
     "integrationsEntitled reads the workspace OWNER's plan, for exactly the " +
     "reason documents/gate.ts does: the capability belongs to the workspace and " +
