@@ -45,7 +45,7 @@ CREATE INDEX "CalendarEvent_projectId_startAt_idx" ON "CalendarEvent"("projectId
 CREATE INDEX "CalendarEvent_contactId_startAt_idx" ON "CalendarEvent"("contactId", "startAt");
 CREATE INDEX "CalendarEvent_integrationId_startAt_idx" ON "CalendarEvent"("integrationId", "startAt");
 CREATE INDEX "CalendarEvent_ownerUserId_startAt_idx" ON "CalendarEvent"("ownerUserId", "startAt");
-CREATE UNIQUE INDEX "CalendarEvent_workspaceId_provider_externalId_key" ON "CalendarEvent"("workspaceId", "provider", "externalId");
+CREATE UNIQUE INDEX "CalendarEvent_workspaceId_ownerUserId_provider_externalId_key" ON "CalendarEvent"("workspaceId", "ownerUserId", "provider", "externalId");
 CREATE TABLE "new_EmailMessage" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "workspaceId" TEXT NOT NULL,
@@ -90,7 +90,7 @@ CREATE INDEX "EmailMessage_contactId_sentAt_idx" ON "EmailMessage"("contactId", 
 CREATE INDEX "EmailMessage_workspaceId_needsReply_idx" ON "EmailMessage"("workspaceId", "needsReply");
 CREATE INDEX "EmailMessage_integrationId_sentAt_idx" ON "EmailMessage"("integrationId", "sentAt");
 CREATE INDEX "EmailMessage_ownerUserId_sentAt_idx" ON "EmailMessage"("ownerUserId", "sentAt");
-CREATE UNIQUE INDEX "EmailMessage_workspaceId_provider_externalId_key" ON "EmailMessage"("workspaceId", "provider", "externalId");
+CREATE UNIQUE INDEX "EmailMessage_workspaceId_ownerUserId_provider_externalId_key" ON "EmailMessage"("workspaceId", "ownerUserId", "provider", "externalId");
 CREATE TABLE "new_Integration" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "workspaceId" TEXT NOT NULL,

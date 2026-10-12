@@ -233,7 +233,131 @@ describe("de-duplication is scoped to the workspace, not to every customer", () 
     assert.equal(count, 2, "two tenants could not both hold the same provider id");
   });
 
-  test("but one workspace still cannot hold it twice", pgOnly, async () => {
+  test("two colleagues in ONE workspace can each import the same meeting", pgOnly, async () => {
+    // The defect that workspace-scoping alone did not fix, and the reason the
+    // key includes the owner. One Google Calendar event carries the same event
+    // id in every invitee's calendar, so two connected teammates at one meeting
+    // collided inside a single workspace:
+    //
+    //   colleague A imported the meeting
+    //   colleague B REFUSED: 23505 on CalendarEvent_workspaceId_provider_externalId_key
+    //
+    // An upsert on that key would have been worse than a refusal: it would have
+    // overwritten A's row and moved its ownership to B.
+    const shared = { provider: "google_calendar", externalId: "ONE-MEETING-TWO-ATTENDEES" };
+    const base = {
+      ...shared,
+      title: "Joint kickoff",
+      startAt: new Date(),
+      endAt: new Date(Date.now() + 3_600_000),
+      source: "imported",
+      visibility: "private",
+      workspaceId: host.workspaceId,
+    };
+    await observer.calendarEvent.create({ data: { ...base, ownerUserId: host.ownerId } });
+    await observer.calendarEvent.create({ data: { ...base, ownerUserId: colleague.userId } });
+
+    const rows = await observer.calendarEvent.findMany({
+      where: { workspaceId: host.workspaceId, ...shared },
+      select: { ownerUserId: true },
+      orderBy: { ownerUserId: "asc" },
+    });
+    assert.equal(rows.length, 2, "two colleagues could not both import one meeting");
+    assert.deepEqual(
+      new Set(rows.map((r) => r.ownerUserId)),
+      new Set([host.ownerId, colleague.userId]),
+      "ownership was mixed between the two copies",
+    );
+
+    // And each copy stays private to its own owner.
+    const mine = await asUser(host.ownerId, host.workspaceId, () =>
+      db.calendarEvent.findMany({ where: shared, select: { ownerUserId: true } }),
+    );
+    assert.deepEqual(
+      mine.map((r) => r.ownerUserId),
+      [host.ownerId],
+      "one attendee could see the other attendee's copy",
+    );
+  });
+
+  test("the same person re-syncing the same item still de-duplicates", pgOnly, async () => {
+    // Per-owner must not mean per-call. A second sync pass over the same
+    // mailbox has to collide, or every poll doubles the data.
+    let refused = false;
+    try {
+      await observer.calendarEvent.create({
+        data: {
+          workspaceId: host.workspaceId,
+          provider: "google_calendar",
+          externalId: "ONE-MEETING-TWO-ATTENDEES",
+          title: "Joint kickoff (again)",
+          startAt: new Date(),
+          endAt: new Date(Date.now() + 3_600_000),
+          source: "imported",
+          visibility: "private",
+          ownerUserId: host.ownerId,
+        },
+      });
+    } catch (error) {
+      refused = true;
+      assert.match(String(error), /unique|P2002/i);
+    }
+    assert.ok(refused, "the same owner imported the same event twice");
+  });
+
+  test("disconnecting keeps provenance and privacy, and does not delete anything", pgOnly, async () => {
+    // What the customer is promised: the correspondence they have filed against
+    // deals survives a disconnect. What must survive with it is the two things
+    // that make it safe — `source`, so it stays excluded from AI, and
+    // `visibility`/`ownerUserId`, so it stays theirs alone.
+    const connection = await observer.integration.create({
+      data: {
+        workspaceId: host.workspaceId,
+        userId: colleague.userId,
+        provider: "outlook_calendar",
+        status: "connected",
+      },
+      select: { id: true },
+    });
+    const row = await observer.emailMessage.create({
+      data: {
+        workspaceId: host.workspaceId,
+        provider: "outlook",
+        externalId: "survives-disconnect",
+        threadId: "t-survive",
+        subject: "Filed against a deal",
+        snippet: "…",
+        fromEmail: "client@example.test",
+        sentAt: new Date(),
+        integrationId: connection.id,
+        source: "imported",
+        ownerUserId: colleague.userId,
+        visibility: "private",
+      },
+      select: { id: true },
+    });
+
+    // Disconnect, as the product will: remove the connection, keep the rows.
+    // `onDelete: SetNull` is what makes that possible.
+    await observer.integration.delete({ where: { id: connection.id } });
+
+    const after = await observer.emailMessage.findUniqueOrThrow({
+      where: { id: row.id },
+      select: { integrationId: true, source: true, visibility: true, ownerUserId: true },
+    });
+    assert.equal(after.integrationId, null, "the connection link was not released");
+    assert.equal(after.source, "imported", "provenance was lost, which would make this AI-eligible");
+    assert.equal(after.visibility, "private", "a disconnected message became workspace-visible");
+    assert.equal(after.ownerUserId, colleague.userId, "ownership was lost on disconnect");
+
+    // Still invisible to the other colleague after the disconnect.
+    const seen = await asUser(host.ownerId, host.workspaceId, () =>
+      db.emailMessage.findMany({ where: { externalId: "survives-disconnect" }, select: { id: true } }),
+    );
+    assert.deepEqual(seen, [], "a disconnected private message became readable by a teammate");
+  });
+
+  test("but one owner still cannot hold it twice", pgOnly, async () => {
     let refused = false;
     try {
       await observer.calendarEvent.create({

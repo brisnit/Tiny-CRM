@@ -1,10 +1,10 @@
--- Integration foundations: tenant-scoped de-duplication, provenance,
+-- Integration foundations: owner-scoped de-duplication, provenance,
 -- per-owner visibility and connection lifecycle.
 --
 -- Additive. Every new column carries a default, so this applies to a table
 -- that already has rows — rehearsed against a non-empty Integration table.
 --
--- Two things worth knowing before applying this:
+-- Three things worth knowing before applying this:
 --
 --   1. **It adds four foreign keys** (EmailMessage and CalendarEvent, each to
 --      Integration and to User). 003_deferrable_constraints.sql is not part of
@@ -13,17 +13,23 @@
 --      refuse the next production build. That is not hypothetical: it blocked
 --      the owner-admin panel release for exactly this reason.
 --
---   2. **The unique index swap is a tightening in one direction only.** The old
---      index was (provider, externalId) across every tenant, which is strictly
---      narrower than (workspaceId, provider, externalId) — so no existing row
---      can violate the new one and the CREATE cannot fail on duplicates. The
---      old index is what made a shared calendar event importable by exactly one
---      customer: the same Google event id appears in every invitee's calendar.
+--   2. **The unique index swap only ever loosens, so it cannot fail on
+--      duplicates.** The old index was (provider, externalId) across every
+--      tenant; the new one is (workspaceId, ownerUserId, provider, externalId).
+--      Every row that satisfied the old index satisfies the new one, so the
+--      CREATE cannot collide.
 --
--- Nothing is backfilled. Existing rows keep source='seed' and
--- visibility='workspace', which is what they are: seeded demonstration data
--- that the whole workspace already sees. Imported rows are written with
--- source='imported' and visibility='private' by the sync worker.
+--      Why the owner is in the key: workspace-scoping alone was tried and still
+--      collided. One Google Calendar event carries the same event id in every
+--      invitee's calendar, so two connected colleagues at one meeting hit
+--      23505 inside a single workspace — and an upsert on that key would have
+--      overwritten the first colleague's row and moved its ownership.
+--
+--   3. **Nothing is backfilled.** Existing rows keep source='seed' and
+--      visibility='workspace', which is what they are: seeded demonstration
+--      data the whole workspace already sees. Their ownerUserId stays NULL, and
+--      NULLs are distinct in a PostgreSQL unique index, so they neither
+--      de-duplicate against each other nor collide with anything imported.
 
 -- DropIndex
 DROP INDEX "CalendarEvent_provider_externalId_key";
@@ -65,7 +71,7 @@ CREATE INDEX "CalendarEvent_integrationId_startAt_idx" ON "CalendarEvent"("integ
 CREATE INDEX "CalendarEvent_ownerUserId_startAt_idx" ON "CalendarEvent"("ownerUserId", "startAt");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "CalendarEvent_workspaceId_provider_externalId_key" ON "CalendarEvent"("workspaceId", "provider", "externalId");
+CREATE UNIQUE INDEX "CalendarEvent_workspaceId_ownerUserId_provider_externalId_key" ON "CalendarEvent"("workspaceId", "ownerUserId", "provider", "externalId");
 
 -- CreateIndex
 CREATE INDEX "EmailMessage_integrationId_sentAt_idx" ON "EmailMessage"("integrationId", "sentAt");
@@ -74,7 +80,7 @@ CREATE INDEX "EmailMessage_integrationId_sentAt_idx" ON "EmailMessage"("integrat
 CREATE INDEX "EmailMessage_ownerUserId_sentAt_idx" ON "EmailMessage"("ownerUserId", "sentAt");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "EmailMessage_workspaceId_provider_externalId_key" ON "EmailMessage"("workspaceId", "provider", "externalId");
+CREATE UNIQUE INDEX "EmailMessage_workspaceId_ownerUserId_provider_externalId_key" ON "EmailMessage"("workspaceId", "ownerUserId", "provider", "externalId");
 
 -- CreateIndex
 CREATE INDEX "Integration_status_tokenExpiresAt_idx" ON "Integration"("status", "tokenExpiresAt");

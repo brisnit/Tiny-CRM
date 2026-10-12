@@ -182,13 +182,18 @@ async function verify(client) {
   const names = new Set(indexes.rows.map((r) => r.indexname));
   for (const table of ["EmailMessage", "CalendarEvent"]) {
     add(
-      `${table} de-duplicates per workspace`,
-      names.has(`${table}_workspaceId_provider_externalId_key`),
+      `${table} de-duplicates per owner within a workspace`,
+      names.has(`${table}_workspaceId_ownerUserId_provider_externalId_key`),
     );
     add(
       `${table} no longer has the cross-tenant unique index`,
       !names.has(`${table}_provider_externalId_key`),
-      "a global (provider, externalId) index makes a shared calendar event importable by one customer only",
+      "a global (provider, externalId) index makes a shared item importable by one customer only",
+    );
+    add(
+      `${table} no longer has the workspace-only unique index`,
+      !names.has(`${table}_workspaceId_provider_externalId_key`),
+      "workspace-only still collides: two colleagues invited to one meeting share the provider's event id",
     );
   }
 

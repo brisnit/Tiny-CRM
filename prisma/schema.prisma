@@ -18,7 +18,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 
 // ---------------------------------------------------------------------------
@@ -1504,14 +1504,35 @@ model EmailMessage {
   deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
   project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
-  /// Scoped to the workspace, not global.
+  /// Scoped to the **owner** within the workspace, not to the workspace, and
+  /// certainly not globally.
   ///
-  /// This was `[provider, externalId]` across every tenant. One Google Calendar
-  /// event carries the same provider id in every invitee's calendar and a mail
-  /// thread can reach two customers, so the second workspace to import a shared
-  /// item hit a unique violation and silently imported nothing. Proven against
-  /// PostgreSQL: 23505 on EmailMessage_provider_externalId_key.
-  @@unique([workspaceId, provider, externalId])
+  /// Three attempts, two of them wrong, so the reasoning is worth keeping:
+  ///
+  ///   1. `[provider, externalId]` — global across every tenant. The second
+  ///      *customer* to import a shared item hit 23505 and silently imported
+  ///      nothing.
+  ///   2. `[workspaceId, provider, externalId]` — the second *colleague* hit
+  ///      exactly the same wall. One Google Calendar event carries the same
+  ///      event id in every invitee's calendar, so two connected teammates
+  ///      invited to one meeting collide inside a single workspace. Proven:
+  ///      23505 on CalendarEvent_workspaceId_provider_externalId_key. Worse, an
+  ///      upsert on that key would have overwritten the first colleague's row
+  ///      and moved its ownership.
+  ///   3. `[workspaceId, ownerUserId, provider, externalId]` — each connected
+  ///      person gets their own privately-owned copy, re-syncing the same
+  ///      mailbox still de-duplicates, and ownership cannot be reassigned by an
+  ///      upsert because it is part of the key.
+  ///
+  /// `ownerUserId` rather than `integrationId` on purpose: disconnecting nulls
+  /// the connection link so a customer keeps what they filed, and keying on it
+  /// would let a reconnect import everything a second time.
+  ///
+  /// Seeded rows have a NULL `ownerUserId`, and NULLs are distinct in a
+  /// PostgreSQL unique index, so demonstration data neither de-duplicates
+  /// against itself nor collides with anything imported. That is correct for
+  /// data the seed writes exactly once.
+  @@unique([workspaceId, ownerUserId, provider, externalId])
   @@index([workspaceId, sentAt])
   @@index([threadId, sentAt])
   @@index([contactId, sentAt])
@@ -1567,10 +1588,11 @@ model CalendarEvent {
   project     Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
   attendees   EventAttendee[]
 
-  /// Workspace-scoped: the same Google event id appears in every invitee's
-  /// calendar, so a global constraint made a shared meeting importable by
-  /// exactly one customer.
-  @@unique([workspaceId, provider, externalId])
+  /// Per owner within the workspace — see the same constraint on EmailMessage
+  /// for why workspace-scoping alone was still wrong. This is the table where
+  /// it bites hardest: the same Google event id appears in every invitee's
+  /// calendar, so two connected colleagues at one meeting collided.
+  @@unique([workspaceId, ownerUserId, provider, externalId])
   @@index([workspaceId, startAt])
   @@index([projectId, startAt])
   @@index([contactId, startAt])

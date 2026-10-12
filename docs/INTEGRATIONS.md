@@ -1,12 +1,39 @@
 # Email and calendar integrations
 
-Phase 1 of connecting Tiny CRM to Gmail, Outlook, Google Calendar and Outlook
-Calendar. **This release contains no connector.** It is the schema, the privacy
-model, the encryption and the gates the connectors need, plus the fixes to what
-was already here and wrong.
+## Status: the Phase 1 **foundation**. No connector exists.
 
-Nothing is switched on: the `integrations` flag is off everywhere and no
-customer can connect anything when this ships.
+This release contains no OAuth flow, no sync worker and no connect button that
+does anything. Calling it "Phase 1" would overstate it, so it is named the
+foundation and the table below is the honest split.
+
+| Phase 1 deliverable | State |
+|---|---|
+| OAuth connect / callback / refresh / disconnect, per provider | **Not built.** Prepared for: encrypted token storage, lifecycle columns, the gates |
+| Initial (bounded) and incremental sync workers | **Not built.** Prepared for: `syncCursor`, `syncState`, `backfillCompletedAt`, `syncGeneration`, and a durable job runner that already exists |
+| Settings UI with connection and error states | **Not built.** The screen is honest about that: both buttons are disabled and say why. `status` vocabulary and `lastError`/`lastErrorAt` columns exist |
+| Browser tests exercising a connection and imported records | **Not built.** There is nothing to drive yet |
+| Association with contacts, and user correction of associations | **Not built.** The columns exist and always did |
+| Per-owner privacy of imported records | **Built**, enforced in the database and the application, tested against the restricted role |
+| Imported data excluded from AI | **Built**, tested on the rendered snapshot |
+| Encryption of stored credentials | **Built** |
+| Workspace- and owner-scoped de-duplication | **Built**, after two wrong answers — see §3 |
+| Migration, policies, and a rehearsed procedure | **Built** |
+
+Nothing is switched on: the `integrations` flag is off everywhere.
+
+### Remaining work, as staged PRs
+
+1. **OAuth lifecycle** — authorisation URL with state and PKCE, callback
+   validation, token exchange, encrypted persistence, refresh, revocation,
+   connect/disconnect/reconnect actions.
+2. **Sync workers** — bounded backfill, incremental pass on the cursor,
+   pagination, provider rate limits, cursor-invalidation recovery, and
+   `syncGeneration` enforcement so a disconnect stops work already claimed.
+3. **Settings UI and association** — live connection and error states, the
+   imported-record surfaces, and letting a person correct an association or
+   share a thread.
+4. **Browser and provider verification** — a real browser through the consent
+   flow, against a mock provider in CI and against the real provider manually.
 
 ---
 
@@ -78,7 +105,58 @@ have reclassified a *disconnected* mailbox's mail as ordinary CRM data and
 started sending it to a provider — the exact bug the exclusion exists to
 prevent.
 
-## 3. Privacy notice: what has to change before any connector ships
+## 3. De-duplication: three attempts, two of them wrong
+
+The constraint that stops a sync importing the same item twice took three goes,
+and the two failures are the useful part.
+
+**Attempt 1 — `(provider, externalId)`.** What was already in the schema, and
+global across every tenant. The second *customer* to import a shared item was
+refused:
+
+```
+tenant two REFUSED: 23505 on EmailMessage_provider_externalId_key
+```
+
+**Attempt 2 — `(workspaceId, provider, externalId)`.** Fixed the tenant case and
+kept the bug one level in. Two connected colleagues in one workspace, both
+invited to the same meeting, collide — because one Google Calendar event carries
+**the same event id in every invitee's calendar**:
+
+```
+colleague A imported the meeting
+colleague B REFUSED: 23505 on CalendarEvent_workspaceId_provider_externalId_key
+```
+
+An upsert on that key would have been worse than the refusal: it would have
+overwritten A's row and moved its ownership to B.
+
+**Attempt 3 — `(workspaceId, ownerUserId, provider, externalId)`.** Each
+connected person gets their own privately-owned copy; re-syncing the same
+mailbox still de-duplicates; and ownership cannot be reassigned by an upsert
+because it is part of the key.
+
+Why `ownerUserId` and not `integrationId`: disconnecting nulls the connection
+link so the customer keeps what they filed, and a key on `integrationId` would
+let a reconnect import everything a second time.
+
+Seeded rows have a NULL `ownerUserId`, and NULLs are distinct in a PostgreSQL
+unique index, so demonstration data neither de-duplicates against itself nor
+collides with anything imported.
+
+**A deliberate consequence worth knowing.** Two attendees who both connect, and
+both share the meeting, produce two rows for one meeting. That is correct
+storage — a single shared row cannot express per-owner privacy at all — but it
+means the display layer will need to collapse them. That belongs with the UI
+stage, not here, and it is listed as such.
+
+**What survives a disconnect**, asserted in
+`tests/security/integration-privacy.test.ts`: `integrationId` is released,
+`source` stays `imported` so the row remains excluded from AI, and
+`visibility`/`ownerUserId` stay as they were so it remains private to its owner
+and invisible to teammates.
+
+## 4. Privacy notice: what has to change before any connector ships
 
 **No change is needed for this release**, because nothing is imported. The
 following must be published *before* the first connector is enabled for any
@@ -104,7 +182,7 @@ customer, and this list is the ask, not a decision I have taken:
    reachable from the consent screen. This is a condition of passing review, not
    just good practice.
 
-## 4. Provider console setup — what only you can do
+## 5. Provider console setup — what only you can do
 
 These are account-level actions on accounts I have no access to, and each takes
 real calendar time. Nothing in this release needs them; the connectors do.
@@ -142,34 +220,137 @@ Anthropic keys did.
    require an administrator to consent instead of the end user, and some will
    refuse outright.
 
-## 5. Costs and approval blockers
+## 6. Approval requirements: canary versus public
 
-| Item | Cost | Blocker |
+The two cases are genuinely different, and conflating them is what makes Gmail
+look like a blocker for everything. Every statement below is from the provider's
+own documentation, and anything I could not confirm there is marked
+**unconfirmed**.
+
+### Google — a private canary needs no verification at all
+
+Google lists the cases where verification is **not** required, and two of them
+apply to us:
+
+- **Internal use.** "The app is only used by people in your Google Workspace or
+  Cloud Identity organization", the project is owned by that organization, and
+  the consent screen is set to internal. Google states such an app "will not be
+  subject to the unverified app screen or the 100-user cap". **No verification
+  and no security assessment** — including for Gmail.
+- **Development/testing/staging.** "Apps in development/testing/staging mode are
+  not subject to verification." The unverified-app screen still appears and the
+  100-user cap applies.
+
+There is a sharp edge in the Testing route that affects canary design.
+Google: *"Authorizations by a test user will expire seven days from the time of
+consent."* The refresh token expires with it. So an External/Testing canary
+needs reconsent **weekly** — which would make a long-running sync canary
+useless. The Internal route has no such expiry.
+
+**Question for you:** is `artifactdigital.co` on Google Workspace (or Cloud
+Identity)? If yes, the canary is an Internal app and Gmail can be canaried
+without any assessment. If no, the canary is External/Testing with the 7-day
+reconsent, and Gmail realistically waits for the public path.
+
+### Google — public availability
+
+Verification is required for sensitive or restricted scopes, and restricted-scope
+apps must **re-verify annually**.
+
+- `gmail.readonly` and `gmail.metadata` are **both restricted** — confirmed on
+  Google's Gmail scopes page. There is no narrower read scope to retreat to.
+- Google's API Services User Data Policy says apps accessing "Sensitive and
+  Restricted Scopes" must pass an annual security assessment and obtain a Letter
+  of Assessment, "depending on the API and the number of user grants or users".
+- **Unconfirmed:** whether Calendar's `calendar.readonly` /
+  `calendar.events.readonly` trigger that assessment. Google's public pages do
+  not classify Calendar scopes at all, and the policy wording covers sensitive
+  scopes too. **I am not treating Calendar as exempt.** The authoritative answer
+  is the scope classification shown on the consent screen of our own project,
+  which is why §5 asks you to read and report it.
+- **Unconfirmed:** the cost and the timeline. Every figure I found came from a
+  vendor selling compliance services, and they disagreed by two orders of
+  magnitude. The only real number is a quote from a Google-approved assessor.
+  Treat any figure I quoted earlier as hearsay.
+
+### Microsoft — a private canary needs no verification
+
+Publisher verification is, in Microsoft's words, "primarily for developers who
+build multitenant apps". A **single-tenant** registration in the Artifact
+Digital tenant needs none of it, which makes the Microsoft canary the cheapest
+and fastest of the four connectors to stand up.
+
+### Microsoft — public availability
+
+Publisher verification is effectively required, and it is **free**. Microsoft:
+"Microsoft doesn't charge developers for publisher verification. No license is
+required to become a verified publisher," and "No charges are associated with
+completing the prerequisites."
+
+**I overstated this earlier as a cost. It is an account and paperwork
+requirement, not a fee.** What it requires:
+
+- a Partner One ID for a verified Microsoft AI Cloud Partner Program account,
+  which must be the organisation's Partner Global Account (a *location* Partner
+  One ID is explicitly not accepted);
+- the app registered with a work or school account, not a Microsoft account;
+- a publisher domain set, and **not** `*.onmicrosoft.com`;
+- the CPP verification email's domain matching that publisher domain, or a
+  DNS-verified custom domain on the tenant;
+- the initiating user holding Application Administrator or Cloud Application
+  Administrator in Entra **and** CPP Partner Admin or Account Admin in Partner
+  Center, signing in with MFA.
+
+Why it matters for public availability rather than being cosmetic: since
+November 2020, where risk-based step-up consent is enabled, users **cannot**
+consent to newly registered multitenant apps that are not publisher verified
+when the app requests permissions beyond basic sign-in from outside its home
+tenant. An administrator in each customer tenant would have to consent instead.
+
+Publisher verification is also not supported in national clouds.
+
+### Summary
+
+| | Google Calendar | Outlook mail + calendar | Gmail |
+|---|---|---|---|
+| **Private canary** | Internal app: nothing. External/Testing: 7-day reconsent | Single-tenant: nothing | Internal app: nothing. Otherwise effectively blocked |
+| **Public** | Verification; assessment **unconfirmed** | Publisher verification (free, paperwork) | Verification **+ annual assessment**, cost and timeline unconfirmed |
+
+## 7. Plan availability — proposed, not locked
+
+`emailCalendarSync` is in the code with Pro and the legacy plans set to true.
+**It is inert**: the `integrations` flag is off everywhere, so no plan can reach
+the feature regardless of this value, and changing the numbers is a one-line
+edit with no migration.
+
+I asked about this earlier and recorded "Pro and legacy only" as the answer, but
+you have asked for the reasoning before it is locked in, so here it is.
+
+| Plan | Proposed | Why |
 |---|---|---|
-| Google Calendar API | No fee | OAuth verification; weeks, not months |
-| Microsoft Graph `Mail.Read` / `Calendars.Read` | No fee | Publisher verification needs a Cloud Partner Program account |
-| **Gmail read access** | **Annual third-party security assessment** | **Hard blocker for public availability** |
+| **Free** | No | Each connection is a recurring poll against a provider quota shared by every customer. Free is 100 contacts and one workspace; a mailbox sync is an order of magnitude more expensive than anything else Free can do |
+| **Plus** | No | The honest reason is commercial, not technical: sync is the strongest reason to move from Plus to Pro, and Plus already gets file uploads as its differentiator |
+| **Pro** | Yes | Matches `documentQa`. This is the tier whose buyer is asking for it |
+| **Legacy Pro / Lifetime** | Yes | Legacy entitlements have never lost a capability in this product, and taking one away now would be the first time |
 
-Gmail has no non-restricted read path. Google classifies **both**
-`gmail.readonly` and `gmail.metadata` as restricted, so there is no narrower
-scope to retreat to. Restricted scopes require verification plus an annual
-independent security assessment with a Letter of Assessment, renewed every
-twelve months.
+Arguments against, which are real:
 
-Published cost estimates range from roughly $500 to $75,000 and every source
-offering a figure sells compliance services, so treat all of them as unreliable;
-a quote from an approved assessor is the only real number. Timelines cluster at
-six to twelve weeks for a first submission.
+- **Plus could be the better line.** Sync drives daily engagement, and putting it
+  at Pro may suppress adoption enough to hurt both tiers. If the goal is usage
+  rather than margin, Plus is defensible.
+- **A per-connection limit may beat a plan gate.** "One mailbox on Plus, five on
+  Pro" prices the actual cost driver instead of the feature. It needs a limit in
+  `PlanLimits` rather than a capability, and it is more code.
+- **Gmail's user count feeds Google's assessment thresholds.** Google's policy
+  ties the assessment requirement partly to user numbers, so a wider plan gate
+  may raise the compliance bar for the one connector that already has the
+  highest.
 
-Google's API Services User Data Policy says the assessment applies to
-"Sensitive and Restricted Scopes", with the requirement depending on the API and
-on user counts — so Calendar being exempt is likely but **not confirmed**, and
-the consent screen for your own project is where it is confirmed.
+**Nothing locks until you say so.** If you want Plus included, or a
+per-connection limit instead, say which and I will change the values before any
+connector ships — there is no migration and no data to rewrite.
 
-That asymmetry is why Gmail is implemented but shipped dark: the other three
-connectors need no paid assessment and should not wait behind one.
-
-## 6. Applying this release
+## 8. Applying this release
 
 ```
 node scripts/migrate-integrations.mjs            # inspect only, writes nothing
