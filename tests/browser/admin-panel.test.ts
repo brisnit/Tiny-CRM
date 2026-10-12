@@ -152,7 +152,29 @@ describe("the admin panel in a browser", () => {
       const shell = await visibleText(page);
       assert.ok(!/\bAdmin\b/.test(shell), "an ordinary account was offered an Admin link");
 
-      await page.goto(`${BASE_URL}/admin`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      const response = await page.goto(`${BASE_URL}/admin`, {
+        waitUntil: "domcontentloaded",
+        timeout: 60_000,
+      });
+
+      /**
+       * 404, asserted on the status rather than on the words.
+       *
+       * This test previously checked only that certain words were absent, and
+       * an empty body satisfies that vacuously — which is exactly what it was
+       * doing. `requirePlatformAdmin` threw an AppError, a server component had
+       * nothing to catch it, and the refusal escaped to Next's onRequestError
+       * hook: HTTP 500 with an empty body, and an application-error alert
+       * (Sentry TINY-CRM-8) every time an ordinary account opened /admin. The
+       * surface was never exposed, but "answers the way a non-existent page
+       * does" was not true, and nothing here could tell.
+       */
+      assert.equal(
+        response?.status(),
+        404,
+        "an ordinary account must get a real 404, not a 500 from an escaping AppError",
+      );
+
       const body = await visibleText(page);
       // "Not found", not "forbidden": the surface must not confirm it exists.
       assert.ok(!/Customers/i.test(body), "an ordinary account reached the customer directory");
@@ -174,6 +196,26 @@ describe("the admin panel in a browser", () => {
       await page.fill('input[name="q"]', world.customerEmail);
       await page.getByRole("button", { name: "Search customers" }).click();
       await page.waitForSelector(`text=${world.customerEmail}`, { timeout: 30_000 });
+
+      // Folded into this session on purpose: `loginPerAccount` allows five
+      // sign-ins per account per fifteen minutes, and the admin already spends
+      // five across this file. A sixth test with its own sign-in fails on the
+      // rate limit, which has happened here before.
+      const missing = await page.goto(`${BASE_URL}/admin/customers/does-not-exist`, {
+        waitUntil: "domcontentloaded",
+        timeout: 60_000,
+      });
+      assert.equal(
+        missing?.status(),
+        404,
+        "a nonexistent customer did not answer 404 for the admin",
+      );
+
+      const back = await page.goto(`${BASE_URL}/admin`, {
+        waitUntil: "domcontentloaded",
+        timeout: 60_000,
+      });
+      assert.equal(back?.status(), 200, "the admin can no longer open the directory");
     } finally {
       await page.close();
     }

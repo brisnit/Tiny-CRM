@@ -1,7 +1,10 @@
 import "server-only";
 
+import { notFound } from "next/navigation";
+
 import { getActor, type Actor } from "@/lib/auth/access";
 import { AppError, unauthorized } from "@/lib/errors";
+import { log } from "@/lib/logger";
 import { withTenantContext } from "@/lib/tenant-db";
 
 /**
@@ -134,25 +137,126 @@ export async function isPlatformAdmin(): Promise<boolean> {
  * source whether something upstream protected it.
  */
 export async function requirePlatformAdmin(): Promise<PlatformAdminActor> {
+  const outcome = await checkPlatformAdmin();
+  if (outcome.ok) return outcome.actor;
+  if (outcome.kind === "unauthenticated") throw unauthorized();
+
+  if (outcome.kind === "binding_drift") reportBindingDrift(outcome);
+  // "Not found" rather than "forbidden", for the same reason the rest of the
+  // codebase does: confirming that an administrative surface exists is itself
+  // a disclosure to someone who should not know.
+  throw new AppError("not_found", "Not found.", { internal: internalFor(outcome) });
+}
+
+/**
+ * The same decision, for a **page** rather than an action.
+ *
+ * Why this exists, precisely. `requirePlatformAdmin` throws an `AppError`,
+ * which a server action catches and turns into a structured failure. A server
+ * *component* has nothing to catch it, so the throw escaped to Next's
+ * `onRequestError` hook, which logs at error level and reports to the error
+ * tracker. An ordinary account opening `/admin` — the exact thing the refusal
+ * is for — therefore raised an application-error alert and returned **500 with
+ * an empty body**, not the 404 it was supposed to look like. Both halves of
+ * that were confirmed by driving a real browser: `PROBE_STATUS=500`.
+ *
+ * `notFound()` is Next's own control flow. It renders the 404 that was always
+ * intended, and it is not an uncaught error, so nothing reports it. No
+ * reporting rule was relaxed to achieve that and no error category is
+ * suppressed: an expected refusal simply stops being an exception, while a real
+ * fault inside `/admin` still reports exactly as before.
+ *
+ * The one case that is *not* expected keeps alerting, and now does so
+ * distinguishably: a `PlatformAdmin` row whose `boundEmail` no longer matches
+ * the account is a misconfiguration an operator has to fix, and it is reported
+ * explicitly before the 404. The error tracker could not previously tell the
+ * two apart — both threw this same line, and `internal` is not in the payload
+ * allowlist.
+ */
+export async function requirePlatformAdminPage(): Promise<PlatformAdminActor> {
+  const outcome = await checkPlatformAdmin();
+  if (outcome.ok) return outcome.actor;
+  if (outcome.kind === "unauthenticated") throw unauthorized();
+
+  if (outcome.kind === "binding_drift") reportBindingDrift(outcome);
+  else {
+    // Observable without being an alert: a refused probe of an administrative
+    // surface is worth being able to find, and is not a fault.
+    log.warn("platform admin refused", { userId: outcome.userId });
+  }
+  notFound();
+}
+
+/** What the check decided, so each caller can answer in its own idiom. */
+type AdminOutcome =
+  | { ok: true; actor: PlatformAdminActor }
+  | { ok: false; kind: "unauthenticated" }
+  | { ok: false; kind: "not_admin"; userId: string }
+  | { ok: false; kind: "binding_drift"; userId: string; boundTo: string; currentEmail: string };
+
+async function checkPlatformAdmin(): Promise<AdminOutcome> {
   const actor = await getActor();
   // No session at all: the same answer an ordinary protected page gives.
-  if (!actor) throw unauthorized();
+  if (!actor) return { ok: false, kind: "unauthenticated" };
 
   const row = await adminRowFor(actor.identity.id);
+  // Read before the guard: `bindingHolds` is a type predicate, so in its
+  // negated branch TypeScript narrows `row` to `never` and the address is no
+  // longer reachable through it.
   const boundTo = row?.boundEmail ?? null;
-  if (!bindingHolds(row, actor.identity.email)) {
-    // "Not found" rather than "forbidden", for the same reason the rest of the
-    // codebase does: confirming that an administrative surface exists is itself
-    // a disclosure to someone who should not know.
-    throw new AppError("not_found", "Not found.", {
-      internal: boundTo
-        ? `platform admin bound for ${boundTo} but the account is now ` +
-          `${actor.identity.email}; re-bind with scripts/bind-platform-admin.mjs`
-        : `platform admin refused for user ${actor.identity.id}`,
-    });
+  if (bindingHolds(row, actor.identity.email)) {
+    return { ok: true, actor: Object.assign(actor, { platformAdmin: true as const }) };
   }
+  if (boundTo !== null) {
+    return {
+      ok: false,
+      kind: "binding_drift",
+      userId: actor.identity.id,
+      boundTo,
+      currentEmail: actor.identity.email,
+    };
+  }
+  return { ok: false, kind: "not_admin", userId: actor.identity.id };
+}
 
-  return Object.assign(actor, { platformAdmin: true as const });
+function internalFor(outcome: Extract<AdminOutcome, { ok: false }>): string {
+  if (outcome.kind === "binding_drift") {
+    return (
+      `platform admin bound for ${outcome.boundTo} but the account is now ` +
+      `${outcome.currentEmail}; re-bind with scripts/bind-platform-admin.mjs`
+    );
+  }
+  return `platform admin refused for user ${"userId" in outcome ? outcome.userId : "unknown"}`;
+}
+
+/**
+ * A bound administrator who can no longer get in. Not an expected refusal.
+ *
+ * Reported rather than merely logged, because the panel is unreachable until
+ * somebody re-binds and nothing else in the product will say so. The addresses
+ * go to the log only; the tracker receives the message this builds, and
+ * `scrubMessage` in src/lib/observability.ts strips anything that looks like
+ * quoted data from it.
+ */
+function reportBindingDrift(
+  outcome: Extract<AdminOutcome, { kind: "binding_drift" }>,
+): void {
+  log.error("platform admin binding no longer matches the account", {
+    userId: outcome.userId,
+    boundTo: outcome.boundTo,
+    currentEmail: outcome.currentEmail,
+  });
+  void import("@/lib/observability").then(({ captureError }) =>
+    captureError(
+      new Error(
+        "platform admin binding no longer matches the bound address; " +
+          "re-bind with scripts/bind-platform-admin.mjs",
+      ),
+      { route: "/admin", operation: "requirePlatformAdmin" },
+    ),
+  ).catch(() => {
+    // Reporting must never be what breaks the refusal.
+  });
 }
 
 /**

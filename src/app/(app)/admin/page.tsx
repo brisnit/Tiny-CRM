@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Search, ShieldAlert } from "lucide-react";
 
+import { requirePlatformAdminPage } from "@/lib/admin/authorize";
 import { listCustomers } from "@/lib/admin/customers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,19 @@ export default async function AdminPage({
 }: {
   searchParams: Promise<{ q?: string; page?: string }>;
 }) {
+  /**
+   * Also here, not only in the layout.
+   *
+   * Next renders a layout and its page concurrently, so the layout's 404 does
+   * not prevent this page from running: `listCustomers()` performs its own
+   * `requirePlatformAdmin()` check, that threw an `AppError`, and it escaped to
+   * `onRequestError` and the error tracker even though the response was already
+   * a 404. Measured, not assumed — the dev server logged one `captured
+   * exception` alongside a `GET /admin 404`. Taking the same control-flow exit
+   * here means the expected refusal reports nothing from either path.
+   */
+  await requirePlatformAdminPage();
+
   const params = await searchParams;
   const query = (params.q ?? "").trim();
   const page = Number.parseInt(params.page ?? "1", 10) || 1;
