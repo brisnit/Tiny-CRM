@@ -181,6 +181,33 @@ export const env = {
   storageAccessKeyId: optional("S3_ACCESS_KEY_ID"),
   storageSecretAccessKey: optional("S3_SECRET_ACCESS_KEY"),
 
+  /**
+   * Microsoft Entra application, for the Outlook mail and calendar connectors.
+   *
+   * All three are optional: with none of them set the Microsoft connectors are
+   * simply unconfigured and the UI says so, rather than offering a Connect
+   * button that dead-ends at a consent screen.
+   *
+   * `microsoftTenantId` is **not** cosmetic and `common` is not a substitute.
+   * The canary registration is single-tenant, so the authority has to be the
+   * tenant-specific one — `common` would be refused for anyone outside the
+   * tenant (AADSTS50194) and, for anyone inside it, would mean we never stated
+   * which tenant we expected. It is also what the returned token's `tid` claim
+   * is checked against, so a token minted by a different tenant is rejected
+   * rather than trusted because the handshake completed.
+   */
+  /**
+   * Google OAuth client, for the Gmail and Google Calendar connectors. Unset
+   * everywhere today: those connectors need a Google Cloud project that does
+   * not exist yet, and Gmail additionally needs a restricted-scope review.
+   */
+  googleClientId: optional("GOOGLE_CLIENT_ID"),
+  googleClientSecret: optional("GOOGLE_CLIENT_SECRET"),
+
+  microsoftClientId: optional("MICROSOFT_CLIENT_ID"),
+  microsoftTenantId: optional("MICROSOFT_TENANT_ID"),
+  microsoftClientSecret: optional("MICROSOFT_CLIENT_SECRET"),
+
   logLevel: (optional("LOG_LEVEL") ?? (isProduction ? "info" : "debug")) as
     | "debug" | "info" | "warn" | "error",
 
