@@ -10,7 +10,6 @@ import { db, createTenant, cleanupTenants, type Tenant } from "../helpers/fixtur
 import { withTenantContext } from "../../src/lib/tenant-db";
 import {
   assertStateMatchesSession,
-  createPkcePair,
   decodeState,
   encodeState,
   OAuthStateError,
