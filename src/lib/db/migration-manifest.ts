@@ -22,6 +22,7 @@ export const SQLITE_MIGRATIONS = [
   "20261005120000_terms_acceptance",
   "20261010034922_platform_admin_and_plan_grants",
   "20261012041513_integrations_foundation",
+  "20261012233726_integration_sync_progress",
 ] as const;
 
 /** prisma/migrations-postgres — PostgreSQL, every deployed environment. */
@@ -38,4 +39,5 @@ export const POSTGRES_MIGRATIONS = [
   "20261005120100_terms_acceptance",
   "20261010035000_platform_admin_and_plan_grants",
   "20261012041600_integrations_foundation",
+  "20261012233800_integration_sync_progress",
 ] as const;

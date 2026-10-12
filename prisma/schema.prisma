@@ -1409,6 +1409,21 @@ model Integration {
   /// Set when the bounded initial import has finished, so incremental sync
   /// knows it may rely on the cursor.
   backfillCompletedAt DateTime?
+  /// How far back the import actually reached, which is not always as far as
+  /// the window asks. Shown to the customer so "imported" never means more
+  /// than it did.
+  importedThrough DateTime?
+  /// True when the page cap stopped the backfill before it reached the end of
+  /// the window.
+  ///
+  /// A separate flag rather than an inference from `importedThrough`, because
+  /// the two answer different questions: that column says how far we got, and
+  /// this says whether there is more we deliberately did not fetch. Silently
+  /// skipping the remainder and calling the import finished is the failure
+  /// this prevents.
+  backfillTruncated Boolean @default(false)
+  /// Pages fetched in the current backfill, against the cap.
+  pagesImported Int @default(0)
   /// The last failure, as something a customer can act on. Never a provider
   /// response body, a token or a URL carrying one.
   lastError    String?
