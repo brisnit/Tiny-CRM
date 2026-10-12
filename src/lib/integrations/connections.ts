@@ -276,6 +276,19 @@ export async function completeConnection(input: {
  *
  * Either way the credentials are destroyed and the generation is bumped, so no
  * further import can happen under this connection.
+ *
+ * **What a disconnect does not do is release `integrationId` on the rows it
+ * imported.** The Integration row survives — only its credentials are
+ * destroyed — so `onDelete: SetNull` does not fire, and the kept messages still
+ * name the connection they came from. That is deliberate: it is what lets the
+ * UI say which mailbox a message arrived from, and what a later "remove this
+ * connection's data" would target. The link is released only if the Integration
+ * row is deleted outright.
+ *
+ * An earlier version of this comment claimed the opposite. It was wrong, and it
+ * was found by running a disconnect against the real canary connection rather
+ * than by re-reading the code — the test that was supposed to cover it deleted
+ * the Integration row, which is a different path with a different outcome.
  */
 export async function disconnectConnection(input: {
   integrationId: string;

@@ -799,6 +799,34 @@ describe("a successful connection, and ending it", () => {
     );
   });
 
+  test("disconnecting keeps the connection link, so a message still names its mailbox", async () => {
+    // The counterpart to the deletion test in integration-privacy.test.ts.
+    // A disconnect destroys credentials and keeps the Integration row, so
+    // `onDelete: SetNull` does not fire and `integrationId` survives. Asserted
+    // because the code comment once claimed the opposite, and a real
+    // disconnect against the canary is what proved it wrong.
+    const row = await db.integration.findFirstOrThrow({
+      where: { workspaceId: owner.workspaceId },
+      select: { id: true },
+    });
+    const kept = await db.emailMessage.findFirstOrThrow({
+      where: { externalId: "keep-me" },
+      select: { integrationId: true, source: true, visibility: true, ownerUserId: true },
+    });
+    assert.equal(kept.integrationId, row.id, "the connection link was released by a disconnect");
+    assert.equal(kept.source, "imported", "provenance was lost");
+    assert.equal(kept.visibility, "private", "a kept message became workspace-visible");
+    assert.equal(kept.ownerUserId, owner.ownerId, "ownership was lost");
+
+    // And the Integration row itself is still there, holding no credentials.
+    const connection = await db.integration.findUniqueOrThrow({
+      where: { id: row.id },
+      select: { status: true, credentials: true },
+    });
+    assert.equal(connection.status, "disconnected");
+    assert.equal(connection.credentials, null, "a credential survived the disconnect");
+  });
+
   test("disconnecting with keepImported false removes exactly that connection's data", async () => {
     const row = await db.integration.findFirstOrThrow({
       where: { workspaceId: owner.workspaceId },

@@ -1469,10 +1469,15 @@ model EmailMessage {
   /// Which connection imported this, or null for seeded demonstration data and
   /// for rows whose connection has since been removed.
   ///
-  /// `SetNull` rather than `Cascade` on purpose: disconnecting a mailbox must
-  /// not silently delete a year of correspondence a customer has been filing
-  /// against deals. The row is kept and unlinked, and `source` below is what
-  /// still records where it came from.
+  /// `SetNull` rather than `Cascade` on purpose: removing a connection must not
+  /// silently delete a year of correspondence a customer has been filing
+  /// against deals.
+  ///
+  /// Note which operation this is about. A **disconnect** keeps the Integration
+  /// row and destroys only its credentials, so this link survives and the
+  /// message still names the mailbox it came from. `SetNull` fires only when
+  /// the Integration row is **deleted**. `source` below is what records
+  /// provenance in either case, which is why it is a column of its own.
   integrationId String?
   /// seed | imported
   ///

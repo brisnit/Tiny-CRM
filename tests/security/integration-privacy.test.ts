@@ -305,11 +305,17 @@ describe("de-duplication is scoped to the workspace, not to every customer", () 
     assert.ok(refused, "the same owner imported the same event twice");
   });
 
-  test("disconnecting keeps provenance and privacy, and does not delete anything", pgOnly, async () => {
-    // What the customer is promised: the correspondence they have filed against
-    // deals survives a disconnect. What must survive with it is the two things
-    // that make it safe — `source`, so it stays excluded from AI, and
-    // `visibility`/`ownerUserId`, so it stays theirs alone.
+  test("DELETING a connection keeps provenance and privacy, and releases the link", pgOnly, async () => {
+    // This covers **deleting** the Integration row, which is when
+    // `onDelete: SetNull` fires. It is not the same operation as a disconnect,
+    // and the name used to say "disconnecting", which was misleading: a
+    // disconnect keeps the row and therefore keeps the link. That difference
+    // was found by running a real disconnect, not by reading this test.
+    // tests/security/integration-oauth.test.ts covers the disconnect path.
+    //
+    // What must survive either way is the two things that make the data safe —
+    // `source`, so it stays excluded from AI, and `visibility`/`ownerUserId`,
+    // so it stays its owner's alone.
     const connection = await observer.integration.create({
       data: {
         workspaceId: host.workspaceId,
