@@ -299,34 +299,137 @@ async function syncReport() {
   console.log(`    importedThrough  ${state.importedThrough?.toISOString().slice(0, 10) ?? "—"}`);
   console.log(`    last checked     ${state.lastSyncAt?.toISOString() ?? "never"}`);
 
+  // What the queue thinks, which is the only place that distinguishes an
+  // import that has not begun from one that finished with nothing to show.
+  const jobs = await db.domainEvent.findMany({
+    where: { name: "integration.sync", entityId: row.id },
+    select: { status: true, attempts: true, availableAt: true, lastError: true, payload: true },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+  });
+  // `DomainEvent.payload` is a String column, not Json — it has to be parsed.
+  // Reading it as an object silently matched nothing, which made a queued job
+  // look like no job at all: the "not started" and "pending" states this
+  // function exists to tell apart.
+  const thisGeneration = jobs.filter((j) => {
+    try {
+      return (JSON.parse(j.payload) as { generation?: number }).generation === state.syncGeneration;
+    } catch {
+      return false;
+    }
+  });
+  const waiting = thisGeneration.filter((j) => j.status === "pending" || j.status === "failed");
+  const dead = thisGeneration.filter((j) => j.status === "dead");
+
   console.log("\n  Completeness");
   const windowStart = new Date(Date.now() - BACKFILL_WINDOW_DAYS * 86_400_000);
-  check(
-    !state.backfillTruncated,
-    "the import reached the end of the window",
-    state.backfillTruncated
-      ? `stopped at the ${MAX_BACKFILL_PAGES}-page cap; resume is offered and the cursor is kept`
-      : `${BACKFILL_WINDOW_DAYS}-day window from ${windowStart.toISOString().slice(0, 10)}`,
+
+  /**
+   * Five outcomes, not two.
+   *
+   * The earlier version asked one question — `!backfillTruncated` — and
+   * reported "the import reached the end of the window". That is also true of
+   * an import that never ran: nothing had been truncated because nothing had
+   * been fetched. The canary duly PASSed a completeness check on zero
+   * messages, zero pages and `lastSyncAt` of never, which is exactly the kind
+   * of green that hides a defect. Each state below is now named, and only two
+   * of the five are a pass.
+   */
+  const outcome =
+    state.backfillCompletedAt && messages.length > 0
+      ? "completed_with_records"
+      : state.backfillCompletedAt
+        ? "completed_empty"
+        : dead.length > 0
+          ? "failed"
+          : waiting.length > 0
+            ? "pending"
+            : "not_started";
+
+  const DESCRIPTION: Record<string, string> = {
+    not_started: "NOT STARTED — nothing is queued and nothing has run",
+    pending: "PENDING — queued, not yet run; a worker or the cron has to pick it up",
+    failed: "FAILED — the job dead-lettered after exhausting its attempts",
+    completed_empty: "COMPLETED, EMPTY — the import ran and the window genuinely held nothing",
+    completed_with_records: "COMPLETED — the import ran and brought records back",
+  };
+  console.log(`\n    import state     ${DESCRIPTION[outcome]}`);
+  console.log(
+    `    queue            ${thisGeneration.length} job(s) for generation ${state.syncGeneration}` +
+      ` — ${waiting.length} waiting, ${dead.length} dead`,
   );
-  if (state.backfillTruncated) {
-    check(Boolean(state.syncCursor), "a cursor was kept, so resuming continues rather than restarts");
+  if (dead.length > 0 && dead[0]!.lastError) {
+    console.log(`    last error       ${dead[0]!.lastError.slice(0, 200)}`);
   }
-  check(Boolean(state.backfillCompletedAt), "the backfill finished rather than stalling");
+
+  switch (outcome) {
+    case "not_started":
+      bad(
+        "the import has started",
+        "no sync job exists for this generation — connecting did not queue one, or it was lost",
+      );
+      break;
+    case "pending":
+      bad(
+        "the import has run",
+        `queued ${waiting.length === 1 ? "job is" : "jobs are"} still waiting; ` +
+          `run it with: npm run worker -- --once`,
+      );
+      break;
+    case "failed":
+      bad("the import ran without dead-lettering", `${dead.length} job(s) gave up`);
+      break;
+    case "completed_empty":
+      ok(
+        "the import completed",
+        `the ${BACKFILL_WINDOW_DAYS}-day window from ${windowStart.toISOString().slice(0, 10)} ` +
+          `held no messages — this is an empty result, not an unstarted one`,
+      );
+      break;
+    case "completed_with_records":
+      ok("the import completed", `${messages.length} message(s) brought back`);
+      break;
+  }
+
+  // Truncation is only meaningful once something ran; asking it of an
+  // unstarted import is what produced the false pass in the first place.
+  if (state.backfillCompletedAt) {
+    check(
+      !state.backfillTruncated,
+      "the import reached the end of the window",
+      state.backfillTruncated
+        ? `stopped at the ${MAX_BACKFILL_PAGES}-page cap; resume is offered and the cursor is kept`
+        : `${BACKFILL_WINDOW_DAYS}-day window from ${windowStart.toISOString().slice(0, 10)}`,
+    );
+    if (state.backfillTruncated) {
+      check(Boolean(state.syncCursor), "a cursor was kept, so resuming continues rather than restarts");
+    }
+  } else {
+    console.log("    ----  completeness of the window is not assessable until the import runs");
+  }
 
   console.log("\n  Privacy of what was imported");
-  check(
-    messages.every((m) => m.visibility === "private"),
-    "every imported message is private",
-    `${messages.filter((m) => m.visibility !== "private").length} were not`,
-  );
-  check(
-    messages.every((m) => m.ownerUserId === row.userId),
-    "every imported message is owned by the connecting account",
-  );
-  check(
-    messages.every((m) => m.source === "imported"),
-    "every imported message is marked imported, so none is AI-eligible",
-  );
+  if (messages.length === 0) {
+    // `[].every(…)` is true, so each of these would have PASSed on nothing —
+    // the same vacuous green as the completeness check above. A privacy claim
+    // over an empty set is not a privacy guarantee, and saying so is the
+    // honest report.
+    console.log("    ----  no imported messages, so there is nothing to make a privacy claim about");
+  } else {
+    check(
+      messages.every((m) => m.visibility === "private"),
+      `all ${messages.length} imported messages are private`,
+      `${messages.filter((m) => m.visibility !== "private").length} were not`,
+    );
+    check(
+      messages.every((m) => m.ownerUserId === row.userId),
+      `all ${messages.length} are owned by the connecting account`,
+    );
+    check(
+      messages.every((m) => m.source === "imported"),
+      `all ${messages.length} are marked imported, so none is AI-eligible`,
+    );
+  }
 
   // What a colleague would see. Counted through the application's own
   // visibility rule rather than asserted from the column, because that is the

@@ -760,6 +760,75 @@ describe("a successful connection, and ending it", () => {
     assert.equal(await inContext(owner, () => generationIsCurrent(before.id, after.syncGeneration)), true);
   });
 
+  test("connecting queues the first page and says it is backfilling, not idle", async () => {
+    /**
+     * The canary caught both halves of this. After a real reconnect the
+     * connection sat at `connected / idle`, zero pages, `lastSyncAt` of never:
+     *
+     *  - `completeConnection` enqueued the first page inline instead of
+     *    calling `startBackfill`, leaving `syncState` at `idle` — the same
+     *    value a *finished* import has. A queued backfill and a completed one
+     *    were indistinguishable in the database and on the Settings page.
+     *  - Nothing dispatched the queue, so the job it had just written sat
+     *    pending. The comment above it claimed the import started there.
+     *
+     * This asserts the durable half: the state says backfilling and exactly
+     * one job exists, carrying the new generation. Whether a drain then runs
+     * promptly is best-effort by design — the cron is the guarantee — so what
+     * is pinned here is that there is something for it to find.
+     */
+    const row = await db.integration.findFirstOrThrow({
+      where: { workspaceId: owner.workspaceId },
+      select: { id: true, syncGeneration: true },
+    });
+    await db.domainEvent.deleteMany({ where: { name: "integration.sync", entityId: row.id } });
+    await db.integration.update({
+      where: { id: row.id },
+      data: { syncState: "idle", pagesImported: 7, backfillTruncated: true },
+    });
+
+    const state = encodeState({
+      provider: "outlook", workspaceId: owner.workspaceId, userId: owner.ownerId, nonce: FIXED_NONCE,
+    });
+    await inContext(owner, () =>
+      completeConnection({
+        provider: PROVIDERS.outlook,
+        code: "any",
+        state,
+        codeVerifier: "verifier",
+        session: session(owner),
+        origin: ORIGIN,
+        transport: fakeEndpoint(microsoftSuccess()),
+      }),
+    );
+
+    const after = await db.integration.findUniqueOrThrow({
+      where: { id: row.id },
+      select: { syncState: true, syncGeneration: true, pagesImported: true, backfillTruncated: true },
+    });
+    assert.equal(
+      after.syncState,
+      "backfilling",
+      "a connection with a queued backfill reported a state that a finished one also reports",
+    );
+    assert.equal(after.pagesImported, 0, "the page budget was not reset for the new attempt");
+    assert.equal(after.backfillTruncated, false, "a stale truncation flag survived the reconnect");
+
+    const queued = await db.domainEvent.findMany({
+      where: { name: "integration.sync", entityId: row.id },
+      select: { payload: true, status: true },
+    });
+    assert.equal(queued.length, 1, "connecting did not queue exactly one first page");
+    // payload is a String column, not Json.
+    const payload = JSON.parse(queued[0]!.payload) as { generation?: number; cursor?: string | null };
+    assert.equal(
+      payload.generation,
+      after.syncGeneration,
+      "the queued page carries a generation the connection will refuse",
+    );
+    assert.equal(payload.cursor, null, "the first page of a new grant carried an inherited cursor");
+  });
+
   test("disconnecting destroys the token, bumps the generation, and keeps the data by default", async () => {
     const row = await db.integration.findFirstOrThrow({
       where: { workspaceId: owner.workspaceId },

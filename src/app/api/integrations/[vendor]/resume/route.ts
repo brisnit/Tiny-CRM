@@ -7,6 +7,7 @@ import { log } from "@/lib/logger";
 import { withTenantContext } from "@/lib/tenant-db";
 import { providerFor } from "@/lib/integrations/providers";
 import { resumeBackfill } from "@/lib/integrations/sync/worker";
+import { dispatchSoon } from "@/lib/events";
 
 /**
  * Continues an import the page cap stopped.
@@ -61,6 +62,12 @@ export async function POST(
   );
 
   log.info("import resume requested", { provider: provider.id, resumed: resumed.resumed });
+
+  // Same reason as the callback route: `resumeBackfill` queues a page, and a
+  // queued page that nothing drains is not a resumed import. Without this,
+  // pressing Resume changed the Settings text and waited for the cron.
+  if (resumed.resumed) dispatchSoon();
+
   settings.searchParams.set("connection", resumed.resumed ? "resuming" : "nothing-to-resume");
   return NextResponse.redirect(settings, { status: 303 });
 }

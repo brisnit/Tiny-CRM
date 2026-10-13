@@ -235,6 +235,9 @@ export async function completeConnection(input: {
     disconnectedAt: null,
     lastError: null,
     lastErrorAt: null,
+    // Momentary: `startBackfill` below moves this to `backfilling` in the same
+    // request. It is written here so a connection that somehow fails before
+    // the backfill is queued does not claim to be backfilling.
     syncState: "idle",
     // Reconnecting is a new generation: anything queued under the old one —
     // including a backfill that was halfway through — must not resume against
@@ -265,15 +268,26 @@ export async function completeConnection(input: {
         select: { id: true },
       });
 
-  // The import starts here rather than on the next cron tick, so a customer
-  // who has just granted access sees something happen. One page is queued; the
-  // chain carries itself from there.
-  const { enqueueNextPage } = await import("@/lib/integrations/sync/worker");
-  await enqueueNextPage({
+  // Start the backfill: mark the connection as backfilling and queue its first
+  // page. This goes through `startBackfill` rather than enqueueing inline,
+  // because the two had drifted — the inline version left `syncState` at
+  // `idle`, which is the same value a *finished* import has, so a queued
+  // backfill and a completed one were indistinguishable in the database and on
+  // the Settings page.
+  const { startBackfill } = await import("@/lib/integrations/sync/worker");
+  await startBackfill({
+    integrationId: row.id,
     workspaceId: state.workspaceId,
     ownerUserId: state.userId,
-    payload: { integrationId: row.id, generation: data.syncGeneration, cursor: null },
+    generation: data.syncGeneration,
   });
+
+  // Queueing is not running: the caller must drain. The callback route calls
+  // `dispatchSoon()` for that, as every other write path does from the request
+  // boundary rather than from inside a domain function — otherwise completing
+  // a connection in a test would fire a detached job that makes a real Graph
+  // request. `/api/cron/jobs` remains the guarantee of eventual delivery; the
+  // route's dispatch is what makes the common case immediate.
 
   log.info("integration connected", {
     provider: input.provider.id,

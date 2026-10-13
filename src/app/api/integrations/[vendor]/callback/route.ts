@@ -5,6 +5,7 @@ import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { log } from "@/lib/logger";
 import { withTenantContext } from "@/lib/tenant-db";
+import { dispatchSoon } from "@/lib/events";
 import { completeConnection } from "@/lib/integrations/connections";
 import { PROVIDERS, providerFor, type ProviderId } from "@/lib/integrations/providers";
 import { VERIFIER_COOKIE, clearVerifierCookie } from "@/lib/integrations/cookies";
@@ -111,6 +112,18 @@ export async function GET(
       provider: provider.id,
       integrationId: result.integrationId,
     });
+
+    // `completeConnection` queued the first page; queueing is not running.
+    // Without this the import waits for the next cron tick — up to thirty
+    // minutes in production, and forever on a developer machine, where no
+    // cron exists. The canary found it that way: connected, zero pages, a
+    // pending job and `lastSyncAt` of never.
+    //
+    // Detached and best effort, as everywhere else: a dispatch that fails, or
+    // that the platform freezes after the response, must not fail a
+    // connection that has already been made. The cron is the guarantee; this
+    // is the immediacy.
+    dispatchSoon();
     return back(request, "connected");
   } catch (error) {
     // The reason is logged, never redirected into the browser's address bar.
