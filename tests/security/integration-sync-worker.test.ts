@@ -378,14 +378,56 @@ describe("the runner, not just the handler, respects Retry-After", () => {
    * code. Without this, a correct handler and a runner that ignored
    * `RetryAfterError` would still retry in two seconds and every assertion
    * above would pass.
+   *
+   * The rule is one line of arithmetic — the delay is
+   * `max(ordinary backoff, Retry-After)` — so these assert that equality
+   * rather than a range around it. A range is what the first version of this
+   * did, and it was unsound: the first attempt's backoff is 4s jittered by
+   * ±25%, i.e. anywhere in 3000–5000ms, and an assertion of `>= 3500ms` failed
+   * roughly one CI run in four. Pinning the jitter removes the guesswork
+   * instead of widening the window until it stops failing.
    */
-  test("a throttled job is scheduled no earlier than the provider asked", async () => {
+
+  /**
+   * Jitter of 0.5 is the midpoint of the ±25% band, so `0.75 + 0.5 × 0.5 = 1`
+   * and the backoff is exactly its base: 4000ms on the first attempt. The
+   * formula, the ceiling and the spread are production's — only the draw is
+   * fixed. Asserted below rather than assumed.
+   */
+  const PINNED_BACKOFF_MS = 4_000;
+
+  beforeEach(async () => {
+    const { setBackoffJitterForTests, backoffMs } = await import("../../src/lib/jobs");
+    setBackoffJitterForTests(() => 0.5);
+    assert.equal(
+      backoffMs(1),
+      PINNED_BACKOFF_MS,
+      "the pinned backoff is not what these tests compute against",
+    );
+  });
+
+  after(async () => {
+    const { setBackoffJitterForTests, installedBackoffJitterForTests } = await import(
+      "../../src/lib/jobs"
+    );
+    setBackoffJitterForTests(null);
+    assert.equal(installedBackoffJitterForTests(), null, "the jitter seam leaked out of this file");
+  });
+
+  /**
+   * Runs one job to its retry and returns the delay the runner scheduled.
+   *
+   * `availableAt` is written as `now + delay` from inside the run, so the
+   * instant it was computed is unknown but bracketed by the run. Returning the
+   * bracket lets a caller assert the delay exactly, to within how long the run
+   * took — which is milliseconds, against figures seconds apart.
+   */
+  async function scheduledDelay(failure: Error): Promise<{ min: number; max: number; status: string }> {
     const { registerHandler, runJobs } = await import("../../src/lib/jobs");
     const { emitEvent } = await import("../../src/lib/events");
 
-    // A handler that throttles once, asking for five minutes.
     registerHandler("integration.sync", async () => {
-      throw new RetryAfterError(300_000, "the provider asked for 300s");
+      throw failure;
     });
 
     const event = await asOwner(() =>
@@ -401,89 +443,54 @@ describe("the runner, not just the handler, respects Retry-After", () => {
 
     const before = Date.now();
     await runJobs(5);
+    const ranUntil = Date.now();
 
     const row = await db.domainEvent.findUniqueOrThrow({
       where: { id: event.id },
-      select: { status: true, availableAt: true, attempts: true },
+      select: { status: true, availableAt: true },
     });
-    assert.equal(row.status, "failed", "the job did not record a retryable failure");
-    const waitMs = row.availableAt.getTime() - before;
+    const scheduledAt = row.availableAt.getTime();
+    // The delay is somewhere in [scheduledAt - ranUntil, scheduledAt - before].
+    return { min: scheduledAt - ranUntil, max: scheduledAt - before, status: row.status };
+  }
+
+  function assertDelayEquals(
+    scheduled: { min: number; max: number },
+    expected: number,
+    what: string,
+  ): void {
     assert.ok(
-      waitMs >= 300_000,
-      `the retry was scheduled in ${Math.round(waitMs / 1000)}s, sooner than the 300s asked for`,
+      scheduled.min <= expected && expected <= scheduled.max,
+      `${what}: expected a delay of exactly ${expected}ms, but the runner scheduled one in ` +
+        `[${scheduled.min}, ${scheduled.max}]ms`,
     );
-    // And not absurdly later — the floor is a floor, not a multiplier.
-    assert.ok(waitMs < 400_000, `the retry was pushed out to ${Math.round(waitMs / 1000)}s`);
+  }
+
+  test("a Retry-After longer than our backoff is granted in full", async () => {
+    // 300_000 > 4_000, so max() must take the provider's figure.
+    const scheduled = await scheduledDelay(new RetryAfterError(300_000, "the provider asked for 300s"));
+    assert.equal(scheduled.status, "failed", "the job did not record a retryable failure");
+    assertDelayEquals(scheduled, 300_000, "a 300s Retry-After above our 4s backoff");
   });
 
   test("a Retry-After shorter than our backoff does not pull the retry closer", async () => {
-    // Mutation found this gap: replacing the backoff with Retry-After, rather
-    // than taking the later of the two, passed every other test here because
-    // the provider's figure was always the larger one. A provider asking for
-    // one second must not get a retry in one second when our own backoff says
-    // longer — that is how a struggling provider gets hammered.
-    const { registerHandler, runJobs } = await import("../../src/lib/jobs");
-    const { emitEvent } = await import("../../src/lib/events");
-
-    registerHandler("integration.sync", async () => {
-      throw new RetryAfterError(1_000, "the provider asked for 1s");
-    });
-
-    const event = await asOwner(() =>
-      emitEvent({
-        workspaceId: tenant.workspaceId,
-        name: "integration.sync",
-        entityType: "integration",
-        entityId: integrationId,
-        actorId: tenant.ownerId,
-        payload: { integrationId, generation: 1, cursor: null },
-      }),
-    );
-
-    const before = Date.now();
-    await runJobs(5);
-    const row = await db.domainEvent.findUniqueOrThrow({
-      where: { id: event.id },
-      select: { availableAt: true },
-    });
-    const waitMs = row.availableAt.getTime() - before;
-    assert.ok(
-      waitMs >= 3_500,
-      `the retry was pulled in to ${waitMs}ms by a short Retry-After, below the ordinary backoff`,
-    );
+    // 1_000 < 4_000, so max() must keep *our* figure. Mutation found this gap:
+    // replacing the backoff with Retry-After, rather than taking the later of
+    // the two, passed every other test here because the provider's figure was
+    // always the larger one. A provider asking for one second must not get a
+    // retry in one second when our own backoff says longer — that is how a
+    // struggling provider gets hammered. With the jitter pinned, a replacement
+    // schedules 1000ms where this demands 4000ms, which no jitter draw can
+    // disguise.
+    const scheduled = await scheduledDelay(new RetryAfterError(1_000, "the provider asked for 1s"));
+    assert.equal(scheduled.status, "failed", "the job did not record a retryable failure");
+    assertDelayEquals(scheduled, PINNED_BACKOFF_MS, "a 1s Retry-After below our 4s backoff");
   });
 
   test("an ordinary failure still uses the ordinary backoff", async () => {
     // The control: if RetryAfterError simply made every retry five minutes,
-    // the test above would pass for the wrong reason.
-    const { registerHandler, runJobs } = await import("../../src/lib/jobs");
-    const { emitEvent } = await import("../../src/lib/events");
-
-    registerHandler("integration.sync", async () => {
-      throw new Error("an ordinary transient failure");
-    });
-
-    const event = await asOwner(() =>
-      emitEvent({
-        workspaceId: tenant.workspaceId,
-        name: "integration.sync",
-        entityType: "integration",
-        entityId: integrationId,
-        actorId: tenant.ownerId,
-        payload: { integrationId, generation: 1, cursor: null },
-      }),
-    );
-
-    const before = Date.now();
-    await runJobs(5);
-    const row = await db.domainEvent.findUniqueOrThrow({
-      where: { id: event.id },
-      select: { availableAt: true },
-    });
-    const waitMs = row.availableAt.getTime() - before;
-    assert.ok(
-      waitMs < 60_000,
-      `an ordinary failure waited ${Math.round(waitMs / 1000)}s, so the backoff is not ordinary`,
-    );
+    // the tests above would pass for the wrong reason.
+    const scheduled = await scheduledDelay(new Error("an ordinary transient failure"));
+    assertDelayEquals(scheduled, PINNED_BACKOFF_MS, "a failure carrying no Retry-After");
   });
 });
