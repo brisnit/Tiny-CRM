@@ -23,7 +23,12 @@ import { decryptSecret } from "../src/lib/crypto";
 import { withTenantContext } from "../src/lib/tenant-db";
 import { accessTokenFor, disconnectConnection } from "../src/lib/integrations/connections";
 import { PROVIDERS } from "../src/lib/integrations/providers";
-import { BACKFILL_WINDOW_DAYS, MAX_BACKFILL_PAGES } from "../src/lib/integrations/sync/graph";
+import {
+  BACKFILL_WINDOW_DAYS,
+  CALENDAR_DAYS_BACK,
+  CALENDAR_DAYS_FORWARD,
+  MAX_BACKFILL_PAGES,
+} from "../src/lib/integrations/sync/graph";
 
 if (!env.databaseUrl.startsWith("file:")) {
   console.error("\nThis verifies the LOCAL canary. Refusing to run against a non-SQLite database.\n");
@@ -517,8 +522,12 @@ async function incrementalReport() {
   const { scheduleDueSyncs } = await import("../src/lib/integrations/sync/schedule");
   const scheduled = await scheduleDueSyncs({ idleMs: 0 });
   console.log(`    scheduled        considered ${scheduled.considered}, queued ${scheduled.queued}, skipped ${scheduled.skipped}`);
-  check(scheduled.queued === 1, "the scheduler queued exactly one incremental pass");
-  if (scheduled.queued !== 1) return;
+  // At least one, not exactly one: this database now holds a mail connection
+  // and a calendar connection, and the scheduler is correct to queue both. An
+  // `=== 1` here failed on the second connection and returned early, leaving
+  // the queued job undrained and its connection stuck reporting `syncing`.
+  check(scheduled.queued >= 1, "the scheduler queued at least one pass");
+  if (scheduled.queued < 1) return;
 
   // Drain, exactly as `npm run worker -- --once` would.
   const { registerJobHandlers } = await import("../src/lib/jobs/handlers");
@@ -677,6 +686,286 @@ async function calendarReport() {
   console.log("\n    (no meeting title, attendee or token has been printed)\n");
 }
 
+
+/** One instant, rendered in a named zone, so two clocks can be compared. */
+function inZone(at: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    weekday: "short", year: "numeric", month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(at);
+}
+
+/**
+ * Every imported meeting's start and end, in UTC and in a named zone.
+ *
+ * For checking against the calendar itself, which is the only thing that can
+ * actually settle whether the times are right. The duration check in
+ * `--calendar` cannot: a meeting shifted by a whole number of hours keeps its
+ * duration exactly, so a uniform offset error — precisely the failure mode of
+ * reading a Graph wall-clock string in the host's zone — passes it untouched.
+ * It only catches a parse that mangles one end relative to the other.
+ *
+ * No title, attendee or location is printed. A meeting is identified by its
+ * slot, which is what you match against the calendar.
+ */
+async function calendarTimes() {
+  const row = await connection("outlook_calendar");
+  const zone = process.argv.find((a) => a.startsWith("--zone="))?.slice(7) ?? "America/Los_Angeles";
+
+  console.log("\n7. Imported meeting times, for comparison against Outlook");
+  console.log("=".repeat(70));
+  console.log(`\n    rendering zone   ${zone}`);
+  console.log(`    host zone        ${Intl.DateTimeFormat().resolvedOptions().timeZone}`);
+  console.log("    (the two differing is the point: the stored value is an instant,");
+  console.log("     so the same row renders correctly in either)\n");
+
+  const events = await db.calendarEvent.findMany({
+    where: { integrationId: row.id },
+    orderBy: { startAt: "asc" },
+    select: { startAt: true, endAt: true, allDay: true },
+  });
+
+  console.log(`    #   start (${zone})`.padEnd(40) + "  " + "end".padEnd(34) + "  mins");
+  events.forEach((e, i) => {
+    const mins = Math.round((e.endAt.getTime() - e.startAt.getTime()) / 60_000);
+    console.log(
+      `    ${String(i + 1).padStart(2)}  ${inZone(e.startAt, zone).padEnd(34)}` +
+        `  ${inZone(e.endAt, zone).padEnd(34)}  ${String(mins).padStart(4)}${e.allDay ? "  (all day)" : ""}`,
+    );
+  });
+
+  console.log("\n    the same rows in UTC, which is what is stored:");
+  events.forEach((e, i) => {
+    console.log(
+      `    ${String(i + 1).padStart(2)}  ${e.startAt.toISOString()}  ->  ${e.endAt.toISOString()}`,
+    );
+  });
+
+  console.log(
+    "\n  Open any one of these in Outlook. If a row is out by a whole number of\n" +
+      "  hours, the Graph wall-clock string is being read in the wrong zone. If it\n" +
+      "  matches, the instant is right.\n",
+  );
+}
+
+/**
+ * Asks Graph directly how many events each half of the window holds.
+ *
+ * "Zero upcoming meetings" has two causes that look identical from the
+ * database: a calendar with nothing booked, and a forward bound that is not
+ * working. Only the provider can tell them apart, so it is asked. Counts
+ * only — no title, time or attendee is read back.
+ */
+async function calendarWindow() {
+  const row = await connection("outlook_calendar");
+  console.log("\n8. Is the window reaching forward?");
+  console.log("=".repeat(70));
+
+  const token = await withTenantContext(
+    { workspaceIds: [row.workspaceId], userId: row.userId, restrictedWorkspaceIds: [] },
+    () => accessTokenFor(row.id, PROVIDERS.outlook_calendar),
+  );
+
+  async function countBetween(from: Date, to: Date): Promise<number> {
+    const params = new URLSearchParams({
+      startDateTime: from.toISOString(),
+      endDateTime: to.toISOString(),
+      $select: "id",
+      $top: "999",
+    });
+    const response = await fetch(
+      `https://graph.microsoft.com/v1.0/me/calendarView?${params.toString()}`,
+      { headers: { authorization: `Bearer ${token}`, accept: "application/json" } },
+    );
+    if (!response.ok) throw new Error(`Graph returned ${response.status}`);
+    const parsed = (await response.json()) as { value?: unknown[] };
+    return Array.isArray(parsed.value) ? parsed.value.length : 0;
+  }
+
+  const now = new Date();
+  const back = new Date(now.getTime() - CALENDAR_DAYS_BACK * 86_400_000);
+  const forward = new Date(now.getTime() + CALENDAR_DAYS_FORWARD * 86_400_000);
+
+  const pastCount = await countBetween(back, now);
+  const futureCount = await countBetween(now, forward);
+  const stored = await db.calendarEvent.count({ where: { integrationId: row.id } });
+  const storedFuture = await db.calendarEvent.count({
+    where: { integrationId: row.id, startAt: { gt: now } },
+  });
+
+  console.log(`\n    window           ${back.toISOString().slice(0, 10)} .. ${forward.toISOString().slice(0, 10)}`);
+  console.log(`                     (${CALENDAR_DAYS_BACK} days back, ${CALENDAR_DAYS_FORWARD} forward)`);
+  console.log(`\n    Graph says       ${pastCount} in the past half, ${futureCount} in the forward half`);
+  console.log(`    we hold          ${stored} in total, ${storedFuture} upcoming`);
+
+  check(
+    storedFuture === futureCount,
+    "we hold every upcoming meeting the provider reports",
+    `the provider has ${futureCount} and we have ${storedFuture}`,
+  );
+  if (futureCount === 0) {
+    ok(
+      "zero upcoming is the calendar, not the window",
+      `Graph returns nothing between now and ${forward.toISOString().slice(0, 10)} either`,
+    );
+  }
+  console.log("\n    (counts only; nothing about any meeting has been read back)\n");
+}
+
+/**
+ * Re-syncs and reports what changed, so an edit in Outlook can be checked.
+ *
+ * Edit one meeting in Outlook first — move it, or rename it — then run this.
+ * It compares every row before and after, which is the only way to show that
+ * a change arrived *and* that nothing was duplicated by it.
+ */
+async function calendarEdit() {
+  const row = await connection("outlook_calendar");
+  console.log("\n9. An edited meeting updates in place");
+  console.log("=".repeat(70));
+
+  type Snapshot = {
+    id: string; externalId: string | null; title: string; startAt: Date; endAt: Date;
+    location: string | null; visibility: string; ownerUserId: string | null;
+    source: string; contactId: string | null; sharedAt: Date | null;
+  };
+  const select = {
+    id: true, externalId: true, title: true, startAt: true, endAt: true,
+    location: true, visibility: true, ownerUserId: true, source: true,
+    contactId: true, sharedAt: true,
+  } as const;
+
+  /**
+   * `--perturb` makes the local copy wrong on purpose, then re-syncs.
+   *
+   * The grant is read-only — Calendars.Read — so this cannot edit the
+   * calendar, and waiting for a human to edit one proves the update path only
+   * when somebody is at a keyboard. Moving a stored row away from what Graph
+   * holds creates the same difference an edit would, against real provider
+   * data, and the re-sync has to reconcile it by updating that row rather
+   * than inserting a second one.
+   *
+   * What it does NOT establish is that an edit made in Outlook reaches us —
+   * that is Microsoft's side of the exchange, and only an edit in Outlook can
+   * show it.
+   */
+  if (process.argv.includes("--perturb")) {
+    const victim = await db.calendarEvent.findFirst({
+      where: { integrationId: row.id },
+      orderBy: { startAt: "asc" },
+      select: { id: true, startAt: true, endAt: true, title: true },
+    });
+    if (!victim) {
+      bad("there is a meeting to perturb", "nothing has been imported");
+      return;
+    }
+    await db.calendarEvent.update({
+      where: { id: victim.id },
+      data: {
+        startAt: new Date(victim.startAt.getTime() + 90 * 60_000),
+        endAt: new Date(victim.endAt.getTime() + 90 * 60_000),
+        title: `${victim.title} [perturbed]`,
+      },
+    });
+    console.log(
+      `\n    perturbed        one row moved +90 minutes and renamed, to stand in for an edit\n` +
+        `                     ${victim.startAt.toISOString()} -> ` +
+        `${new Date(victim.startAt.getTime() + 90 * 60_000).toISOString()}`,
+    );
+  }
+
+  const before = (await db.calendarEvent.findMany({
+    where: { integrationId: row.id }, select, orderBy: { startAt: "asc" },
+  })) as Snapshot[];
+  console.log(`\n    before           ${before.length} meetings`);
+
+  const { scheduleDueSyncs } = await import("../src/lib/integrations/sync/schedule");
+  const scheduled = await scheduleDueSyncs({ idleMs: 0 });
+  // No detail: `check` prints it on a pass too, and "it queued none" beside a
+  // PASS reads as a contradiction.
+  check(scheduled.queued >= 1, "the scheduler queued a pass over the calendar");
+  if (scheduled.queued < 1) return;
+
+  const { registerJobHandlers } = await import("../src/lib/jobs/handlers");
+  const { runJobs } = await import("../src/lib/jobs");
+  registerJobHandlers();
+  for (let i = 0; i < 20; i += 1) {
+    const result = await runJobs(10);
+    if (result.processed + result.failed + result.dead === 0) break;
+    if (result.failed || result.dead) {
+      bad("the pass ran without failing", `${result.failed} failed, ${result.dead} dead`);
+      return;
+    }
+  }
+
+  const after = (await db.calendarEvent.findMany({
+    where: { integrationId: row.id }, select, orderBy: { startAt: "asc" },
+  })) as Snapshot[];
+  console.log(`    after            ${after.length} meetings`);
+
+  const byId = new Map(before.map((e) => [e.id, e]));
+  const added = after.filter((e) => !byId.has(e.id));
+  const removed = before.filter((e) => !after.some((a) => a.id === e.id));
+  const changed = after.filter((e) => {
+    const was = byId.get(e.id);
+    if (!was) return false;
+    return (
+      was.title !== e.title ||
+      was.startAt.getTime() !== e.startAt.getTime() ||
+      was.endAt.getTime() !== e.endAt.getTime() ||
+      was.location !== e.location
+    );
+  });
+
+  console.log(`\n    rows added       ${added.length}`);
+  console.log(`    rows removed     ${removed.length}`);
+  console.log(`    rows updated     ${changed.length}`);
+
+  for (const e of changed) {
+    const was = byId.get(e.id)!;
+    // What changed, by field, without printing either value where it is content.
+    const fields: string[] = [];
+    if (was.title !== e.title) fields.push("title");
+    if (was.location !== e.location) fields.push("location");
+    if (was.startAt.getTime() !== e.startAt.getTime()) {
+      fields.push(`start ${was.startAt.toISOString()} -> ${e.startAt.toISOString()}`);
+    }
+    if (was.endAt.getTime() !== e.endAt.getTime()) {
+      fields.push(`end ${was.endAt.toISOString()} -> ${e.endAt.toISOString()}`);
+    }
+    console.log(`      updated in place: ${fields.join(", ")}`);
+  }
+
+  console.log("\n  What an update must not do");
+  check(added.length === 0, "nothing was duplicated", `${added.length} row(s) appeared for meetings already held`);
+  check(removed.length === 0, "nothing was dropped", `${removed.length} row(s) disappeared`);
+  check(
+    after.length === before.length,
+    "the meeting count is unchanged",
+    `${before.length} -> ${after.length}`,
+  );
+  check(
+    after.every((e) => e.source === "imported" && e.ownerUserId === row.userId),
+    "every row kept its provenance and owner through the update",
+  );
+  const unshared = after.filter((e) => {
+    const was = byId.get(e.id);
+    return was && was.visibility !== e.visibility;
+  });
+  check(unshared.length === 0, "no row's visibility was rewritten by the re-sync", `${unshared.length} changed`);
+
+  if (changed.length === 0) {
+    console.log(
+      "\n    Nothing changed. If you edited a meeting in Outlook, either the edit has\n" +
+        "    not propagated yet, or it was outside the imported window. Edit one of the\n" +
+        "    meetings listed by --calendar-times and run this again.\n",
+    );
+  } else {
+    console.log("");
+  }
+}
+
 const which = process.argv.find((a) => a.startsWith("--"));
 const run =
   which === "--encryption" ? encryption :
@@ -685,11 +974,15 @@ const run =
   which === "--sync" ? syncReport :
   which === "--incremental" ? incrementalReport :
   which === "--calendar" ? calendarReport :
+  which === "--calendar-times" ? calendarTimes :
+  which === "--calendar-window" ? calendarWindow :
+  which === "--calendar-edit" ? calendarEdit :
   null;
 
 if (!run) {
   console.error(
-    "\nUsage: --encryption | --refresh | --disconnect | --sync | --incremental | --calendar\n",
+    "\nUsage: --encryption | --refresh | --disconnect | --sync | --incremental\n" +
+      "       | --calendar | --calendar-times [--zone=IANA] | --calendar-window | --calendar-edit\n",
   );
   process.exit(1);
 }
