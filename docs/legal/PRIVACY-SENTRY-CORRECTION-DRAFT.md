@@ -8,8 +8,9 @@ Bundling them would make it impossible to say which change a notice period was
 given for.
 
 **This should not wait for the integration release.** It is a live omission in
-a published notice, and the integration work could slip for reasons that have
-nothing to do with it.
+a published notice — confirmed live, not theoretical: `SENTRY_DSN` is present
+in the Production environment — and the integration work could slip for
+reasons that have nothing to do with it.
 
 ---
 
@@ -55,7 +56,7 @@ Add to the § 5 table, in the same shape as the existing rows:
 
 | Who | What they get | Where |
 |---|---|---|
-| Sentry | Error reports: the type and message of a fault, a scrubbed stack trace, the request id, the route path, and the user and workspace ids. No CRM field values, no note or document contents, no request bodies, no credentials. | United States |
+| Sentry | Error reports: the type and message of a fault, a scrubbed stack trace, the request id, the route path, and the user and workspace ids. No CRM field values, no note or document contents, no request bodies, no credentials. | **To be confirmed** — read the Sentry organisation's region setting before publishing; do not write a country we have not checked |
 
 And beneath it:
 
@@ -93,25 +94,42 @@ So the notice describes **the control**, not an absolute outcome. That is both
 more honest and more durable: the control is something we can keep, where
 "never" is something one careless `throw` would break.
 
-## Does this trigger the 30-day clause?
+## Does this trigger the 30-day clause? — a proposed interpretation, for review
 
-§ 12 promises 30 days' notice for a **material** change. My reading, and it is
-a reading:
+§ 12 promises 30 days' notice for a **material** change. What follows is an
+argument for your decision, **not an exemption I have decided applies.** The
+notice commitment stands until you say otherwise; nothing here should be read
+as having already cleared it.
 
-**Adding a subprocessor that is already in use is a correction, not a change.**
-Nothing about what happens to anyone's data is being altered — Sentry has been
-receiving these reports throughout. The notice is being made accurate about
-the present, not changed about the future. A 30-day wait would mean 30 further
-days of an inaccurate notice, which serves nobody.
+**The argument for treating this as a correction:** adding a subprocessor that
+is already in use does not alter what happens to anyone's data. Sentry has
+been receiving these reports throughout. The notice is being made accurate
+about the present rather than changed about the future, and a 30-day wait
+means 30 further days of an inaccurate notice.
 
-So: publish it when approved, and say plainly in the changelog entry that it is
-a correction of an omission rather than a new disclosure. **Do not** quietly
-edit the table — a correction that is not labelled as one is worse than the
-omission, because it removes the evidence that anything was wrong.
+**The argument against, which is not weak:** § 12 says "changes materially",
+not "changes what we do". A reader learning for the first time that an
+undisclosed third party in another jurisdiction has been receiving data about
+their account may reasonably call that material *to them*, whatever its effect
+on our systems. The clause exists to protect their expectations, and they
+cannot have formed an expectation about a subprocessor they were never told
+about. Reading our own omission as the thing that exempts us from our own
+notice period is, at minimum, a convenient conclusion to reach — and it is
+reached by the party that made the omission.
 
-If you would rather treat it as material and give the 30 days anyway, that is
-a defensible choice and costs only time. What is not defensible is deferring
-it indefinitely while the integration release settles.
+**My recommendation, offered as that:** give the 30 days. It costs only time,
+it is unarguable, and the alternative asks a customer to accept an
+interpretation written by us about a mistake of ours. If you decide the
+correction reading is right, the decision should be recorded as a decision —
+who made it, when, and on what basis — rather than inherited from this draft.
+
+Either way, two things hold:
+
+- **Label it as a correction.** Do not quietly edit the table. A fix that is
+  not labelled removes the evidence that anything was wrong.
+- **Do not defer it indefinitely** while the integration release settles. If
+  the 30 days are given, start them now rather than when integrations are
+  ready; the two have nothing to do with each other.
 
 ## Also worth checking before this is published
 
@@ -132,12 +150,10 @@ it indefinitely while the integration release settles.
   exception message. It should be reworded to describe the control, exactly as
   proposed above.
 
-- **Whether `SENTRY_DSN` is actually set in production.** The adapter is
-  installed only when it is configured — `if (env.sentryDsn) return new
-  SentryAdapter(...)`, with a fallback to logs otherwise. I have **not** read
-  production's environment, so I cannot say from here whether reports are
-  being sent today. Two reasons to think they are: a production Sentry issue
-  (TINY-CRM-8, release 473d353) was investigated earlier in this work, which
-  is hard to explain if nothing is being sent. Confirm it from the Vercel
-  environment rather than from that inference before publishing, and if it is
-  unset, the row should read "when error reporting is enabled" instead.
+- ~~Whether `SENTRY_DSN` is actually set in production.~~ **Confirmed
+  present.** `vercel env ls production` lists `SENTRY_DSN` scoped to
+  Production, created 36 days ago. Presence only — Vercel reports every value
+  as "Encrypted" and no DSN was read or printed. So the adapter is installed
+  (`if (env.sentryDsn) return new SentryAdapter(...)`) and reports are being
+  sent today. The omission is live, not theoretical, and the row should be
+  written in the present tense rather than conditionally.
