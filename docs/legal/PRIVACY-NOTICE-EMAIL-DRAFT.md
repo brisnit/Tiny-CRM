@@ -3,6 +3,12 @@
 **Status: draft for review. Not sent, not scheduled, not queued.** No send
 path has been built for this and none should be until the wording is agreed.
 
+**`{EFFECTIVE_DATE}` is a placeholder and stays one.** No date appears
+anywhere in this draft. It is fixed only when you approve the publication and
+send date together — they are one decision, because the 30 days are counted
+from this email and an effective date without a send date cannot be measured
+against the clause.
+
 This is the email that discharges § 12 of the privacy notice:
 
 > If this notice changes materially, we will give at least **30 days' notice
@@ -54,7 +60,7 @@ pre-header gimmick.
 >
 > **The change takes effect on {EFFECTIVE_DATE}.** Until then, the current
 > notice continues to apply in full, and email and calendar connections are
-> not available.
+> not available to customers.
 >
 > **What the new sections say**
 >
@@ -112,6 +118,13 @@ pre-header gimmick.
   It should be answerable from the admin panel before the email goes out.
 - **No link to connect anything.** This is a notice, not an announcement. A
   call to action in a privacy email makes consent look like marketing.
+- **"not available to customers"**, not "not available". The narrower phrasing
+  is deliberate and should not be tidied away. Our own canary mailbox has
+  already been imported during development — our correspondence, our
+  workspace, us as controller, no customer data involved — so a flat "not
+  available" or "nothing has been collected" would be a claim we cannot
+  stand behind. What customers need to know is that *they* cannot connect
+  anything yet, which is both true and the thing they are actually asking.
 
 ## Before this is sent
 

@@ -5,6 +5,17 @@
 untouched, and no notice period is shortened. This file is the proposal; the
 decision to publish it, and when, is yours.
 
+**`INTEGRATIONS_EFFECTIVE_ON` is a placeholder and stays one.** No date is
+written anywhere in this file or in the email draft — only the named constant
+and `{EFFECTIVE_DATE}`. The date is not mine to choose: it is fixed when you
+approve the publication and email date together, because the two are the same
+decision (the 30 days run from the email, so a publication date without a send
+date means nothing). Until then, every reference is a placeholder, and
+`src/lib/legal.ts` is unchanged.
+
+**Availability claims are scoped to customers throughout.** See the note under
+"Two effective dates" for why the broader phrasing would be untrue.
+
 Every statement below was checked against the implementation rather than
 against the product copy. Two existing claims did not survive that check and
 are listed under **Corrections required** — one of them is a privacy promise
@@ -113,8 +124,9 @@ Add, before the subprocessor table:
 > requests no permission to send, reply, create, modify or delete anything in
 > your mailbox or calendar, and holds no capability to do so.
 >
-> Your correspondence is not sent to any of the subprocessors listed below. In
-> particular it is not sent to Anthropic — see § 6.
+> Your correspondence is not sent to Anthropic — see § 6. Error reports used
+> to diagnose faults are scrubbed before they leave our servers and do not
+> carry message or meeting contents.
 
 *Verified:* the Outlook providers request `Mail.Read`, `Calendars.Read`,
 `User.Read`, `offline_access`, `openid`, `profile`, `email` and nothing
@@ -268,12 +280,54 @@ Each integration section carries its own dated marker, so a customer reading
 the page before that date sees both what governs now and what will govern
 later:
 
-> *This section takes effect on {INTEGRATIONS_EFFECTIVE_ON}. Until then, email
-> and calendar connections are not available and nothing described here is
-> collected.*
+> *This section takes effect on {INTEGRATIONS_EFFECTIVE_ON}. Until then,
+> email and calendar connections are not available to customers.*
+
+**Why that sentence and not a broader one.** An earlier version of this marker
+added "and nothing described here is collected". That is a blanket claim about
+the whole product, and it is not one we can make: Artifact Digital's own canary
+mailbox has already been imported — 320 real messages and 16 real meetings —
+during development. That is our own correspondence, in our own workspace, with
+us as the controller, and no customer's data is involved. It is still
+collection of the kind this section describes, so a public notice must not say
+it has not happened.
+
+What is true, verifiable and sufficient is the narrower statement: **customers
+cannot connect anything.** That is enforced by the `integrations` flag, which
+is off globally and will be enabled for one workspace at a time. Scope every
+public availability claim to customers for this reason, and resist the
+temptation to make the broader one because it reads better.
 
 That marker is removable in one commit on the day, and the sections stop being
 conditional without any other edit.
+
+## A separate gap this turned up, which is not mine to close
+
+While checking the sentence "your correspondence is not sent to any of the
+subprocessors listed below", I found that claim could not be made safely —
+because the list is not complete.
+
+**Sentry is a live subprocessor and does not appear in the § 5 table.** It
+receives error reports from production (`src/lib/observability.ts`, the
+`SentryAdapter`), and the table lists only Anthropic, Stripe, Resend and
+Amazon SES. This predates the integration work entirely and is not caused by
+it.
+
+Two things to say about it honestly:
+
+- **The data reaching Sentry is scrubbed.** `scrubMessage`, `scrubStack` and
+  `scrubRoute` strip passwords, tokens, API keys and request bodies, and
+  nothing in the integration code paths logs a subject, a snippet, an address
+  or a token — the importer logs counts, and the canary verifier is written
+  to print none of it. So the narrower sentence now proposed above is true.
+- **The omission is still a defect in the published notice**, and arguably
+  material on its own: a named subprocessor list that omits a subprocessor is
+  worse than no list, because a reader takes it as complete.
+
+I have not touched § 5's table. Adding Sentry is a separate decision about the
+*current* notice, with its own materiality question and possibly its own
+30-day clock, and bundling it into the integration release would blur which
+change the notice period was given for. Flagging it rather than fixing it.
 
 ## What is not covered here
 
