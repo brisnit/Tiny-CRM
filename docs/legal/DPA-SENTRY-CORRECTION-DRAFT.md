@@ -23,13 +23,13 @@ printed), and `getAdapter()` installs the Sentry adapter whenever it is set.
 
 | Subprocessor | Purpose | Location | Basis |
 |---|---|---|---|
-| Sentry | Error reporting, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace | **Not confirmed** — Sentry's region is an organisation setting and has not been read | Verified from code (`src/lib/observability.ts`, `SentryAdapter`) and from `SENTRY_DSN` being present in the Production environment |
+| Sentry | Error reporting, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace | United States — read from the Sentry organisation's Data Storage Region setting | Verified from code (`src/lib/observability.ts`, `SentryAdapter`) and from `SENTRY_DSN` being present in the Production environment |
 
-"Not confirmed" for the location is deliberate and matches how Annex B already
-treats Resend and Amazon SES. Do not write "United States" without reading the
-Sentry organisation's region setting; the privacy-notice draft currently
-proposes "United States" for the same row and **that should be corrected to
-match, or both confirmed, before either is published.** They must not disagree.
+The location is now **confirmed**, not inferred: read from the Sentry
+organisation's Data Storage Region setting. Both this row and the privacy
+notice's § 5 row carry the same value, which was the condition for writing a
+country at all — an earlier draft asserted "United States" before anyone had
+checked, and that assertion was withdrawn until it could be.
 
 ### Also unread
 

@@ -56,8 +56,23 @@ So the wording in `FINAL-WORDING.md` is two notices, not one:
 
 Mixing them into one undifferentiated email would be the worst option
 available: a customer would read a 30-day notice about an optional feature and
-a correction taking effect immediately as though they were one thing, and
-could not tell which deadline governed what.
+a correction on a different timetable as though they were one thing, and could
+not tell which deadline governed what.
+
+**Two dates, not one.** `{EFFECTIVE_DATE}` governs the integration sections
+and `{SENTRY_CORRECTION_EFFECTIVE_DATE}` governs the correction. They may
+resolve to different days and must not be collapsed. An earlier draft said the
+correction took effect "immediately" — an assumption rather than a decision,
+now removed.
+
+**And one sentence must change in a combined email.** Notice B closes with "If
+you never connect a mailbox or calendar, nothing in this update applies to
+you". That is true of an email about integrations and false once the
+correction shares the message, because the correction applies to everyone. In
+the combined case it becomes: "If you never connect a mailbox or calendar, the
+optional integration changes do not affect you unless you connect." The
+substitution is written out in `FINAL-WORDING.md` beside the combined-notice
+paragraph, because it is exactly the kind of thing that gets missed.
 
 ## Subject
 

@@ -57,7 +57,7 @@ holds no ability to do so.
 
 | Who | What they get | Where |
 | --- | --- | --- |
-| Sentry | Error reports, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace. | {SENTRY_REGION} |
+| Sentry | Error reports, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace. | United States |
 
 **Error reports are deliberately narrow.** We do not use Sentry's automatic
 instrumentation, which would otherwise capture request bodies, local variables
@@ -86,10 +86,12 @@ is not imported correspondence and is not covered by this exclusion.
 
 ## § 7. Security — addition
 
-**Access tokens are encrypted before they are stored**, with a key derived
-separately from the keys used for anything else, and are not written to logs.
-If a stored token becomes unreadable, the connection stops importing, destroys
-the unreadable token and asks you to reconnect rather than retrying.
+**The access token and the refresh token are both encrypted before they are
+stored.** They are held together as a single encrypted record, with a key
+derived separately from the keys used for anything else, and neither is
+written to logs. If that stored record becomes unreadable, the connection
+stops importing, destroys it, and asks you to reconnect rather than
+retrying.
 
 ## § 8. Retention — addition
 
@@ -132,7 +134,7 @@ and calendar connections are not available to customers.*
 
 | Subprocessor | Purpose | Location | Basis |
 | --- | --- | --- | --- |
-| Sentry | Error reporting: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace | {SENTRY_REGION} | Verified from code and configuration |
+| Sentry | Error reporting: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace | United States | Verified from code and configuration; region read from the Sentry organisation's Data Storage Region setting |
 
 ## Replacement for the closing sentence
 
@@ -166,7 +168,7 @@ provider we had not listed
 > Hello,
 >
 > We are writing to correct our privacy notice. Nothing about how Tiny CRM
-> works is changing.
+> works is changing, and nothing you do needs to change.
 >
 > Our notice lists the companies that process data on our behalf. That list
 > was incomplete: it did not name **Sentry**, which receives error reports
@@ -183,7 +185,8 @@ provider we had not listed
 > **What is changing:** the notice, so that it is accurate. Not the product,
 > and not what we collect.
 >
-> The updated notice is at https://tinycrm.biz/privacy.
+> This correction takes effect on {SENTRY_CORRECTION_EFFECTIVE_DATE}. The
+> updated notice is at https://tinycrm.biz/privacy.
 >
 > If you have questions, write to privacy@tinycrm.biz.
 >
@@ -253,12 +256,30 @@ Append this beneath Notice B, under a divider, so the two are not confused:
 
 > **Separately: a correction to the same notice.**
 >
-> Unrelated to the above, and taking effect immediately rather than on
-> {EFFECTIVE_DATE}: our subprocessor list did not name Sentry, which receives
-> error reports from Tiny CRM when something goes wrong. It has been receiving
-> them throughout and should have been listed. Nothing about how Tiny CRM
-> works is changing — only the notice, so that it is accurate. What an error
-> report contains is described in the notice.
+> Unrelated to the above, and on its own timetable: our subprocessor list did
+> not name Sentry, which receives error reports from Tiny CRM when something
+> goes wrong. It has been receiving them throughout and should have been
+> listed. Nothing about how Tiny CRM works is changing — only the notice, so
+> that it is accurate. What an error report contains is described in the
+> notice. This correction takes effect on
+> {SENTRY_CORRECTION_EFFECTIVE_DATE}.
+
+**Two edits are required when the notices are combined, and the second is
+easy to miss.**
+
+1. The two dates are separate placeholders and may resolve to different days.
+   Do not collapse them into one.
+2. Notice B's closing line must change. Standing alone it reads *"If you never
+   connect a mailbox or calendar, nothing in this update applies to you"* —
+   true of an email about integrations, and **false** once the Sentry
+   correction is in the same message, because that correction applies to
+   everyone. Replace it with:
+
+   > If you never connect a mailbox or calendar, the optional integration
+   > changes do not affect you unless you connect.
+
+   Leaving the original in a combined email would tell a customer that a
+   correction about an undisclosed subprocessor does not concern them.
 
 ---
 
@@ -269,14 +290,12 @@ decision taken.
 
 ## Facts nobody has established yet
 
-- [ ] **Sentry's region.** `{SENTRY_REGION}` appears twice above — in the
-      privacy notice row and the DPA Annex B row. Both must be filled with the
-      same value, read from the Sentry organisation's own setting. Do not
-      write a country that has not been checked.
-- [ ] **`privacy@tinycrm.biz` reaches a monitored inbox.** `tinycrm.biz` has
-      MX records (`mx1`/`mx2.spacemail.com`), so the domain accepts mail. That
-      is not the same as the address existing, or anyone reading it. Both
-      documents give it as the contact for privacy questions.
+- [x] **Sentry's region — confirmed United States.** Read from the Sentry
+      organisation's Data Storage Region setting and written into both the
+      privacy notice § 5 row and the DPA Annex B row. No longer a placeholder.
+- [x] **`privacy@tinycrm.biz` reaches a monitored inbox — confirmed.** A test
+      message was sent and arrived. The address can stand as the contact for
+      privacy questions in both documents.
 - [ ] **The `MAIL_FROM` address.** Neither notice says "reply to this
       message", because whether a reply arrives anywhere depends on this, and
       the default in code is `no-reply@localhost`. The production value is set
@@ -293,13 +312,20 @@ decision taken.
       days run from the email, so a publication date without a send date
       cannot be measured against the commitment. At least 31 days between the
       two.
+- [ ] **When the Sentry correction takes effect.**
+      `{SENTRY_CORRECTION_EFFECTIVE_DATE}` is deliberately unset. An earlier
+      draft said this correction took effect "immediately"; that was an
+      assumption, not a decision, and it has been removed from both Notice A
+      and the combined-notice paragraph. The date follows from the next
+      question and is yours to set.
 - [ ] **Whether the Sentry correction gets the 30 days**, or ships sooner as a
       labelled correction. The argument runs both ways. The recommendation is
       to give the 30 days: it costs only time, and the alternative asks a
       customer to accept an interpretation we wrote about an omission of ours.
 - [ ] **Whether the Sentry correction ships ahead of the integration
       release.** It corrects something already happening and has no dependency
-      on integrations. If it does ship first, Notice A goes alone.
+      on integrations. If it does ship first, Notice A goes alone — and the
+      two dates stay independent.
 - [ ] **Whether to restore the offer to confirm no connection exists.** It was
       removed because the admin panel surfaces nothing about integrations, so
       answering means a manual database query, and the answer could not
@@ -319,8 +345,11 @@ decision taken.
 | Placeholder | Appears in | Fixed when |
 | --- | --- | --- |
 | `{EFFECTIVE_DATE}` | Notice B, subject and body | The publication and send dates are approved together |
-| `{INTEGRATIONS_EFFECTIVE_ON}` | The marker on each integration section | The same decision — it is the same date |
-| `{SENTRY_REGION}` | Privacy notice § 5 row, DPA Annex B row | Someone reads the Sentry organisation's region setting |
+| `{INTEGRATIONS_EFFECTIVE_ON}` | The marker on each integration section | The same decision — it is the same date as `{EFFECTIVE_DATE}` |
+| `{SENTRY_CORRECTION_EFFECTIVE_DATE}` | Notice A, and the combined-notice paragraph | A separate decision, on its own timetable. **Not** the same date as the two above unless you choose it to be |
+
+~~`{SENTRY_REGION}`~~ — resolved to **United States** and written into both
+disclosure rows.
 
 No date appears anywhere in this document. Nothing here has been published,
 and no email has been sent.

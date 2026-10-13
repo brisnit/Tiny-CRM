@@ -56,7 +56,7 @@ Add to the § 5 table, in the same shape as the existing rows:
 
 | Who | What they get | Where |
 |---|---|---|
-| Sentry | Error reports, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace. | **To be confirmed** — read the Sentry organisation's region setting before publishing; do not write a country we have not checked |
+| Sentry | Error reports, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace. | United States — read from the Sentry organisation's Data Storage Region setting |
 
 And beneath it:
 
@@ -132,6 +132,12 @@ interpretation written by us about a mistake of ours. If you decide the
 correction reading is right, the decision should be recorded as a decision —
 who made it, when, and on what basis — rather than inherited from this draft.
 
+**The effective date is not assumed.** An earlier draft of the customer
+notice said this correction took effect "immediately". That was an assumption
+standing in for a decision, and it has been removed: the wording now carries
+`{SENTRY_CORRECTION_EFFECTIVE_DATE}`, a placeholder separate from the
+integration dates, to be set when the question above is answered.
+
 Either way, two things hold:
 
 - **Label it as a correction.** Do not quietly edit the table. A fix that is
@@ -159,6 +165,10 @@ Either way, two things hold:
   exception message. It should be reworded to describe the control, exactly as
   proposed above.
 
+- ~~Sentry's region.~~ **Confirmed: United States**, read from the Sentry
+  organisation's Data Storage Region setting and written into both this
+  document and the DPA Annex B row. They must not disagree, and they now do
+  not.
 - ~~Whether `SENTRY_DSN` is actually set in production.~~ **Confirmed
   present.** `vercel env ls production` lists `SENTRY_DSN` scoped to
   Production, created 36 days ago. Presence only — Vercel reports every value
