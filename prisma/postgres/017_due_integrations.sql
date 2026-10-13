@@ -80,8 +80,16 @@ AS $$
   LIMIT p_limit;
 $$;
 
--- Only the application role executes it; nothing else should be able to
--- enumerate connections, however narrowly.
+-- Only the application role. Not PUBLIC: a SECURITY DEFINER function granted
+-- to PUBLIC is reachable by every role the database will ever have.
+--
+-- Both halves are needed, and the first version of this file had only the
+-- first. PostgreSQL grants EXECUTE on a new function to PUBLIC by default, so
+-- revoking it and stopping there leaves nobody but the owner able to call it:
+-- the request path runs as `tinycrm_app`, which got `42501 permission denied
+-- for function app_due_integrations` and no connection was ever scheduled.
+-- SQLite has no such concept, so only the PostgreSQL suites could catch it.
 REVOKE ALL ON FUNCTION app_due_integrations(int, int) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_due_integrations(int, int) TO tinycrm_app;
 
 COMMIT;
