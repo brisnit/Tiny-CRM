@@ -633,6 +633,188 @@ describe("Stripe webhook", () => {
     assert.equal(body.ignored, "unhandled_type");
     assert.equal(retrieveCalls, 0, "an unhandled type must not cost a Stripe API call");
   });
+
+  describe("a legacy entitlement is never reduced by a webhook", () => {
+    /**
+     * `legacy_pro` and `legacy_lifetime` predate Stripe and carry ceilings no
+     * purchasable plan offers. Every other path treats them as a floor —
+     * `combinePlans` cannot downgrade them, `GRANTABLE_PLANS` will not hand
+     * them out — but `applyPlanChange` wrote `plan` unconditionally, and this
+     * handler calls it on every subscription event.
+     *
+     * So a Lifetime holder who ever started, changed or cancelled a
+     * subscription lost their entitlement on the next event, silently. The
+     * accounts most exposed were the oldest ones.
+     *
+     * These run through the real route with real signature verification, like
+     * everything else in this file: the guard has to hold where the webhook
+     * actually reaches it, not where a unit test calls it directly.
+     */
+    for (const legacy of ["legacy_lifetime", "legacy_pro"] as const) {
+      test(`${legacy} survives a subscription update to a paid plan`, async () => {
+        await db.user.update({
+          where: { id: A.ownerId },
+          data: { plan: legacy, planStatus: "active", planRenewsAt: null, billingCustomerId: null },
+        });
+
+        const sub = subscription({
+          id: `sub_${legacy}_up`,
+          status: "active",
+          priceId: "price_test_pro",
+          userId: A.ownerId,
+          customerId: `cus_${legacy}`,
+        });
+        subscriptions.set(sub.id, sub);
+
+        const response = await POST(signedRequest(eventFor("customer.subscription.updated", sub)));
+        assert.equal(response.status, 200);
+
+        const after = await planOf(A.ownerId);
+        assert.equal(after.plan, legacy, `${legacy} was overwritten by a webhook`);
+        // And the billing facts still moved, which is the whole point of
+        // guarding the entitlement rather than freezing the row.
+        assert.equal(after.planStatus, "active");
+        assert.equal(after.billingCustomerId, `cus_${legacy}`, "the Stripe customer was not recorded");
+      });
+
+      test(`${legacy} survives a cancellation`, async () => {
+        await db.user.update({
+          where: { id: A.ownerId },
+          data: { plan: legacy, planStatus: "active", planRenewsAt: null, billingCustomerId: null },
+        });
+
+        const sub = subscription({
+          id: `sub_${legacy}_cancel`,
+          status: "canceled",
+          priceId: "price_test_pro",
+          userId: A.ownerId,
+          customerId: `cus_${legacy}_c`,
+          canceledAt: Math.floor(Date.now() / 1000),
+        });
+        subscriptions.set(sub.id, sub);
+
+        const response = await POST(signedRequest(eventFor("customer.subscription.deleted", sub)));
+        assert.equal(response.status, 200);
+
+        const after = await planOf(A.ownerId);
+        assert.equal(after.plan, legacy, `a cancellation removed ${legacy}`);
+        assert.notEqual(after.planStatus, "active", "the cancellation was not recorded in the status");
+      });
+    }
+
+    test("a pre-Stripe 'lifetime' row is recognised through the alias", async () => {
+      // Any row that never went through migrate-legacy-plans still stores the
+      // old value. Resolving it with planFor is what stops it falling through
+      // to Free and losing the protection the migration was meant to preserve.
+      await db.user.update({
+        where: { id: A.ownerId },
+        data: { plan: "lifetime", planStatus: "active", billingCustomerId: null },
+      });
+
+      const sub = subscription({
+        id: "sub_alias",
+        status: "active",
+        priceId: "price_test_plus",
+        userId: A.ownerId,
+        customerId: "cus_alias",
+      });
+      subscriptions.set(sub.id, sub);
+
+      const response = await POST(signedRequest(eventFor("customer.subscription.updated", sub)));
+      assert.equal(response.status, 200);
+      assert.equal((await planOf(A.ownerId)).plan, "lifetime", "a pre-Stripe lifetime row was overwritten");
+    });
+
+    test("a failed payment on a legacy account updates the status, not the plan", async () => {
+      await db.user.update({
+        where: { id: A.ownerId },
+        data: { plan: "legacy_lifetime", planStatus: "active", billingCustomerId: null },
+      });
+
+      const sub = subscription({
+        id: "sub_legacy_pastdue",
+        status: "past_due",
+        priceId: "price_test_pro",
+        userId: A.ownerId,
+        customerId: "cus_legacy_pastdue",
+      });
+      subscriptions.set(sub.id, sub);
+
+      const response = await POST(signedRequest(eventFor("customer.subscription.updated", sub)));
+      assert.equal(response.status, 200);
+
+      const after = await planOf(A.ownerId);
+      assert.equal(after.plan, "legacy_lifetime");
+      assert.equal(after.planStatus, "past_due", "the billing status was frozen along with the plan");
+    });
+
+    test("the renewal date is still written for a legacy account", async () => {
+      await db.user.update({
+        where: { id: A.ownerId },
+        data: { plan: "legacy_lifetime", planStatus: "active", planRenewsAt: null, billingCustomerId: null },
+      });
+      const periodEnd = Math.floor(Date.now() / 1000) + 14 * 86_400;
+      const sub = subscription({
+        id: "sub_legacy_renew",
+        status: "active",
+        priceId: "price_test_pro",
+        userId: A.ownerId,
+        customerId: "cus_legacy_renew",
+        periodEnd,
+      });
+      subscriptions.set(sub.id, sub);
+
+      await POST(signedRequest(eventFor("customer.subscription.updated", sub)));
+      const row = await db.user.findUniqueOrThrow({
+        where: { id: A.ownerId },
+        select: { plan: true, planRenewsAt: true },
+      });
+      assert.equal(row.plan, "legacy_lifetime");
+      assert.ok(row.planRenewsAt, "no renewal date was recorded for a legacy account");
+      assert.equal(
+        Math.round(row.planRenewsAt!.getTime() / 1000),
+        periodEnd,
+        "the renewal date was not the subscription's period end",
+      );
+    });
+
+    test("the control: an ordinary account is still changed by the same events", async () => {
+      // Without this, a guard that froze EVERY account's plan would pass every
+      // assertion above.
+      for (const [priceId, expected] of [
+        ["price_test_plus", "plus"],
+        ["price_test_pro", "pro"],
+      ] as const) {
+        await db.user.update({
+          where: { id: A.ownerId },
+          data: { plan: "free", planStatus: "active", billingCustomerId: null },
+        });
+        const sub = subscription({
+          id: `sub_control_${expected}`,
+          status: "active",
+          priceId,
+          userId: A.ownerId,
+          customerId: `cus_control_${expected}`,
+        });
+        subscriptions.set(sub.id, sub);
+        await POST(signedRequest(eventFor("customer.subscription.updated", sub)));
+        assert.equal((await planOf(A.ownerId)).plan, expected, `free was not upgraded to ${expected}`);
+      }
+
+      // And down again on cancellation.
+      const gone = subscription({
+        id: "sub_control_cancel",
+        status: "canceled",
+        priceId: "price_test_pro",
+        userId: A.ownerId,
+        customerId: "cus_control_cancel",
+        canceledAt: Math.floor(Date.now() / 1000),
+      });
+      subscriptions.set(gone.id, gone);
+      await POST(signedRequest(eventFor("customer.subscription.deleted", gone)));
+      assert.equal((await planOf(A.ownerId)).plan, "free", "a cancelled paid plan was not reduced to free");
+    });
+  });
 });
 
 describe("only a verified webhook can move a plan", () => {
@@ -703,4 +885,5 @@ describe("only a verified webhook can move a plan", () => {
       }
     }
   });
+
 });
