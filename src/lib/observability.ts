@@ -72,6 +72,24 @@ const QUOTED_DATA = [
   // erased every frame the moment the same rule was applied to the stack. An
   // error report with no frames is not a safer report, it is a useless one.
   /Invalid `[^`]*` invocation[\s\S]*?(?=\n\s+at |$)/,
+  // PostgreSQL quotes the whole offending row in a constraint violation's
+  // DETAIL line: `DETAIL:  Failing row contains (cuid, wsp, outlook, ext-1,
+  // t-1, Q4 pricing for Acme, As discussed on the call, …)`. For this
+  // application that is a subject and a snippet of somebody's correspondence,
+  // in plain text, in an exception message. Prisma maps most violations to a
+  // structured error, but a raw query, a check constraint or a not-null on a
+  // column Prisma does not model surfaces the driver's text unchanged.
+  //
+  // Found by probing the scrubber with the shapes a database actually
+  // produces rather than by reading the patterns — the Prisma rule above
+  // looks like it covers this and does not: there is no "invocation" to
+  // anchor on.
+  /(?:DETAIL:\s*)?Failing row contains \([\s\S]*?\)\.?/g,
+  // A JSON parse failure quotes the document it could not parse. Job payloads
+  // and provider responses both go through JSON.parse, and a provider
+  // response holds subjects and snippets. Everything from the position
+  // marker onwards is the quoted document.
+  /(in JSON at position \d+)[\s\S]*/,
   // Anything that looks like an email address.
   /[\w.+-]+@[\w-]+\.[\w.-]+/g,
   // Long base64/hex runs: tokens, hashes, ids of things we did not choose.

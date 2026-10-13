@@ -125,8 +125,10 @@ Add, before the subprocessor table:
 > your mailbox or calendar, and holds no capability to do so.
 >
 > Your correspondence is not sent to Anthropic — see § 6. Error reports used
-> to diagnose faults are scrubbed before they leave our servers and do not
-> carry message or meeting contents.
+> to diagnose faults are assembled from a fixed list of fields — what went
+> wrong, where in the code, which request, which account — so message and
+> meeting contents are not attached to them, and the text that is sent is
+> filtered to remove quoted database rows, addresses and credentials.
 
 *Verified:* the Outlook providers request `Mail.Read`, `Calendars.Read`,
 `User.Read`, `offline_access`, `openid`, `profile`, `email` and nothing
