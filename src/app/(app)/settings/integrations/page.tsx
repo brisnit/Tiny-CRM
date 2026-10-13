@@ -47,7 +47,7 @@ export default async function IntegrationSettings({
       select: {
         provider: true, status: true, accountEmail: true, lastSyncAt: true,
         syncState: true, backfillCompletedAt: true, lastError: true,
-        importedThrough: true, backfillTruncated: true,
+        importedThrough: true, backfillTruncated: true, recoveryAttempts: true,
       },
     }),
     workspaceId ? await integrationsEnabled(workspaceId) : false,
@@ -125,6 +125,14 @@ export default async function IntegrationSettings({
                       <input type="hidden" name="provider" value={provider.id} />
                       <Button size="sm" variant="outline" type="submit">
                         Resume import
+                      </Button>
+                    </form>
+                  ) : null}
+                  {state.canRetrySync ? (
+                    <form method="post" action={`/api/integrations/${provider.vendor}/retry`}>
+                      <input type="hidden" name="provider" value={provider.id} />
+                      <Button size="sm" variant="outline" type="submit">
+                        Retry sync
                       </Button>
                     </form>
                   ) : null}

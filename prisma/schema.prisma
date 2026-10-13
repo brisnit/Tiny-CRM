@@ -1428,6 +1428,21 @@ model Integration {
   /// response body, a token or a URL carrying one.
   lastError    String?
   lastErrorAt  DateTime?
+  /// Consecutive automatic recovery attempts since the last successful pass.
+  ///
+  /// A sync chain can stop without anything being wrong with the connection:
+  /// a job dead-letters after exhausting its attempts, or a worker dies
+  /// between marking the row `syncing` and running the page. The row is then
+  /// left mid-chain and `startIncremental` refuses anything that is not
+  /// `idle`, so nothing would ever schedule it again — a connection that has
+  /// silently stopped syncing while still reporting "Connected".
+  ///
+  /// The scheduler recovers those, and counts the attempts here so that
+  /// recovery is bounded. A connection that fails this many times in a row is
+  /// not having a bad day; it needs a person. At the cap the scheduler stops
+  /// and the interface says so, with something to click. Reset to zero by any
+  /// pass that completes, and by the customer asking to retry.
+  recoveryAttempts Int @default(0)
   /// Bumped by every connect, disconnect and reconnect.
   ///
   /// This is how disconnecting stops work that is already queued. A sync job

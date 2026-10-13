@@ -49,6 +49,7 @@ that no amount of correct deployment will substitute for.
       psql "$DATABASE_URL" -f prisma/postgres/015_platform_admin_policies.sql
       psql "$DATABASE_URL" -f prisma/postgres/016_integration_privacy.sql
       psql "$DATABASE_URL" -f prisma/postgres/017_due_integrations.sql
+      psql "$DATABASE_URL" -f prisma/postgres/018_due_integrations_recovery.sql
       ```
       None is optional:
 

@@ -13,11 +13,13 @@ import {
   MAX_INCREMENTAL_PAGES,
 } from "../../src/lib/integrations/sync/graph";
 import {
+  MAX_RECOVERY_ATTEMPTS,
   runSyncPage,
   startBackfill,
   resumeBackfill,
   startIncremental,
 } from "../../src/lib/integrations/sync/worker";
+import { scheduleDueSyncs } from "../../src/lib/integrations/sync/schedule";
 import type { Transport } from "../../src/lib/integrations/oauth-client";
 
 /**
@@ -883,5 +885,286 @@ describe("the incremental pass, which is what keeps a mailbox current", () => {
     // Having been scheduled, it is no longer idle, so the next tick skips it.
     const again = await scheduleDueSyncs({ idleMs: 30 * 60_000 });
     assert.equal(again.queued, 0, "the scheduler queued a second pass over a running one");
+  });
+});
+
+describe("a sync chain that stopped is recovered, a bounded number of times", () => {
+  /**
+   * Recovery exists because a chain can stop with nothing wrong with the
+   * connection: a job dead-letters after exhausting its attempts, or a worker
+   * dies between the page transaction committing and the next page being
+   * enqueued. Either leaves the row saying `syncing`, and `startIncremental`
+   * refuses anything not `idle` — so the scheduler skipped it on every tick,
+   * forever, while Settings still said "Connected".
+   *
+   * Under PostgreSQL every scan here goes through `app_due_integrations`
+   * (prisma/postgres/018), so these run against the real function and the
+   * real policy rather than an ordinary query.
+   */
+  const STALE = 4 * 30 * 60_000;
+
+  /** Puts the connection mid-chain and stale, as an interrupted one is. */
+  async function interrupted(
+    state: "syncing" | "backfilling" = "syncing",
+    overrides: Record<string, unknown> = {},
+  ): Promise<void> {
+    await db.integration.update({
+      where: { id: integrationId },
+      data: {
+        status: "connected",
+        syncState: state,
+        backfillCompletedAt: new Date(Date.now() - 7 * 86_400_000),
+        backfillTruncated: false,
+        pagesImported: 7,
+        recoveryAttempts: 0,
+        lastSyncAt: new Date(Date.now() - STALE - 60_000),
+        ...overrides,
+      },
+    });
+  }
+
+  /** A queue row for this connection, in a given state. */
+  async function job(status: string): Promise<void> {
+    await db.domainEvent.create({
+      data: {
+        workspaceId: tenant.workspaceId,
+        name: "integration.sync",
+        entityType: "integration",
+        entityId: integrationId,
+        actorId: tenant.ownerId,
+        payload: JSON.stringify({ integrationId, generation: 1, cursor: null, mode: "incremental" }),
+        status,
+      },
+    });
+  }
+
+  const schedule = () => scheduleDueSyncs({ idleMs: 0, staleMs: STALE });
+
+  test("an interrupted chain with no job left is recovered", async () => {
+    await interrupted();
+    const result = await schedule();
+    assert.equal(result.recovered, 1, "a connection stuck mid-chain was not recovered");
+
+    const after = await db.integration.findUniqueOrThrow({
+      where: { id: integrationId },
+      select: { syncState: true, recoveryAttempts: true, syncGeneration: true },
+    });
+    assert.equal(after.syncState, "syncing");
+    assert.equal(after.recoveryAttempts, 1, "the recovery was not counted, so it is not bounded");
+    assert.equal(after.syncGeneration, 1, "recovery moved the generation");
+
+    const queuedJobs = await db.domainEvent.findMany({
+      where: { name: "integration.sync", entityId: integrationId },
+      select: { payload: true },
+    });
+    assert.equal(queuedJobs.length, 1, "recovery did not queue exactly one pass");
+    const payload = JSON.parse(queuedJobs[0]!.payload) as {
+      mode?: string; cursor?: string | null; generation?: number;
+    };
+    assert.equal(payload.mode, "incremental");
+    assert.equal(payload.cursor, null, "a recovered chain resumed a cursor it should not trust");
+    assert.equal(payload.generation, 1, "the recovered job carries a generation the row will refuse");
+  });
+
+  test("a dead-lettered chain is recovered", async () => {
+    await interrupted();
+    await job("dead");
+    const result = await schedule();
+    assert.equal(result.recovered, 1, "a dead-lettered chain was not recovered");
+    assert.equal(
+      await db.domainEvent.count({
+        where: { name: "integration.sync", entityId: integrationId, status: "pending" },
+      }),
+      1,
+      "no fresh pass was queued for the dead-lettered connection",
+    );
+  });
+
+  for (const status of ["pending", "failed", "processing"]) {
+    test(`a connection with a ${status} job is left alone`, async () => {
+      // The queue still owns it. Restarting would run two chains against one
+      // cursor and one page budget. `failed` is a job waiting out its
+      // backoff — retrying, not stopped — and `processing` whose worker died
+      // is reclaimed by app_claim_jobs, not by this.
+      await interrupted();
+      await job(status);
+      const result = await schedule();
+      assert.equal(result.recovered, 0, `a connection with a ${status} job was restarted`);
+      assert.equal(result.queued, 0);
+
+      const after = await db.integration.findUniqueOrThrow({
+        where: { id: integrationId },
+        select: { syncState: true, recoveryAttempts: true },
+      });
+      assert.equal(after.recoveryAttempts, 0, "an attempt was counted against a live chain");
+      assert.equal(
+        await db.domainEvent.count({
+          where: { name: "integration.sync", entityId: integrationId },
+        }),
+        1,
+        "a second job was queued alongside the live one",
+      );
+    });
+  }
+
+  test("a chain that is merely in progress is not yet stale", async () => {
+    // Mid-chain and recent. Indistinguishable from a stopped one except by
+    // age, which is why the threshold exists.
+    await interrupted("syncing", { lastSyncAt: new Date(Date.now() - 60_000) });
+    const result = await schedule();
+    assert.equal(result.recovered, 0, "a chain that started a minute ago was treated as stopped");
+  });
+
+  test("recovery stops at the cap, and does not keep queueing", async () => {
+    await interrupted("syncing", { recoveryAttempts: MAX_RECOVERY_ATTEMPTS - 1 });
+    const last = await schedule();
+    assert.equal(last.recovered, 1, "the final permitted recovery did not happen");
+    assert.equal(
+      (await db.integration.findUniqueOrThrow({
+        where: { id: integrationId }, select: { recoveryAttempts: true },
+      })).recoveryAttempts,
+      MAX_RECOVERY_ATTEMPTS,
+    );
+
+    // Now at the cap. Put it back mid-chain with no live job: the scan must
+    // decline it from here on rather than recovering forever.
+    await db.domainEvent.deleteMany({ where: { name: "integration.sync", entityId: integrationId } });
+    await db.integration.update({
+      where: { id: integrationId },
+      data: { syncState: "syncing", lastSyncAt: new Date(Date.now() - STALE - 60_000) },
+    });
+    const beyond = await schedule();
+    assert.equal(beyond.recovered, 0, "recovery continued past its bound");
+    assert.equal(beyond.considered, 0, "the exhausted connection was still being considered");
+    assert.equal(
+      await db.domainEvent.count({ where: { name: "integration.sync", entityId: integrationId } }),
+      0,
+      "a pass was queued for a connection that had exhausted recovery",
+    );
+  });
+
+  test("a pass that completes clears the count, so bad days do not accumulate", async () => {
+    await interrupted("syncing", { recoveryAttempts: 2, lastSyncAt: new Date(Date.now() - 3 * 86_400_000) });
+    const transport = provider({ "/me/messages": graphMessages(["after-recovery"]) });
+    await asOwner(() =>
+      runSyncPage(
+        { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+        { transport },
+      ),
+    );
+    const after = await db.integration.findUniqueOrThrow({
+      where: { id: integrationId },
+      select: { recoveryAttempts: true, syncState: true },
+    });
+    assert.equal(after.recoveryAttempts, 0, "a completed pass did not clear the recovery count");
+    assert.equal(after.syncState, "idle");
+  });
+
+  for (const [label, data] of [
+    ["disconnected", { status: "disconnected" }],
+    ["errored", { status: "error" }],
+    ["needing reauthentication", { status: "reauth_required" }],
+    ["demonstration data", { status: "mock" }],
+    ["stopped at the page cap", { backfillTruncated: true }],
+    ["still backfilling for the first time", { backfillCompletedAt: null }],
+  ] as const) {
+    test(`a connection that is ${label} is never restarted`, async () => {
+      await interrupted("syncing", data as Record<string, unknown>);
+      const result = await schedule();
+      assert.equal(result.recovered, 0, `a connection that is ${label} was restarted`);
+      assert.equal(
+        await db.domainEvent.count({ where: { name: "integration.sync", entityId: integrationId } }),
+        0,
+        `work was queued against a connection that is ${label}`,
+      );
+    });
+  }
+
+  test("a disconnect after recovery stands the recovered job down", async () => {
+    /**
+     * Recovery must not become a way to import into a connection the customer
+     * has removed. The job carries the generation that was current when it
+     * was queued, and a disconnect bumps that generation, so the job finds a
+     * row it no longer matches and exits without fetching or writing.
+     *
+     * What this does NOT exercise is the compare-and-set inside
+     * `startIncremental` itself — the window between reading the row and
+     * writing `syncState` is microseconds wide and there is no seam to
+     * interleave a disconnect into it from a test. That CAS is belt and
+     * braces over this, which is the guarantee that actually holds the line,
+     * and this is the half that can be demonstrated rather than asserted.
+     */
+    await interrupted();
+    const recovered = await schedule();
+    assert.equal(recovered.recovered, 1);
+    assert.equal(await queued(), 1, "recovery queued nothing to stand down");
+
+    // The customer disconnects before the queued pass runs.
+    await db.integration.update({
+      where: { id: integrationId },
+      data: { syncGeneration: 99, status: "disconnected", credentials: null },
+    });
+
+    const before = await db.emailMessage.count({ where: { integrationId } });
+    const result = await asOwner(() =>
+      runSyncPage(
+        { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+        { transport: provider({ "/me/messages": graphMessages(["must-not-import"]) }) },
+      ),
+    );
+    assert.equal(result.done, true, "the recovered job did not stand down");
+    assert.equal(result.imported, 0, "a recovered job imported into a disconnected connection");
+    assert.equal(
+      await db.emailMessage.count({ where: { integrationId } }),
+      before,
+      "a recovered job wrote to a connection the customer had removed",
+    );
+  });
+
+  test("Retry clears the bound; it does not relax who may be retried", async () => {
+    const retry = () =>
+      asOwner(() =>
+        startIncremental({
+          integrationId,
+          workspaceId: tenant.workspaceId,
+          ownerUserId: tenant.ownerId,
+          manual: true,
+        }),
+      );
+
+    // At the cap, which the scheduler will no longer touch.
+    await interrupted("syncing", { recoveryAttempts: MAX_RECOVERY_ATTEMPTS });
+    assert.equal((await schedule()).recovered, 0, "the scheduler should have given up by now");
+
+    const manual = await retry();
+    assert.equal(manual.queued, true, `Retry was refused: ${manual.reason}`);
+    assert.equal(
+      (await db.integration.findUniqueOrThrow({
+        where: { id: integrationId }, select: { recoveryAttempts: true },
+      })).recoveryAttempts,
+      0,
+      "Retry did not clear the recovery count",
+    );
+
+    // But it is the same eligibility gate. A disconnected connection is not
+    // retryable just because a person asked.
+    await db.domainEvent.deleteMany({ where: { name: "integration.sync", entityId: integrationId } });
+    await db.integration.update({
+      where: { id: integrationId },
+      data: { status: "disconnected", syncState: "idle" },
+    });
+    const refused = await retry();
+    assert.equal(refused.queued, false, "Retry started a sync on a disconnected connection");
+    assert.equal(await queued(), 0);
+    // Which gate refused, not merely that one did. Two independently enforce
+    // this — the eligibility check and the `status: "connected"` clause in
+    // the compare-and-set — and removing the first leaves the guarantee
+    // intact but the reason wrong. Pinning the reason keeps both honest:
+    // without this, deleting the eligibility check passes every assertion.
+    assert.equal(
+      refused.reason,
+      "disconnected",
+      "the eligibility gate did not refuse; something downstream did, by luck",
+    );
   });
 });

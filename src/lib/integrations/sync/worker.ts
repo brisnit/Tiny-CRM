@@ -49,6 +49,20 @@ import { importEventsPage } from "@/lib/integrations/sync/import-events";
 
 export const SYNC_JOB = "integration.sync";
 
+/**
+ * How many consecutive recoveries before the connection is left for a person.
+ *
+ * Recovery that never gives up is not resilience: it hides a connection that
+ * is genuinely broken behind an infinite retry, which tells the customer the
+ * same lie as a bare "Connected". At this count the scheduler stops returning
+ * the connection and the interface says the sync needs attention, with
+ * something to click.
+ *
+ * Defined here rather than in schedule.ts because schedule.ts imports this
+ * module; the other direction would be a cycle.
+ */
+export const MAX_RECOVERY_ATTEMPTS = 3;
+
 export type SyncPayload = {
   integrationId: string;
   /** The generation this chain belongs to. Carried, never re-read. */
@@ -175,37 +189,86 @@ export async function startIncremental(input: {
   integrationId: string;
   workspaceId: string;
   ownerUserId: string;
-}): Promise<{ queued: boolean; reason: string }> {
+  /**
+   * Recovering an interrupted chain rather than starting a routine pass.
+   *
+   * The only thing that may move a connection out of `syncing` or
+   * `backfilling`, and the only thing that counts against the recovery bound.
+   * The caller establishes that the chain is genuinely stopped — no live job,
+   * stale enough, under the cap — see prisma/postgres/018 and schedule.ts.
+   */
+  recovering?: boolean;
+  /** The customer pressing Retry: clears the bound rather than counting against it. */
+  manual?: boolean;
+}): Promise<{ queued: boolean; reason: string; recoveryAttempt?: number }> {
   assertTenantContext("startIncremental");
   const row = await db.integration.findUnique({
     where: { id: input.integrationId },
     select: {
       syncGeneration: true, status: true, syncState: true,
-      backfillCompletedAt: true, backfillTruncated: true,
+      backfillCompletedAt: true, backfillTruncated: true, recoveryAttempts: true,
     },
   });
   if (!row) return { queued: false, reason: "no such connection" };
+  // Eligibility first, and identical for every caller. A disconnected,
+  // errored, reauth-required, suspended or mock connection is never restarted
+  // by anything here — recovery and Retry both come through this gate.
   if (row.status !== "connected") return { queued: false, reason: row.status };
   if (!row.backfillCompletedAt) return { queued: false, reason: "the backfill has not finished" };
   if (row.backfillTruncated) return { queued: false, reason: "the backfill is incomplete" };
-  if (row.syncState !== "idle") return { queued: false, reason: `already ${row.syncState}` };
 
-  await db.integration.update({
-    where: { id: input.integrationId },
-    data: { syncState: "syncing" },
+  const interrupted = row.syncState !== "idle";
+  if (interrupted && !(input.recovering || input.manual)) {
+    // A routine pass keeps the strict rule: a chain that is running owns the
+    // connection's cursor and page budget, and a second one racing it would
+    // corrupt both.
+    return { queued: false, reason: `already ${row.syncState}` };
+  }
+
+  const attempts = input.manual
+    ? 0
+    : input.recovering && interrupted
+      ? row.recoveryAttempts + 1
+      : row.recoveryAttempts;
+  if (!input.manual && attempts > MAX_RECOVERY_ATTEMPTS) {
+    // Belt and braces: the scan already excludes these. If it ever stops
+    // doing so, recovery still stops here rather than looping.
+    return { queued: false, reason: "recovery attempts exhausted" };
+  }
+
+  // A compare-and-set on the generation, so a disconnect racing the scheduler
+  // cannot have a job queued against it. `updateMany` with the generation in
+  // the WHERE takes the row lock the same way the page importer's does; zero
+  // rows means the connection moved and this scheduling must not happen.
+  const claimed = await db.integration.updateMany({
+    where: {
+      id: input.integrationId,
+      syncGeneration: row.syncGeneration,
+      status: "connected",
+    },
+    data: { syncState: "syncing", recoveryAttempts: attempts },
   });
+  if (claimed.count === 0) {
+    return { queued: false, reason: "the connection moved while it was being scheduled" };
+  }
+
   await enqueueNextPage({
     workspaceId: input.workspaceId,
     ownerUserId: input.ownerUserId,
     payload: {
       integrationId: input.integrationId,
+      // Carried from the row read above, and the compare-and-set just proved
+      // it is still current. A job carrying a stale generation stands down.
       generation: row.syncGeneration,
+      // Null: a recovered chain starts a fresh incremental pass from
+      // `lastSyncAt` rather than resuming a cursor whose position is no
+      // longer trustworthy. De-duplication makes the overlap free.
       cursor: null,
       mode: "incremental",
       page: 0,
     },
   });
-  return { queued: true, reason: "queued" };
+  return { queued: true, reason: "queued", recoveryAttempt: attempts };
 }
 
 /** The handler. `transport` is injectable so tests never reach Graph. */

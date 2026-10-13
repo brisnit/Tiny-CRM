@@ -4,7 +4,9 @@ import { db, rootDb } from "@/lib/db";
 import { isPostgres } from "@/lib/env";
 import { log } from "@/lib/logger";
 import { withTenantContext, NO_RECORD_READS } from "@/lib/tenant-db";
-import { startIncremental } from "@/lib/integrations/sync/worker";
+import { MAX_RECOVERY_ATTEMPTS, startIncremental } from "@/lib/integrations/sync/worker";
+
+export { MAX_RECOVERY_ATTEMPTS };
 
 /**
  * Queueing the incremental passes.
@@ -28,6 +30,18 @@ import { startIncremental } from "@/lib/integrations/sync/worker";
 /** How stale a connection must be before an incremental pass is queued. */
 export const SYNC_INTERVAL_MS = 30 * 60_000;
 
+/**
+ * How long a connection must sit mid-chain before it counts as interrupted.
+ *
+ * Generous on purpose. A chain that is simply slow — a large page, a throttled
+ * provider, a retry waiting out its backoff — must not be mistaken for one
+ * that stopped, or recovery would start a second chain against a connection
+ * that is working. Four times the sync interval is longer than any legitimate
+ * pass, and the live-job check below is the real guard; this is the backstop
+ * for the case where no job row survives at all.
+ */
+export const STALE_AFTER_MS = 4 * SYNC_INTERVAL_MS;
+
 /** Connections queued per tick, so one scan cannot flood the queue. */
 export const SCHEDULE_BATCH = 50;
 
@@ -36,6 +50,8 @@ type DueConnection = {
   workspaceId: string;
   userId: string;
   syncGeneration: number;
+  /** 'due' for an ordinary overdue pass, 'recovery' for an interrupted chain. */
+  reason: string;
 };
 
 /**
@@ -52,28 +68,68 @@ type DueConnection = {
  * design — this is the one step that is deliberately cross-tenant, and it is
  * confined to these few lines.
  */
-async function dueConnections(idleMs: number, limit: number): Promise<DueConnection[]> {
-  const cutoff = new Date(Date.now() - idleMs);
-
+async function dueConnections(
+  idleMs: number,
+  staleMs: number,
+  maxRecovery: number,
+  limit: number,
+): Promise<DueConnection[]> {
   if (isPostgres) {
     return rootDb.$queryRaw<DueConnection[]>`
-      SELECT * FROM app_due_integrations(${Math.floor(idleMs / 1000)}::int, ${limit}::int)
+      SELECT * FROM app_due_integrations(
+        ${Math.floor(idleMs / 1000)}::int,
+        ${Math.floor(staleMs / 1000)}::int,
+        ${maxRecovery}::int,
+        ${limit}::int
+      )
     `;
   }
 
-  const rows = await rootDb.integration.findMany({
+  // The SQLite half of the same question. Kept deliberately close in shape to
+  // prisma/postgres/018 — the two have to agree, and the tests run on both.
+  const candidates = await rootDb.integration.findMany({
     where: {
       status: "connected",
       backfillCompletedAt: { not: null },
       backfillTruncated: false,
-      syncState: "idle",
-      lastSyncAt: { not: null, lt: cutoff },
+      lastSyncAt: { not: null },
+      recoveryAttempts: { lt: maxRecovery },
+      OR: [
+        { syncState: "idle", lastSyncAt: { lt: new Date(Date.now() - idleMs) } },
+        {
+          syncState: { in: ["syncing", "backfilling"] },
+          lastSyncAt: { lt: new Date(Date.now() - staleMs) },
+        },
+      ],
     },
-    select: { id: true, workspaceId: true, userId: true, syncGeneration: true },
+    select: { id: true, workspaceId: true, userId: true, syncGeneration: true, syncState: true },
     orderBy: { lastSyncAt: "asc" },
     take: limit,
   });
-  return rows;
+  if (candidates.length === 0) return [];
+
+  // Bound 1, as a second query because SQLite has no lateral NOT EXISTS in
+  // Prisma's filter language. A connection with a live job belongs to the
+  // queue: restarting it would run two chains against one cursor.
+  const live = await rootDb.domainEvent.findMany({
+    where: {
+      name: "integration.sync",
+      entityId: { in: candidates.map((c) => c.id) },
+      status: { in: ["pending", "failed", "processing"] },
+    },
+    select: { entityId: true },
+  });
+  const busy = new Set(live.map((e) => e.entityId));
+
+  return candidates
+    .filter((c) => !busy.has(c.id))
+    .map((c) => ({
+      id: c.id,
+      workspaceId: c.workspaceId,
+      userId: c.userId,
+      syncGeneration: c.syncGeneration,
+      reason: c.syncState === "idle" ? "due" : "recovery",
+    }));
 }
 
 /**
@@ -86,16 +142,25 @@ async function dueConnections(idleMs: number, limit: number): Promise<DueConnect
  * no-op rather than a job queued against a dead grant.
  */
 export async function scheduleDueSyncs(
-  options: { idleMs?: number; limit?: number } = {},
-): Promise<{ considered: number; queued: number; skipped: number }> {
+  options: { idleMs?: number; staleMs?: number; maxRecovery?: number; limit?: number } = {},
+): Promise<{
+  considered: number;
+  queued: number;
+  recovered: number;
+  skipped: number;
+}> {
   const idleMs = options.idleMs ?? SYNC_INTERVAL_MS;
+  const staleMs = options.staleMs ?? STALE_AFTER_MS;
+  const maxRecovery = options.maxRecovery ?? MAX_RECOVERY_ATTEMPTS;
   const limit = options.limit ?? SCHEDULE_BATCH;
 
-  const due = await dueConnections(idleMs, limit);
+  const due = await dueConnections(idleMs, staleMs, maxRecovery, limit);
   let queued = 0;
+  let recovered = 0;
   let skipped = 0;
 
   for (const connection of due) {
+    const isRecovery = connection.reason === "recovery";
     try {
       const result = await withTenantContext(
         {
@@ -108,10 +173,26 @@ export async function scheduleDueSyncs(
             integrationId: connection.id,
             workspaceId: connection.workspaceId,
             ownerUserId: connection.userId,
+            // Only a recovery may move a row out of `syncing`, and only a
+            // recovery counts against the bound. An ordinary pass keeps the
+            // strict `idle` requirement, so a bug in the scan cannot turn a
+            // routine tick into a restart of a running chain.
+            recovering: isRecovery,
           }),
       );
-      if (result.queued) queued += 1;
-      else skipped += 1;
+      if (result.queued) {
+        queued += 1;
+        if (isRecovery) {
+          recovered += 1;
+          log.warn("recovering an interrupted sync", {
+            integrationId: connection.id,
+            attempt: result.recoveryAttempt,
+            of: maxRecovery,
+          });
+        }
+      } else {
+        skipped += 1;
+      }
     } catch (error) {
       // One connection that cannot be scheduled must not stop the rest. The
       // next tick will try it again.
@@ -124,9 +205,9 @@ export async function scheduleDueSyncs(
   }
 
   if (due.length > 0) {
-    log.info("incremental syncs scheduled", { considered: due.length, queued, skipped });
+    log.info("incremental syncs scheduled", { considered: due.length, queued, recovered, skipped });
   }
-  return { considered: due.length, queued, skipped };
+  return { considered: due.length, queued, recovered, skipped };
 }
 
 /** Exported for the test that proves the SQLite and PostgreSQL paths agree. */

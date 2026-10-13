@@ -172,6 +172,11 @@ export async function importEventsPage(input: ImportEventsInput): Promise<Import
       where: { id: input.integrationId },
       data: {
         syncState: finished ? "idle" : input.incremental ? "syncing" : "backfilling",
+        // A pass that reached the end is the definition of healthy, so the
+        // recovery counter starts again from zero. Without this a connection
+        // that was recovered twice months apart would arrive at the cap and
+        // be declared broken on the strength of two unrelated bad days.
+        ...(finished ? { recoveryAttempts: 0 } : {}),
         syncCursor: input.nextCursor,
         // An incremental pass leaves the backfill's bookkeeping alone; writing
         // `backfillCompletedAt: null` here would reopen a finished backfill and

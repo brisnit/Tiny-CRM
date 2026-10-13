@@ -139,7 +139,8 @@ try {
   "008_person_scoped_ai_output", "009_record_grants", "010_record_scope", "011_contact_company_scope",
   "012_grant_integrity", "013_membership_write_integrity", "014_document_intelligence",
   "015_platform_admin_policies", "016_integration_privacy",
-  "017_due_integrations"]) {
+  "017_due_integrations",
+  "018_due_integrations_recovery"]) {
     const applied = run("node", ["scripts/apply-sql.mjs", `prisma/postgres/${file}.sql`], {
       ...process.env, DATABASE_URL: ownerCurrent,
     });

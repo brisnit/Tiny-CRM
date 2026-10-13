@@ -30,6 +30,8 @@ export type ConnectionView = {
   /** The page cap stopped it before the end of the window. */
   backfillTruncated: boolean;
   lastError: string | null;
+  /** Consecutive automatic recoveries since the last pass that completed. */
+  recoveryAttempts: number;
 };
 
 export type ConnectionSummary = {
@@ -44,7 +46,25 @@ export type ConnectionSummary = {
   canDisconnect: boolean;
   /** Offer to continue an import the cap stopped. */
   canResume?: boolean;
+  /**
+   * Offer to start syncing again after automatic recovery gave up.
+   *
+   * Distinct from `canResume`: that continues a backfill the page cap stopped
+   * deliberately, which is a complete import of a smaller window. This is a
+   * sync that kept failing, where what was imported may be stale by an
+   * unknown amount.
+   */
+  canRetrySync?: boolean;
 };
+
+/**
+ * The recovery cap, mirrored from the worker.
+ *
+ * Imported rather than re-declared would be better, but this module is shared
+ * with the client and the worker is `server-only`. The number is asserted
+ * against the real one in tests/unit so the two cannot drift silently.
+ */
+export const RECOVERY_CAP = 3;
 
 /** A date alone, for "imported back to …", where a time would be noise. */
 function day(date: Date | null): string {
@@ -88,6 +108,29 @@ export function summarise(connection: ConnectionView | null): ConnectionSummary 
       // something was imported.
       let importLine: string;
       let problem: string | null = null;
+
+      // Checked before everything else, because it is the one reading that
+      // contradicts the badge. A connection whose sync has failed its way to
+      // the recovery cap still holds a valid token — "Connected" is true and
+      // useless, and on its own it tells the customer their mail is current
+      // when it may be days stale. The badge says so instead.
+      if (connection.recoveryAttempts >= RECOVERY_CAP) {
+        return {
+          label: "Sync needs attention",
+          tone: "attention",
+          importLine: connection.lastSyncAt
+            ? `Nothing new since ${when(connection.lastSyncAt)}. Anything already ` +
+              `imported is still here.`
+            : "Nothing has been imported.",
+          problem:
+            connection.lastError ??
+            "Importing stopped and could not restart on its own. Retry it, or reconnect " +
+              "the account if retrying does not help.",
+          canConnect: true,
+          canDisconnect: true,
+          canRetrySync: true,
+        };
+      }
 
       if (connection.backfillTruncated) {
         // The cap stopped it. Saying how far it reached and that there is more
@@ -197,5 +240,17 @@ export const CALLBACK_MESSAGES: Record<string, { tone: "ok" | "warn"; text: stri
   "nothing-to-resume": {
     tone: "warn",
     text: "There is nothing to resume — that import is not incomplete.",
+  },
+  retrying: {
+    tone: "ok",
+    text:
+      "Trying again. This page will say when something has been imported — if it stops " +
+      "again, reconnecting the account is the next step.",
+  },
+  "retry-refused": {
+    tone: "warn",
+    text:
+      "That could not be retried. The connection is no longer in a state where syncing can " +
+      "start — reconnect the account.",
   },
 };

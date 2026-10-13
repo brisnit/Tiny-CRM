@@ -212,6 +212,11 @@ export async function importPage(input: ImportPageInput): Promise<ImportPageResu
       data: {
         importedThrough: reachedBack,
         syncState: finished ? "idle" : input.incremental ? "syncing" : "backfilling",
+        // A pass that reached the end is the definition of healthy, so the
+        // recovery counter starts again from zero. Without this a connection
+        // that was recovered twice months apart would arrive at the cap and
+        // be declared broken on the strength of two unrelated bad days.
+        ...(finished ? { recoveryAttempts: 0 } : {}),
         // A truncated backfill keeps its cursor, so resuming later is a
         // decision rather than a restart.
         syncCursor: input.nextCursor,

@@ -38,7 +38,7 @@ describe("the scheduler's privileged read is narrow, and only the app may call i
     // the scan found nothing and no connection would ever have been
     // scheduled. SQLite could not have caught it.
     const rows = await db.$queryRaw<{ ok: boolean }[]>`
-      SELECT has_function_privilege('tinycrm_app', 'app_due_integrations(int, int)', 'EXECUTE') AS ok
+      SELECT has_function_privilege('tinycrm_app', 'app_due_integrations(int, int, int, int)', 'EXECUTE') AS ok
     `;
     assert.equal(rows[0]?.ok, true, "the application role cannot execute the scheduler's scan");
   });
@@ -48,7 +48,7 @@ describe("the scheduler's privileged read is narrow, and only the app may call i
     // every role the database will ever have, including any added later for
     // reporting or support.
     const rows = await observer.$queryRaw<{ ok: boolean }[]>`
-      SELECT has_function_privilege('public', 'app_due_integrations(int, int)', 'EXECUTE') AS ok
+      SELECT has_function_privilege('public', 'app_due_integrations(int, int, int, int)', 'EXECUTE') AS ok
     `;
     assert.equal(rows[0]?.ok, false, "the scheduler's scan is callable by every role in the database");
   });
@@ -72,6 +72,25 @@ describe("the scheduler's privileged read is narrow, and only the app may call i
     );
   });
 
+  test("exactly one overload exists, so the old signature cannot linger", pgOnly, async () => {
+    // 018 changed the argument list, and CREATE OR REPLACE cannot change a
+    // function's return type — so the old two-argument version had to be
+    // dropped explicitly. Two overloads would mean the application resolves
+    // whichever matches its argument count, which is how a scheduler ends up
+    // silently running the version without the recovery bounds.
+    const rows = await observer.$queryRaw<{ args: string }[]>`
+      SELECT pg_get_function_identity_arguments(p.oid) AS args
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'app_due_integrations'
+    `;
+    assert.equal(
+      rows.length,
+      1,
+      `app_due_integrations has ${rows.length} overloads: ${rows.map((r) => r.args).join(" | ")}`,
+    );
+  });
+
   test("it returns identifiers only — no mail, address, token or cursor", pgOnly, async () => {
     /**
      * The function's return type is the boundary. If a later change added
@@ -86,7 +105,7 @@ describe("the scheduler's privileged read is narrow, and only the app may call i
       WHERE n.nspname = 'public' AND p.proname = 'app_due_integrations'
     `;
     const returned = rows[0]!.args.toLowerCase();
-    for (const column of ["id", "workspaceid", "userid", "syncgeneration"]) {
+    for (const column of ["id", "workspaceid", "userid", "syncgeneration", "reason"]) {
       assert.ok(returned.includes(column), `the scan no longer returns ${column}`);
     }
     for (const forbidden of ["accountemail", "credentials", "synccursor", "scopes", "lasterror"]) {
