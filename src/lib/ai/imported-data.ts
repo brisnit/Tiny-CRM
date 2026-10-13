@@ -21,11 +21,24 @@ import "server-only";
  *
  * ## Why `source` and not `integrationId`
  *
- * Disconnecting a mailbox nulls `integrationId` so a customer keeps the
- * correspondence they have filed against deals. A test of `integrationId IS
- * NULL` would therefore reclassify a disconnected mailbox's mail as ordinary
- * CRM data and start sending it. `source` is written once at import and never
- * changes.
+ * `source` is written once at import and never changes afterwards, by
+ * anything. `integrationId` is a link, and a link can move.
+ *
+ * An earlier version of this note justified the choice by saying that
+ * disconnecting a mailbox nulls `integrationId`. **It does not.**
+ * `onDelete: SetNull` fires when the `Integration` row is *deleted*, and a
+ * disconnect keeps the row — only its credentials are destroyed, which is
+ * what lets kept correspondence still name the mailbox it came from. The
+ * claim was tested by disconnecting a real connection and reading the rows
+ * back; the test that had "disconnecting" in its name was deleting the row.
+ *
+ * The conclusion survives the correction and is stronger without it: keying
+ * on an immutable provenance column rather than on a nullable foreign key is
+ * right whether or not that key is ever nulled. If `integrationId` ever did
+ * become null — by a deletion, a future cleanup, a repair script — a test of
+ * `integrationId IS NULL` would silently reclassify imported correspondence
+ * as ordinary CRM data and start sending it to a model provider. `source`
+ * cannot do that.
  */
 
 /**

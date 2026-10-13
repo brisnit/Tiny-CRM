@@ -186,9 +186,9 @@ export default async function IntegrationSettings({
           </p>
           <p>
             <strong className="font-semibold text-body">What you import stays yours.</strong> Imported
-            mail and meetings are visible to you alone, even to people who share this workspace. They
-            become visible to the workspace only when you attach one to a contact, company, deal or
-            project yourself.
+            mail and meetings are visible to you alone, even to people who share this workspace.
+            There is currently no way to share one with your workspace, and attaching an item to a
+            contact does not change who can see it.
           </p>
           <p>
             <strong className="font-semibold text-body">Imported mail is not sent to Tiny AI.</strong>{" "}

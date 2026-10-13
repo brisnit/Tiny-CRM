@@ -85,11 +85,20 @@ should not — a commit, a screenshot, a log, a support ticket.*
 
 **Contain**
 
-1. Rotate the credential **first**, before deciding how bad it is. Rotation is
-   cheap; the window is not.
-   - `AUTH_SECRET` → generate a new one, deploy. **Every user is signed out.**
-     That is the intended effect: the old secret could mint a session for
-     anybody.
+1. Rotate the credential **first**, before deciding how bad it is. The window
+   is not cheap — but see the exception below, because one of these is not
+   cheap either.
+   - `AUTH_SECRET` → **this is break-glass, not routine. Read
+     docs/AUTH-SECRET-ROTATION.md before doing it.** It is not only a session
+     secret: the same value derives the keys for TOTP secrets and for stored
+     OAuth credentials. Rotating it signs everybody out *and* locks out every
+     user with two-factor authentication enabled until an operator intervenes
+     per account. It is still the right move if the secret has genuinely
+     leaked — an attacker who can mint sessions for anybody is worse than a
+     lockout you control — but it is a decision with a recovery plan attached,
+     not a one-line fix. An earlier version of this runbook described it as
+     cheap and mentioned only the sign-out; somebody following that under
+     pressure would have been badly surprised.
    - `DATABASE_URL` → change the password on the role, deploy, then confirm no
      old connections remain in `pg_stat_activity`.
    - Provider key → revoke at the provider, not just in your config. A revoked

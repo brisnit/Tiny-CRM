@@ -220,26 +220,60 @@ Two things follow:
 
 1. **The 30 days run before the change takes effect, not before it is
    published.** The clause promises notice, so the sequence is: publish the
-   updated notice with a future effective date, email every account address,
-   wait at least 30 days, then let it take effect. The current page derives its
-   date from `legalEffectiveDate()`; that must not be moved to today.
-2. **A canary before the notice changes is a judgement about your own data.**
-   The 30 days govern what customers are told. The canary imports Artifact
-   Digital's own mailbox into Artifact Digital's own workspace, where you are
-   the controller of that correspondence — no customer's data is involved and
-   no customer is relying on the notice for it. That correspondence does
-   contain third parties' personal data, so it is not *nothing*, but it is
-   yours to weigh. What is not a judgement call: **no customer may connect a
-   mailbox until the updated notice has taken effect.** That is what the
-   `integrations` flag staying off per-workspace is for.
+   updated notice carrying a *future* effective date, email every account
+   address on the day it is published, wait at least 30 days, and only then
+   does it take effect. The currently effective notice stays available and
+   authoritative throughout that window — the integration sections are visibly
+   pending, not live.
+2. **The canary is a judgement about your own data.** The 30 days govern what
+   customers are told. The canary imports Artifact Digital's own mailbox into
+   Artifact Digital's own workspace, where you are the controller of that
+   correspondence — no customer's data is involved and no customer is relying
+   on the notice for it. That correspondence does contain third parties'
+   personal data, so it is not nothing, but it is yours to weigh. What is not
+   a judgement call: **no customer may connect a mailbox until the updated
+   notice has taken effect**, which is what the per-workspace `integrations`
+   flag staying off is for.
 
-An alternative worth considering, if you would rather not start the clock yet:
-publish the integration sections as a **dated addendum marked "takes effect
-when email and calendar connections become available to customers"**. It gives
-the 30 days' notice honestly, costs nothing if the release slips, and avoids
-promising a date the product has to hit.
+### An approach that was considered and rejected
 
----
+An undated addendum reading "takes effect when email and calendar connections
+become available to customers" would avoid committing to a date the release
+might miss. **It is not acceptable and is not proposed.** § 12 promises *"at
+least 30 days' notice by email to your account address"* — a notice whose
+effective date is a condition rather than a date gives nobody 30 days of
+anything, cannot be measured against the promise, and leaves a customer unable
+to answer "from when?". An undated addendum is not a substitute for the
+promised email notice and must not be treated as one.
+
+The right shape is the dull one: pick a date, publish with it, send the email
+that day, and if the release slips, the notice simply takes effect before the
+feature appears. A notice in force ahead of the capability costs nothing. A
+capability ahead of its notice is the thing that cannot be undone.
+
+## Two effective dates, deliberately
+
+The notice needs to express that the current text governs today and the
+integration text governs from a named future date. `LEGAL_EFFECTIVE_ON` in
+`src/lib/legal.ts` is a single constant that drives the page header, so this
+needs a second one rather than a change to the first:
+
+- `LEGAL_EFFECTIVE_ON` — **unchanged.** Still the date the currently effective
+  notice took force. Nothing about today's obligations moves.
+- `INTEGRATIONS_EFFECTIVE_ON` — new, set to a date **at least 31 days after
+  the day the email goes out**, giving a clear day's margin over the promised
+  minimum rather than landing exactly on it.
+
+Each integration section carries its own dated marker, so a customer reading
+the page before that date sees both what governs now and what will govern
+later:
+
+> *This section takes effect on {INTEGRATIONS_EFFECTIVE_ON}. Until then, email
+> and calendar connections are not available and nothing described here is
+> collected.*
+
+That marker is removable in one commit on the day, and the sections stop being
+conditional without any other edit.
 
 ## What is not covered here
 
