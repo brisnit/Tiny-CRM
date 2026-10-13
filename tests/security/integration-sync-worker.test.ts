@@ -765,6 +765,95 @@ describe("the incremental pass, which is what keeps a mailbox current", () => {
     assert.equal(await queued(), 1, "a duplicate incremental pass was queued");
   });
 
+  test("the pass survives the queue: a scheduled job still runs as incremental", async () => {
+    /**
+     * The gap every other test in this file had. They all call `runSyncPage`
+     * directly with `mode: "incremental"`, which skips the one hop a real
+     * pass actually makes: scheduler -> DomainEvent -> the registered job
+     * handler -> runSyncPage. That handler rebuilt the payload from three
+     * named fields and dropped the rest, so `mode` and `page` never arrived
+     * and every scheduled pass ran as a backfill — re-reading the whole
+     * 30-day window, spending the backfill's page budget and rewriting
+     * backfillCompletedAt. Found by running one real pass against the canary
+     * mailbox, not here.
+     *
+     * So this uses the REAL handler and fakes only `fetch`. Registering a
+     * stand-in handler here, which was the first thing I wrote, puts the
+     * fake on exactly the line that was broken and the test passes either
+     * way — it has to stub below the handler, not above it.
+     */
+    const { registerJobHandlers } = await import("../../src/lib/jobs/handlers");
+    const { runJobs } = await import("../../src/lib/jobs");
+    const { scheduleDueSyncs } = await import("../../src/lib/integrations/sync/schedule");
+
+    const completedAt = new Date(Date.now() - 86_400_000);
+    await db.integration.update({
+      where: { id: integrationId },
+      data: {
+        status: "connected",
+        syncState: "idle",
+        backfillCompletedAt: completedAt,
+        backfillTruncated: false,
+        pagesImported: 7,
+        lastSyncAt: new Date(Date.now() - 2 * 3_600_000),
+      },
+    });
+
+    const urls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.startsWith("https://graph.microsoft.com/")) {
+        urls.push(url);
+        return new Response(JSON.stringify(graphMessages(["queued-1"])), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return realFetch(input as RequestInfo, init);
+    }) as typeof fetch;
+
+    try {
+      registerJobHandlers();
+      const scheduled = await scheduleDueSyncs({ idleMs: 0 });
+      assert.equal(scheduled.queued, 1, "the scheduler queued nothing to run");
+      const ran = await runJobs(10);
+      assert.equal(ran.failed + ran.dead, 0, "the scheduled job did not complete");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+
+    assert.equal(urls.length, 1, "the scheduled job did not fetch exactly one page");
+    const filter = new URL(urls[0]!).searchParams.get("$filter") ?? "";
+    assert.ok(
+      /receivedDateTime ge/.test(filter),
+      `a scheduled pass asked for the backfill window, not new mail: ${urls[0]}`,
+    );
+    // The backfill window reaches 30 days back; an incremental one reaches to
+    // lastSyncAt, two hours ago. Which of the two it asked for is the whole
+    // question, so it is asserted rather than inferred from the filter's shape.
+    const from = new Date(/receivedDateTime ge (.+)$/.exec(filter)![1]!).getTime();
+    assert.ok(
+      from > Date.now() - 24 * 3_600_000,
+      "a scheduled pass read from the backfill window start, so `mode` was lost in the queue",
+    );
+
+    const after = await db.integration.findUniqueOrThrow({
+      where: { id: integrationId },
+      select: { pagesImported: true, backfillCompletedAt: true },
+    });
+    assert.equal(
+      after.pagesImported,
+      7,
+      "a scheduled incremental pass spent the backfill's page budget, so it ran as a backfill",
+    );
+    assert.equal(
+      after.backfillCompletedAt?.getTime(),
+      completedAt.getTime(),
+      "a scheduled incremental pass rewrote the completed backfill",
+    );
+  });
+
   test("the scheduler queues connections that are behind and leaves fresh ones alone", async () => {
     const { scheduleDueSyncs } = await import("../../src/lib/integrations/sync/schedule");
 

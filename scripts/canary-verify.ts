@@ -43,16 +43,23 @@ function check(passed: boolean, label: string, detail = ""): void {
   else bad(label, detail);
 }
 
-async function connection() {
+async function connection(provider: "outlook" | "outlook_calendar" = "outlook") {
   const row = await db.integration.findFirst({
-    where: { provider: "outlook", status: { not: "mock" } },
+    where: { provider, status: { not: "mock" } },
     select: {
       id: true, workspaceId: true, userId: true, status: true, accountEmail: true,
       credentials: true, tokenExpiresAt: true, syncGeneration: true, scopes: true,
     },
   });
   if (!row) {
-    console.error("\nNo real Outlook connection found. Connect one first.\n");
+    console.error(
+      `\nNo real ${provider} connection found. Connect one first.\n` +
+        (provider === "outlook_calendar"
+          ? "Outlook Calendar is a SEPARATE grant from Outlook email: it needs its own\n" +
+            "Calendars.Read consent, so connecting the mailbox did not connect it.\n" +
+            "Settings -> Integrations -> Outlook Calendar -> Connect.\n"
+          : ""),
+    );
     process.exit(1);
   }
   return row;
@@ -466,16 +473,224 @@ async function syncReport() {
   );
 }
 
+
+/**
+ * Runs one real incremental pass end to end and checks what it did.
+ *
+ * Everything in one process deliberately: the invariants that matter are
+ * before/after comparisons, and a report that only sees the "after" cannot
+ * tell a pass that imported nothing from one that never ran — the exact
+ * confusion that let "0 pages, 0 messages, last checked never" read as a PASS
+ * for weeks.
+ *
+ * It forces the schedule (`idleMs: 0`) rather than waiting out the half-hour
+ * interval, which is the only difference from what the cron does in
+ * production.
+ */
+async function incrementalReport() {
+  const row = await connection();
+  console.log("\n5. One incremental pass, start to finish");
+  console.log("=".repeat(70));
+
+  const before = await db.integration.findUniqueOrThrow({
+    where: { id: row.id },
+    select: {
+      syncState: true, lastSyncAt: true, pagesImported: true,
+      backfillCompletedAt: true, backfillTruncated: true, syncGeneration: true,
+    },
+  });
+  const messagesBefore = await db.emailMessage.count({ where: { integrationId: row.id } });
+  const newestBefore = await db.emailMessage.findFirst({
+    where: { integrationId: row.id },
+    orderBy: { sentAt: "desc" },
+    select: { sentAt: true },
+  });
+
+  console.log(`\n    before           ${before.syncState}, ${messagesBefore} messages, ` +
+    `${before.pagesImported} pages, last checked ${before.lastSyncAt?.toISOString() ?? "never"}`);
+
+  if (!before.backfillCompletedAt) {
+    bad("the backfill has completed", "an incremental pass is not scheduled until it has");
+    return;
+  }
+
+  const { scheduleDueSyncs } = await import("../src/lib/integrations/sync/schedule");
+  const scheduled = await scheduleDueSyncs({ idleMs: 0 });
+  console.log(`    scheduled        considered ${scheduled.considered}, queued ${scheduled.queued}, skipped ${scheduled.skipped}`);
+  check(scheduled.queued === 1, "the scheduler queued exactly one incremental pass");
+  if (scheduled.queued !== 1) return;
+
+  // Drain, exactly as `npm run worker -- --once` would.
+  const { registerJobHandlers } = await import("../src/lib/jobs/handlers");
+  const { runJobs } = await import("../src/lib/jobs");
+  registerJobHandlers();
+  let handled = 0;
+  for (let i = 0; i < 20; i += 1) {
+    const result = await runJobs(10);
+    handled += result.processed + result.failed + result.dead;
+    if (result.processed + result.failed + result.dead === 0) break;
+    if (result.failed || result.dead) {
+      bad("the pass ran without failing", `${result.failed} failed, ${result.dead} dead`);
+      break;
+    }
+  }
+  console.log(`    jobs handled     ${handled}`);
+
+  const after = await db.integration.findUniqueOrThrow({
+    where: { id: row.id },
+    select: {
+      syncState: true, lastSyncAt: true, pagesImported: true,
+      backfillCompletedAt: true, backfillTruncated: true, syncGeneration: true,
+    },
+  });
+  const messagesAfter = await db.emailMessage.count({ where: { integrationId: row.id } });
+  const newestAfter = await db.emailMessage.findFirst({
+    where: { integrationId: row.id },
+    orderBy: { sentAt: "desc" },
+    select: { sentAt: true },
+  });
+
+  console.log(`    after            ${after.syncState}, ${messagesAfter} messages, ` +
+    `${after.pagesImported} pages, last checked ${after.lastSyncAt?.toISOString() ?? "never"}`);
+  console.log(`    new this pass    ${messagesAfter - messagesBefore}`);
+  console.log(`    newest message   ${newestBefore?.sentAt.toISOString().slice(0, 10) ?? "—"}` +
+    ` -> ${newestAfter?.sentAt.toISOString().slice(0, 10) ?? "—"}`);
+
+  console.log("\n  What an incremental pass must not do");
+  check(
+    after.backfillCompletedAt?.getTime() === before.backfillCompletedAt?.getTime(),
+    "the completed backfill was left alone",
+    "reopening it stops this connection being scheduled ever again",
+  );
+  check(
+    after.pagesImported === before.pagesImported,
+    "the backfill's page budget was not spent",
+    `${after.pagesImported - before.pagesImported} page(s) were charged to it`,
+  );
+  check(after.backfillTruncated === false, "the truncation flag was not raised");
+  check(after.syncGeneration === before.syncGeneration, "the generation did not move");
+  check(
+    after.syncState === "idle",
+    "the pass finished and left the connection idle",
+    `it is ${after.syncState}, so a chain is still open and the next pass will be skipped`,
+  );
+  check(
+    Boolean(after.lastSyncAt && before.lastSyncAt && after.lastSyncAt > before.lastSyncAt),
+    "the clock moved forward, so the next pass reads from a newer point",
+  );
+  check(
+    messagesAfter >= messagesBefore,
+    "nothing was lost",
+    `${messagesBefore - messagesAfter} message(s) disappeared`,
+  );
+
+  console.log("\n  Privacy of anything new");
+  const leaked = await db.emailMessage.count({
+    where: {
+      integrationId: row.id,
+      OR: [{ visibility: { not: "private" } }, { ownerUserId: { not: row.userId } }, { source: { not: "imported" } }],
+    },
+  });
+  check(leaked === 0, "every message is still private, owned and marked imported", `${leaked} were not`);
+  console.log("\n    (no subject, snippet, address or token has been printed)\n");
+}
+
+/** The calendar connection, reported like the mailbox but counting meetings. */
+async function calendarReport() {
+  const row = await connection("outlook_calendar");
+  console.log("\n6. The Outlook Calendar canary");
+  console.log("=".repeat(70));
+
+  const state = await db.integration.findUniqueOrThrow({
+    where: { id: row.id },
+    select: {
+      status: true, syncState: true, lastSyncAt: true, pagesImported: true,
+      backfillCompletedAt: true, backfillTruncated: true, syncGeneration: true,
+    },
+  });
+  const events = await db.calendarEvent.findMany({
+    where: { integrationId: row.id },
+    select: {
+      startAt: true, endAt: true, visibility: true, ownerUserId: true,
+      source: true, contactId: true, allDay: true,
+    },
+  });
+
+  console.log(`\n    status           ${state.status} / ${state.syncState}`);
+  console.log(`    generation       ${state.syncGeneration}`);
+  console.log(`    pages fetched    ${state.pagesImported} of ${MAX_BACKFILL_PAGES}`);
+  console.log(`    meetings         ${events.length}`);
+  console.log(`    linked           ${events.filter((e) => e.contactId).length}`);
+  console.log(`    all-day          ${events.filter((e) => e.allDay).length}`);
+  console.log(`    last checked     ${state.lastSyncAt?.toISOString() ?? "never"}`);
+
+  const times = events.map((e) => e.startAt.getTime()).sort((a, b) => a - b);
+  console.log(`    earliest         ${times.length ? new Date(times[0]!).toISOString().slice(0, 10) : "—"}`);
+  console.log(`    latest           ${times.length ? new Date(times.at(-1)!).toISOString().slice(0, 10) : "—"}`);
+
+  console.log("\n  Completeness");
+  if (!state.backfillCompletedAt) {
+    bad("the import has run", "nothing has been fetched yet — run: npm run worker -- --once");
+  } else if (events.length === 0) {
+    ok("the import completed", "the window genuinely held no meetings — empty, not unstarted");
+  } else {
+    ok("the import completed", `${events.length} meeting(s) brought back`);
+    // The window is ±: a calendar that only reached backwards would be the
+    // forward bound silently failing.
+    const now = Date.now();
+    const future = events.filter((e) => e.startAt.getTime() > now).length;
+    console.log(`    ${events.filter((e) => e.startAt.getTime() <= now).length} past, ${future} upcoming`);
+  }
+  check(!state.backfillTruncated, "the import was not stopped by the page cap");
+
+  console.log("\n  Privacy");
+  if (events.length === 0) {
+    console.log("    ----  no meetings, so there is nothing to make a privacy claim about");
+  } else {
+    check(events.every((e) => e.visibility === "private"), `all ${events.length} meetings are private`);
+    check(events.every((e) => e.ownerUserId === row.userId), `all ${events.length} are owned by the connecting account`);
+    check(events.every((e) => e.source === "imported"), `all ${events.length} are marked imported`);
+
+    const { visibleToUser } = await import("../src/lib/integrations/visibility");
+    const other = await db.user.findFirst({ where: { id: { not: row.userId } }, select: { id: true } });
+    if (other) {
+      const visible = await db.calendarEvent.count({
+        where: { integrationId: row.id, ...visibleToUser(other.id) },
+      });
+      check(visible === 0, "another account can see none of them", `${visible} visible`);
+    }
+  }
+
+  // Times are the thing most likely to be silently wrong, and the one thing
+  // worth showing: a duration is not content.
+  if (events.length > 0) {
+    const durations = events
+      .filter((e) => !e.allDay)
+      .map((e) => Math.round((e.endAt.getTime() - e.startAt.getTime()) / 60_000));
+    const odd = durations.filter((m) => m <= 0 || m > 24 * 60).length;
+    check(
+      odd === 0,
+      "every meeting has a sane duration, so the times were read as instants",
+      `${odd} have a duration of zero, negative, or over a day — the hallmark of a timezone misread`,
+    );
+  }
+  console.log("\n    (no meeting title, attendee or token has been printed)\n");
+}
+
 const which = process.argv.find((a) => a.startsWith("--"));
 const run =
   which === "--encryption" ? encryption :
   which === "--refresh" ? refresh :
   which === "--disconnect" ? disconnect :
   which === "--sync" ? syncReport :
+  which === "--incremental" ? incrementalReport :
+  which === "--calendar" ? calendarReport :
   null;
 
 if (!run) {
-  console.error("\nUsage: --encryption | --refresh | --disconnect | --sync\n");
+  console.error(
+    "\nUsage: --encryption | --refresh | --disconnect | --sync | --incremental | --calendar\n",
+  );
   process.exit(1);
 }
 run()

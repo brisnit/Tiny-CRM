@@ -118,16 +118,33 @@ export function registerJobHandlers(): void {
   // having to cancel queued work.
   registerHandler("integration.sync", async (job) => {
     const { runSyncPage } = await import("@/lib/integrations/sync/worker");
-    const payload = job.payload as { integrationId?: string; generation?: number; cursor?: string | null };
+    const payload = job.payload as {
+      integrationId?: string;
+      generation?: number;
+      cursor?: string | null;
+      mode?: "backfill" | "incremental";
+      page?: number;
+    };
     if (typeof payload.integrationId !== "string" || typeof payload.generation !== "number") {
       // A malformed payload cannot be retried into shape.
       const { PermanentJobError } = await import("@/lib/jobs");
       throw new PermanentJobError("integration.sync payload is missing integrationId or generation");
     }
+    // Every field the payload carries is forwarded, not a chosen subset.
+    //
+    // This rebuilt the payload from three named fields and silently dropped
+    // the rest. `mode` and `page` were added for the incremental pass, so
+    // every incremental job ran as a backfill: it re-read the whole 30-day
+    // window, charged seven pages to the backfill's budget and rewrote
+    // `backfillCompletedAt`. Unit tests called `runSyncPage` directly with a
+    // mode and passed; the real queue was the only thing that could show it,
+    // and did, on the first live pass.
     await runSyncPage({
       integrationId: payload.integrationId,
       generation: payload.generation,
       cursor: payload.cursor ?? null,
+      mode: payload.mode === "incremental" ? "incremental" : "backfill",
+      page: typeof payload.page === "number" ? payload.page : 0,
     });
   });
 
