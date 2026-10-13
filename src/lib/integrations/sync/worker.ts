@@ -25,6 +25,7 @@ import {
 } from "@/lib/integrations/sync/graph";
 import { GenerationChangedError, importPage } from "@/lib/integrations/sync/import";
 import { importEventsPage } from "@/lib/integrations/sync/import-events";
+import { syncEligibility } from "@/lib/integrations/sync/eligibility";
 
 /**
  * One page of sync, as a job.
@@ -217,6 +218,18 @@ export async function startIncremental(input: {
   if (!row.backfillCompletedAt) return { queued: false, reason: "the backfill has not finished" };
   if (row.backfillTruncated) return { queued: false, reason: "the backfill is incomplete" };
 
+  // Who the connection belongs to, and whether they may still sync — the
+  // person, the membership, the flag and the plan, none of which
+  // `Integration.status` knows anything about. Before any scheduling, so a
+  // suspended account's connection is never queued in the first place.
+  const eligibility = await syncEligibility({
+    workspaceId: input.workspaceId,
+    ownerUserId: input.ownerUserId,
+  });
+  if (!eligibility.eligible) {
+    return { queued: false, reason: eligibility.reason };
+  }
+
   const interrupted = row.syncState !== "idle";
   if (interrupted && !(input.recovering || input.manual)) {
     // A routine pass keeps the strict rule: a chain that is running owns the
@@ -301,6 +314,32 @@ export async function runSyncPage(
       reason: "generation moved",
       carried: payload.generation,
       current: row.syncGeneration,
+    });
+    return { imported: 0, duplicates: 0, done: true, truncated: false };
+  }
+
+  // Asked again here, not only when this job was scheduled. The gap between
+  // queueing and running is minutes wide and spans exactly the moment an
+  // operator suspends an account, removes a member, switches the flag off or
+  // a grant expires. A scheduling-time check cannot reach a job that is
+  // already in the queue; this one can, and it runs before a single byte is
+  // fetched from the provider.
+  //
+  // `done: true` rather than throwing: this is not a failure to retry. The
+  // chain stops, nothing is enqueued after it, and the connection is left
+  // exactly as it is for the customer to see.
+  const eligibility = await syncEligibility({
+    workspaceId: row.workspaceId,
+    ownerUserId: row.userId,
+  });
+  if (!eligibility.eligible) {
+    log.info("sync job standing down", {
+      reason: eligibility.reason,
+      integrationId: row.id,
+    });
+    await db.integration.updateMany({
+      where: { id: row.id, syncGeneration: payload.generation },
+      data: { syncState: "idle" },
     });
     return { imported: 0, duplicates: 0, done: true, truncated: false };
   }

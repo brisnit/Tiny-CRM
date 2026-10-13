@@ -108,6 +108,18 @@ const EXCEPTIONS: Record<string, string> = {
     "workspace and the owner is who pays for it. Reading the caller's plan " +
     "instead would refuse a Free member of a Pro workspace and admit a Pro " +
     "member of a Free one. Returns a boolean, never a row",
+  "src/lib/integrations/sync/eligibility.ts":
+    "syncEligibility calls assertTenantContext before anything else, and the " +
+    "context is the connection's own workspace — established by the job " +
+    "runner for a running pass, and by the scheduler or the retry route for a " +
+    "pass about to be queued. The WorkspaceMember read asks whether the " +
+    "connection's OWNER is still a member of the workspace the connection " +
+    "belongs to, which is a property of that workspace and is exactly what " +
+    "the context already names; the User read is the same owner's own row. " +
+    "Both return a boolean's worth of information and neither returns a row " +
+    "to a caller. Fails closed on an empty read, so a policy filtering either " +
+    "stops the sync rather than permitting it",
+
   "src/lib/integrations/connections.ts":
     "every export asserts a tenant context before touching Integration, " +
     "EmailMessage or CalendarEvent: completeConnection through " +

@@ -61,6 +61,14 @@ function graphMessages(ids: string[]) {
 
 before(async () => {
   tenant = await createTenant("SyncWorker", { plan: "pro" });
+  // Syncing is gated on the rollout flag as well as the plan, and the flag
+  // defaults to off. Without this the suite would assert the gate refusing
+  // rather than the behaviour each test is named for.
+  await db.featureFlag.upsert({
+    where: { key_workspaceId: { key: "integrations", workspaceId: tenant.workspaceId } },
+    update: { enabled: true },
+    create: { key: "integrations", workspaceId: tenant.workspaceId, enabled: true },
+  });
 });
 
 after(async () => {
@@ -1166,5 +1174,187 @@ describe("a sync chain that stopped is recovered, a bounded number of times", ()
       "disconnected",
       "the eligibility gate did not refuse; something downstream did, by luck",
     );
+  });
+});
+
+describe("the right to sync is re-asked, not inherited from the connection", () => {
+  /**
+   * `Integration.status` records what happened to the *connection*. It knows
+   * nothing about the person, their membership, the rollout flag or the plan
+   * — and until this existed, nothing in the sync path asked. A connection
+   * made legitimately in March kept importing in June whatever had changed.
+   *
+   * Each condition is checked twice over, because the two checks catch
+   * different things: at scheduling, so nothing new is queued; and inside the
+   * job, because a job queued *before* the change is already in the queue and
+   * no scheduling-time check can reach it. The second is the one that holds
+   * the line — the gap spans exactly the minute an operator suspends someone.
+   */
+  const STALE = 4 * 30 * 60_000;
+
+  async function syncable(): Promise<void> {
+    await db.integration.update({
+      where: { id: integrationId },
+      data: {
+        status: "connected",
+        syncState: "idle",
+        backfillCompletedAt: new Date(Date.now() - 86_400_000),
+        backfillTruncated: false,
+        recoveryAttempts: 0,
+        lastSyncAt: new Date(Date.now() - 2 * 3_600_000),
+      },
+    });
+    await db.domainEvent.deleteMany({ where: { name: "integration.sync", entityId: integrationId } });
+  }
+
+  /** Puts the workspace flag back however a test left it. */
+  async function setFlag(enabled: boolean): Promise<void> {
+    await db.featureFlag.upsert({
+      where: { key_workspaceId: { key: "integrations", workspaceId: tenant.workspaceId } },
+      update: { enabled },
+      create: { key: "integrations", workspaceId: tenant.workspaceId, enabled },
+    });
+  }
+
+  const conditions = [
+    {
+      label: "the account is suspended",
+      apply: () =>
+        db.user.update({ where: { id: tenant.ownerId }, data: { deactivatedAt: new Date() } }),
+      undo: () => db.user.update({ where: { id: tenant.ownerId }, data: { deactivatedAt: null } }),
+    },
+    {
+      label: "the owner is no longer a member of the workspace",
+      apply: () =>
+        db.workspaceMember.deleteMany({
+          where: { workspaceId: tenant.workspaceId, userId: tenant.ownerId },
+        }),
+      undo: async () => {
+        const existing = await db.workspaceMember.findFirst({
+          where: { workspaceId: tenant.workspaceId, userId: tenant.ownerId },
+        });
+        if (!existing) {
+          await db.workspaceMember.create({
+            data: {
+              workspaceId: tenant.workspaceId,
+              userId: tenant.ownerId,
+              role: "owner",
+              scopeMode: "workspace",
+            },
+          });
+        }
+      },
+    },
+    {
+      label: "the integrations flag is switched off for the workspace",
+      apply: () => setFlag(false),
+      undo: () => setFlag(true),
+    },
+    {
+      label: "the owner's plan no longer includes sync",
+      apply: () => db.user.update({ where: { id: tenant.ownerId }, data: { plan: "free" } }),
+      undo: () => db.user.update({ where: { id: tenant.ownerId }, data: { plan: "pro" } }),
+    },
+  ];
+
+  for (const condition of conditions) {
+    test(`recovery refuses when ${condition.label}`, async () => {
+      await syncable();
+      await db.integration.update({
+        where: { id: integrationId },
+        data: { syncState: "syncing", lastSyncAt: new Date(Date.now() - STALE - 60_000) },
+      });
+      await condition.apply();
+      try {
+        const result = await scheduleDueSyncs({ idleMs: 0, staleMs: STALE });
+        assert.equal(result.recovered, 0, `recovery restarted a connection when ${condition.label}`);
+        assert.equal(await queued(), 0, `work was queued when ${condition.label}`);
+      } finally {
+        await condition.undo();
+      }
+    });
+
+    test(`Retry refuses when ${condition.label}`, async () => {
+      await syncable();
+      await condition.apply();
+      try {
+        const result = await asOwner(() =>
+          startIncremental({
+            integrationId,
+            workspaceId: tenant.workspaceId,
+            ownerUserId: tenant.ownerId,
+            manual: true,
+          }),
+        );
+        assert.equal(result.queued, false, `Retry started a sync when ${condition.label}`);
+        assert.equal(await queued(), 0, `Retry queued work when ${condition.label}`);
+      } finally {
+        await condition.undo();
+      }
+    });
+
+    test(`a job already queued stands down when ${condition.label}`, async () => {
+      // The window a scheduling-time check cannot close. The job exists and
+      // is about to run; the right to run it has just gone.
+      await syncable();
+      await condition.apply();
+      try {
+        const before = await db.emailMessage.count({ where: { integrationId } });
+        const result = await asOwner(() =>
+          runSyncPage(
+            { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+            { transport: provider({ "/me/messages": graphMessages(["must-not-arrive"]) }) },
+          ),
+        );
+        assert.equal(result.done, true, `an in-flight job continued when ${condition.label}`);
+        assert.equal(result.imported, 0);
+        assert.equal(
+          await db.emailMessage.count({ where: { integrationId } }),
+          before,
+          `mail was imported when ${condition.label}`,
+        );
+        assert.equal(await queued(), 0, `the chain queued another page when ${condition.label}`);
+      } finally {
+        await condition.undo();
+      }
+    });
+  }
+
+  test("an owner that cannot be read is ineligible, not assumed fine", async () => {
+    // The fail-closed branch, which survived a mutation to `return
+    // { eligible: true }` because nothing exercised it: every other test here
+    // has a readable owner. A row that is gone, or one a policy filtered out,
+    // must stop the sync rather than wave it through on an empty read — that
+    // is the difference between failing closed and failing silently open.
+    const { syncEligibility } = await import("../../src/lib/integrations/sync/eligibility");
+    const verdict = await asOwner(() =>
+      syncEligibility({
+        workspaceId: tenant.workspaceId,
+        ownerUserId: "a-user-id-that-does-not-exist",
+      }),
+    );
+    assert.equal(verdict.eligible, false, "an unreadable owner was treated as eligible to sync");
+    assert.equal(verdict.eligible === false && verdict.reason, "owner-missing");
+  });
+
+  test("with all four satisfied, the same connection syncs normally", async () => {
+    // The control. Without it, every assertion above would pass just as well
+    // against a gate that refused everything.
+    await syncable();
+    const result = await asOwner(() =>
+      runSyncPage(
+        { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+        { transport: provider({ "/me/messages": graphMessages(["allowed"]) }) },
+      ),
+    );
+    assert.equal(result.imported, 1, "an eligible connection was refused, so the gate is too strict");
+
+    await syncable();
+    await db.integration.update({
+      where: { id: integrationId },
+      data: { syncState: "syncing", lastSyncAt: new Date(Date.now() - STALE - 60_000) },
+    });
+    const scheduled = await scheduleDueSyncs({ idleMs: 0, staleMs: STALE });
+    assert.equal(scheduled.recovered, 1, "an eligible interrupted connection was not recovered");
   });
 });

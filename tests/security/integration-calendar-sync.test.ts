@@ -63,6 +63,14 @@ function graphEvent(id: string, overrides: Record<string, unknown> = {}) {
 
 before(async () => {
   tenant = await createTenant("CalendarSync", { plan: "pro" });
+  // Syncing is gated on the rollout flag as well as the plan, and the flag
+  // defaults to off. Without this the suite would assert the gate refusing
+  // rather than the behaviour each test is named for.
+  await db.featureFlag.upsert({
+    where: { key_workspaceId: { key: "integrations", workspaceId: tenant.workspaceId } },
+    update: { enabled: true },
+    create: { key: "integrations", workspaceId: tenant.workspaceId, enabled: true },
+  });
 });
 
 after(async () => {
