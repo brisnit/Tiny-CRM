@@ -3,9 +3,10 @@ import "server-only";
 import { db } from "@/lib/db";
 import { currentPeriod } from "@/lib/dates";
 import { AppError } from "@/lib/errors";
+import { log } from "@/lib/logger";
 import {
   AiAllowanceError, LIMIT_NOUN, PLANS, PlanLimitError, UNLIMITED,
-  aiAllowanceFor, limitFor, planFor, type LimitKey, type PlanId,
+  aiAllowanceFor, isLegacyPlan, limitFor, planFor, type LimitKey, type PlanId,
 } from "@/lib/plans";
 import type { Actor, WorkspaceActor } from "@/lib/auth/access";
 import { withTenantContext } from "@/lib/tenant-db";
@@ -350,6 +351,38 @@ export async function reserveAiOrThrow(actor: Actor | WorkspaceActor): Promise<v
 /**
  * Applies a plan change. Callable only from the verified billing webhook and
  * from the development simulator — never from a browser-reachable action.
+ *
+ * ## A legacy entitlement is never reduced by a webhook
+ *
+ * `legacy_pro` and `legacy_lifetime` predate Stripe. They carry ceilings no
+ * purchasable plan offers, which is why `combinePlans` cannot downgrade them
+ * and why `GRANTABLE_PLANS` will not hand them out. Every other path in this
+ * codebase already treats them as a floor.
+ *
+ * This one did not. It wrote `plan` unconditionally, and both webhook routes
+ * call it on every subscription event with whatever the Stripe price maps to.
+ * So a Lifetime holder who ever started, changed or cancelled a subscription
+ * had their entitlement silently replaced by `free`, `plus` or `pro` on the
+ * next event — no error, no audit of the loss, nothing to notice. The accounts
+ * most exposed are the oldest ones, which is exactly backwards.
+ *
+ * Found while preparing a Lifetime grant for one account: the question "will
+ * this survive a webhook?" had no good answer.
+ *
+ * ## What the guard does and does not do
+ *
+ * It protects the **entitlement**, not the billing record. A legacy account's
+ * `plan` stays as it is, while `planStatus`, `planRenewsAt` and
+ * `billingCustomerId` are written exactly as they would have been. That
+ * matters: if a legacy holder subscribes and then stops paying, the billing
+ * page must still say `past_due` and the renewal date must still be right.
+ * Freezing the whole row would trade one wrong answer for another.
+ *
+ * It is deliberately not an override anyone can pass. There is no
+ * `force` parameter, because the only callers are webhooks and a webhook
+ * should never be the thing that takes a legacy entitlement away. Moving an
+ * account off a legacy plan is a reviewed operator action against the
+ * database, as moving one on to it is.
  */
 export async function applyPlanChange(
   userId: string,
@@ -357,10 +390,38 @@ export async function applyPlanChange(
   options: { status?: string; renewsAt?: Date | null; customerId?: string | null } = {},
 ): Promise<void> {
   if (!PLANS[plan]) throw new AppError("validation", "Unknown plan.");
+
+  // Read first: the decision depends on what this account already holds, and
+  // the stored value may be a pre-Stripe alias rather than a plan id.
+  const existing = await db.user.findUnique({
+    where: { id: userId },
+    select: { plan: true },
+  });
+  // A user that cannot be read is not silently skipped — the update below
+  // will raise, which is the behaviour callers already handle.
+  // `planFor` resolves a stored value through the pre-Stripe aliases, so a row
+  // still holding `lifetime` is recognised as `legacy_lifetime` rather than
+  // falling through to Free and losing its protection.
+  const held = existing ? planFor(existing.plan).id : null;
+  const keepPlan = held !== null && isLegacyPlan(held);
+
+  if (keepPlan && held !== plan) {
+    // Worth a line in the log every time: this is the system declining to do
+    // what the provider asked, and the reason only makes sense with the
+    // account's history in view.
+    log.info("legacy entitlement preserved against a webhook plan change", {
+      userId,
+      held: existing?.plan,
+      offered: plan,
+      status: options.status ?? "active",
+    });
+  }
+
   await db.user.update({
     where: { id: userId },
     data: {
-      plan,
+      // The entitlement is held; the billing facts below are not.
+      ...(keepPlan ? {} : { plan }),
       planStatus: options.status ?? "active",
       planRenewsAt: options.renewsAt ?? null,
       ...(options.customerId ? { billingCustomerId: options.customerId } : {}),
