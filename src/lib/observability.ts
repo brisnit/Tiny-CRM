@@ -72,6 +72,35 @@ const QUOTED_DATA = [
   // erased every frame the moment the same rule was applied to the stack. An
   // error report with no frames is not a safer report, it is a useless one.
   /Invalid `[^`]*` invocation[\s\S]*?(?=\n\s+at |$)/,
+  // PostgreSQL quotes the whole offending row in a constraint violation's
+  // DETAIL line: `DETAIL:  Failing row contains (cuid, wsp, outlook, ext-1,
+  // t-1, Q4 pricing for Acme, As discussed on the call, …)`. For this
+  // application that is a subject and a snippet of somebody's correspondence,
+  // in plain text, in an exception message. Prisma maps most violations to a
+  // structured error, but a raw query, a check constraint or a not-null on a
+  // column Prisma does not model surfaces the driver's text unchanged.
+  //
+  // Found by probing the scrubber with the shapes a database actually
+  // produces rather than by reading the patterns — the Prisma rule above
+  // looks like it covers this and does not: there is no "invocation" to
+  // anchor on.
+  /(?:DETAIL:\s*)?Failing row contains \([\s\S]*?\)\.?/g,
+  // A JSON parse failure quotes the document it could not parse. Job payloads
+  // and provider responses both go through JSON.parse, and a provider
+  // response holds subjects and snippets.
+  //
+  // Bounded at the first stack frame, and keeping the position marker itself
+  // through a lookbehind. The first version of this rule was
+  // `/(in JSON at position \d+)[\s\S]*/` — unbounded, exactly the mistake
+  // the Prisma rule above documents, and it made the same one: applied to a
+  // stack whose top line is a SyntaxError it erased all three frames, so the
+  // report said a parse failed and nothing about where. Caught by probing a
+  // stack rather than a message, which is the shape the earlier incident also
+  // needed.
+  // The `: ` is load bearing. Without it the variable-length lookbehind
+  // matches after the FIRST digit it can, so "position 42" was reported as
+  // "position 4[redacted]" — a plausible-looking offset that is wrong.
+  /(?<=in JSON at position \d+): [\s\S]*?(?=\n\s+at |$)/,
   // Anything that looks like an email address.
   /[\w.+-]+@[\w-]+\.[\w.-]+/g,
   // Long base64/hex runs: tokens, hashes, ids of things we did not choose.
