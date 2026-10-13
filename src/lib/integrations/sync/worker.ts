@@ -26,6 +26,7 @@ import {
 import { GenerationChangedError, importPage } from "@/lib/integrations/sync/import";
 import { importEventsPage } from "@/lib/integrations/sync/import-events";
 import { syncEligibility } from "@/lib/integrations/sync/eligibility";
+import { SecretUnreadableError } from "@/lib/crypto";
 
 /**
  * One page of sync, as a job.
@@ -345,7 +346,36 @@ export async function runSyncPage(
   }
 
   const provider = providerFor(row.provider) ?? PROVIDERS.outlook;
-  const token = await accessTokenFor(row.id, provider, options.transport);
+
+  // A credential that cannot be decrypted is not a transient failure.
+  //
+  // `AUTH_SECRET` derives the key, so a rotation — or a tampered row — makes
+  // every stored token unreadable at once. `accessTokenFor` has already done
+  // the right thing by the time this throws: the connection is marked
+  // `reauth_required`, the unreadable credential is destroyed, and a message
+  // the customer can act on is stored. What was missing was stopping. Letting
+  // the error out marks the job failed and schedules a retry, and a retry
+  // cannot make a key come back — it just burns an attempt, waits out a
+  // backoff, and on the next run stands down anyway because the status has
+  // changed. Standing down here makes "stops retrying" true rather than
+  // nearly true.
+  let token: string;
+  try {
+    token = await accessTokenFor(row.id, provider, options.transport);
+  } catch (error) {
+    if (error instanceof SecretUnreadableError) {
+      log.warn("sync job standing down", {
+        reason: "credentials could not be read",
+        integrationId: row.id,
+      });
+      await db.integration.updateMany({
+        where: { id: row.id, syncGeneration: payload.generation },
+        data: { syncState: "idle" },
+      });
+      return { imported: 0, duplicates: 0, done: true, truncated: false };
+    }
+    throw error;
+  }
 
   // An incremental pass with no `lastSyncAt` has no "since" to read from.
   // Rather than invent one — midnight, or the epoch, both of which import the

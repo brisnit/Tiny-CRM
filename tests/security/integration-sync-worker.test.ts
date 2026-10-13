@@ -1358,3 +1358,97 @@ describe("the right to sync is re-asked, not inherited from the connection", () 
     assert.equal(scheduled.recovered, 1, "an eligible interrupted connection was not recovered");
   });
 });
+
+describe("credentials that cannot be read ask for a reconnection and stop", () => {
+  /**
+   * `AUTH_SECRET` derives the key that encrypts stored OAuth tokens. If it is
+   * rotated — or a row is tampered with — every stored credential becomes
+   * undecryptable. Retrying cannot fix that, so the connection must say so and
+   * the chain must stop, rather than burning five attempts and dead-lettering
+   * with a message nobody sees.
+   */
+  async function corrupted(): Promise<void> {
+    await db.integration.update({
+      where: { id: integrationId },
+      data: {
+        status: "connected",
+        syncState: "idle",
+        backfillCompletedAt: new Date(Date.now() - 86_400_000),
+        backfillTruncated: false,
+        recoveryAttempts: 0,
+        lastSyncAt: new Date(Date.now() - 2 * 3_600_000),
+        // A well-formed envelope whose ciphertext is not ours: the shape
+        // passes parsing and the GCM tag then fails, which is exactly what a
+        // rotated AUTH_SECRET produces.
+        credentials: "v1.integration-credentials.AAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBB.CCCCCCCC",
+      },
+    });
+    await db.domainEvent.deleteMany({ where: { name: "integration.sync", entityId: integrationId } });
+  }
+
+  test("the connection asks to be reconnected, in words a customer can act on", async () => {
+    await corrupted();
+    await asOwner(() =>
+      runSyncPage(
+        { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+        { transport: provider({ "/me/messages": graphMessages(["never-fetched"]) }) },
+      ),
+    ).catch(() => undefined);
+
+    const row = await db.integration.findUniqueOrThrow({
+      where: { id: integrationId },
+      select: { status: true, lastError: true, credentials: true, syncState: true,
+                lastSyncAt: true, backfillCompletedAt: true, importedThrough: true,
+                backfillTruncated: true, accountEmail: true, recoveryAttempts: true },
+    });
+    assert.equal(row.status, "reauth_required", "a dead credential did not ask for a reconnection");
+    assert.equal(row.credentials, null, "an unreadable credential was kept");
+    assert.ok(row.lastError, "nothing was recorded for the customer to read");
+
+    // And the interface says it, rather than leaving it in a column.
+    const { summarise } = await import("../../src/lib/integrations/status");
+    const view = summarise({ ...row, lastError: row.lastError });
+    assert.equal(view.label, "Reconnect needed", `the badge read "${view.label}"`);
+    assert.equal(view.canConnect, true, "no way to reconnect was offered");
+    assert.match(view.problem ?? "", /reconnect/i);
+  });
+
+  test("it stops rather than retrying something a retry cannot fix", async () => {
+    await corrupted();
+    const result = await asOwner(() =>
+      runSyncPage(
+        { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+        { transport: provider({ "/me/messages": graphMessages(["never-fetched"]) }) },
+      ),
+    );
+    assert.equal(result.done, true, "the chain did not stop on an unreadable credential");
+    assert.equal(result.imported, 0);
+    assert.equal(await queued(), 0, "a further page was queued against a dead credential");
+  });
+
+  test("nothing already imported is touched", async () => {
+    // The customer's filed correspondence must survive a key problem.
+    await corrupted();
+    const before = await db.emailMessage.count({ where: { integrationId } });
+    await asOwner(() =>
+      runSyncPage(
+        { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+        { transport: provider({ "/me/messages": graphMessages(["never-fetched"]) }) },
+      ),
+    ).catch(() => undefined);
+    assert.equal(await db.emailMessage.count({ where: { integrationId } }), before);
+  });
+
+  test("the scheduler does not keep picking it up", async () => {
+    await corrupted();
+    await asOwner(() =>
+      runSyncPage(
+        { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+        { transport: provider({ "/me/messages": graphMessages(["x"]) }) },
+      ),
+    ).catch(() => undefined);
+    const scheduled = await scheduleDueSyncs({ idleMs: 0, staleMs: 0 });
+    assert.equal(scheduled.queued, 0, "a reauth_required connection was scheduled again");
+    assert.equal(scheduled.recovered, 0);
+  });
+});
