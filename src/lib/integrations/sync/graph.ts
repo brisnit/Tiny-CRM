@@ -61,6 +61,39 @@ export type GraphMessage = {
   toRecipients?: { emailAddress?: { address?: string; name?: string } }[];
 };
 
+/**
+ * How far back and forward a first calendar import reaches.
+ *
+ * Asymmetric, unlike mail, because a calendar is read in both directions and
+ * the product uses them differently: past meetings are history to file against
+ * a record, and upcoming ones are what the Calendar page and the prep briefs
+ * are for. A month of history is enough context; a month of future is not
+ * enough runway, since quarterly planning and renewals are routinely booked
+ * further out than that.
+ */
+export const CALENDAR_DAYS_BACK = 30;
+export const CALENDAR_DAYS_FORWARD = 90;
+
+export type GraphEvent = {
+  id: string;
+  iCalUId?: string;
+  subject?: string;
+  bodyPreview?: string;
+  isAllDay?: boolean;
+  isCancelled?: boolean;
+  /** Graph returns a wall-clock string plus a named zone, never an offset. */
+  start?: { dateTime?: string; timeZone?: string };
+  end?: { dateTime?: string; timeZone?: string };
+  location?: { displayName?: string };
+  onlineMeeting?: { joinUrl?: string } | null;
+  onlineMeetingUrl?: string | null;
+  organizer?: { emailAddress?: { address?: string; name?: string } };
+  attendees?: {
+    emailAddress?: { address?: string; name?: string };
+    type?: string;
+  }[];
+};
+
 export type GraphPage<T> = {
   items: T[];
   /** The next page, or null when this was the last. */
@@ -118,11 +151,11 @@ export function backfillStartUrl(windowDays = BACKFILL_WINDOW_DAYS): string {
  * Graph's links are absolute and already carry their paging state, which is
  * why a cursor is stored verbatim rather than reconstructed.
  */
-export async function fetchPage(
+export async function fetchPage<T = GraphMessage>(
   url: string,
   accessToken: string,
   transport: Transport = fetch,
-): Promise<GraphPage<GraphMessage>> {
+): Promise<GraphPage<T>> {
   // A link we did not originate must not be followed. The cursor is stored in
   // our own database, so this is defence against a corrupted or tampered row
   // rather than against a remote attacker — but following an arbitrary URL
@@ -162,7 +195,7 @@ export async function fetchPage(
   }
 
   const parsed = (await response.json()) as {
-    value?: GraphMessage[];
+    value?: T[];
     "@odata.nextLink"?: string;
     "@odata.deltaLink"?: string;
   };
@@ -201,6 +234,61 @@ export async function fetchPage(
  * 320 real messages, covers every folder, and leans on the same unique key to
  * make the overlap free. What it does not do is notice deletions.
  */
+/**
+ * The first page of a calendar import: the window, expanded.
+ *
+ * `calendarView` rather than `/me/events` because it "gets the occurrences,
+ * exceptions, and single instances of events in a calendar view defined by a
+ * time range" — a weekly stand-up arrives as the individual meetings it
+ * actually is, which is what filing a meeting against a record requires.
+ * `/me/events` returns the recurrence master and leaves expansion to us.
+ *
+ * Both bounds are sent as `toISOString()`, which carries `Z`. The reference is
+ * explicit that the parameters are "interpreted using the timezone offset
+ * specified in the value", falling back to UTC when none is given — so an
+ * offset-bearing value is unambiguous either way, and this one is.
+ */
+export function calendarBackfillStartUrl(
+  daysBack = CALENDAR_DAYS_BACK,
+  daysForward = CALENDAR_DAYS_FORWARD,
+): string {
+  const params = new URLSearchParams({
+    startDateTime: new Date(Date.now() - daysBack * 86_400_000).toISOString(),
+    endDateTime: new Date(Date.now() + daysForward * 86_400_000).toISOString(),
+    $select: "id,iCalUId,subject,bodyPreview,isAllDay,isCancelled,start,end,location,onlineMeeting,onlineMeetingUrl,organizer,attendees",
+    $orderby: "start/dateTime asc",
+    $top: String(PAGE_SIZE),
+  });
+  return `${GRAPH}/me/calendarView?${params.toString()}`;
+}
+
+/**
+ * Reads a Graph `dateTimeTimeZone` as a real instant.
+ *
+ * This is the one piece of the calendar import that is easy to get wrong and
+ * impossible to notice locally. Graph returns the time as a **wall-clock
+ * string with no offset** — `"2026-10-13T14:00:00.0000000"` — alongside a
+ * separate `timeZone` name. The reference is explicit that without a
+ * `Prefer: outlook.timezone` header "those time values are returned in UTC",
+ * and this client sends no such header, so the string is UTC.
+ *
+ * But `new Date("2026-10-13T14:00:00.0000000")` has no offset to go on, and
+ * ECMAScript parses a date-time form without one as **local time**. On a
+ * machine in UTC — CI, and the production region when it is on UTC — that is
+ * accidentally correct, and every meeting is silently wrong by the offset
+ * anywhere else. A developer in California would see every meeting seven or
+ * eight hours out while CI stayed green.
+ *
+ * So the `Z` is appended explicitly rather than inferred. A value that already
+ * carries an offset or a `Z` is left exactly as it is.
+ */
+export function graphInstant(value: string | undefined): Date | null {
+  if (!value) return null;
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value);
+  const parsed = new Date(hasZone ? value : `${value}Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 export function incrementalStartUrl(since: Date): string {
   const from = new Date(since.getTime() - INCREMENTAL_OVERLAP_MS).toISOString();
   const params = new URLSearchParams({

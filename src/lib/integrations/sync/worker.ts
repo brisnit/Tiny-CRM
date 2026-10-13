@@ -11,15 +11,20 @@ import { accessTokenFor } from "@/lib/integrations/connections";
 import { PROVIDERS, providerFor } from "@/lib/integrations/providers";
 import {
   backfillStartUrl,
+  calendarBackfillStartUrl,
   CursorExpiredError,
   fetchPage,
   incrementalStartUrl,
   MAX_BACKFILL_PAGES,
   MAX_INCREMENTAL_PAGES,
   RateLimitedError,
+  type GraphEvent,
+  type GraphMessage,
+  type GraphPage,
   type Transport,
 } from "@/lib/integrations/sync/graph";
 import { GenerationChangedError, importPage } from "@/lib/integrations/sync/import";
+import { importEventsPage } from "@/lib/integrations/sync/import-events";
 
 /**
  * One page of sync, as a job.
@@ -245,13 +250,31 @@ export async function runSyncPage(
   // wrong thing — it falls back to the bounded backfill window, which is the
   // same question asked safely.
   const incremental = payload.mode === "incremental";
+
+  // Calendar and mail are different endpoints with different shapes, so the
+  // kind is decided once, here, from the provider's own definition rather than
+  // from the payload — a job cannot ask for a mailbox read against a calendar
+  // connection.
+  const isCalendar = provider.kind === "calendar";
+
+  // A calendar's incremental pass re-reads the same window rather than asking
+  // for "what arrived since". There is no calendar equivalent of
+  // `receivedDateTime ge …` that catches a meeting which *moved*: a meeting
+  // rescheduled from next week to next month changes nothing about when it
+  // was created, so a since-filter would miss exactly the change that matters
+  // most. The window is bounded and small, and the importer updates in place,
+  // so re-reading it is both cheap and the only correct option.
   const url =
     payload.cursor ??
-    (incremental && row.lastSyncAt ? incrementalStartUrl(row.lastSyncAt) : backfillStartUrl());
+    (isCalendar
+      ? calendarBackfillStartUrl()
+      : incremental && row.lastSyncAt
+        ? incrementalStartUrl(row.lastSyncAt)
+        : backfillStartUrl());
 
-  let page;
+  let page: GraphPage<GraphMessage | GraphEvent>;
   try {
-    page = await fetchPage(url, token, options.transport);
+    page = await fetchPage<GraphMessage | GraphEvent>(url, token, options.transport);
   } catch (error) {
     if (error instanceof RateLimitedError) {
       // Pushed out to what the provider asked for. The runner takes the later
@@ -294,22 +317,35 @@ export async function runSyncPage(
     [row.workspaceId],
   );
 
-  let result;
+  let result: { imported: number; duplicates: number; truncated: boolean };
   try {
     result = await withTenantContext(
       { workspaceIds: [row.workspaceId], userId: row.userId, restrictedWorkspaceIds: restricted },
-      () =>
-        importPage({
+      async () => {
+        const common = {
           integrationId: row.id,
           workspaceId: row.workspaceId,
           ownerUserId: row.userId,
           accountEmail: row.accountEmail,
           generation: payload.generation,
-          messages: page.items,
           nextCursor: page.nextLink,
           incremental,
           visibleContactWhere: { workspaceId: row.workspaceId },
-        }),
+        };
+        if (isCalendar) {
+          const events = await importEventsPage({ ...common, events: page.items as GraphEvent[] });
+          // `updated` counts as neither imported nor duplicated: a meeting
+          // that moved is new information, and reporting it as a duplicate
+          // would say nothing happened when something did.
+          return {
+            imported: events.imported,
+            duplicates: events.updated,
+            truncated: events.truncated,
+          };
+        }
+        const mail = await importPage({ ...common, messages: page.items as GraphMessage[] });
+        return { imported: mail.imported, duplicates: mail.duplicates, truncated: mail.truncated };
+      },
     );
   } catch (error) {
     if (error instanceof GenerationChangedError) {
