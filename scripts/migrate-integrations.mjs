@@ -39,7 +39,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { promptHidden } from "./lib/prompt-hidden.mjs";
@@ -56,9 +56,41 @@ const PRODUCTION_FINGERPRINTS = new Map([
   ["005bee3e08cc", "production, DIRECT endpoint"],
 ]);
 
-/** What this release adds. Nothing else is applied. */
-const MIGRATION = "20261012031600_integrations_foundation";
-const POLICY_FILE = "prisma/postgres/016_integration_privacy.sql";
+/**
+ * Every integration migration that production has not seen, in order.
+ *
+ * Three, not one. The first version of this script named a single migration
+ * — and named it **wrongly**, `20261012031600_integrations_foundation`, which
+ * has never existed: the generated directory is `...041600`. It would have
+ * reported "0 successful rows" for a migration that had applied perfectly and
+ * refused a release that was fine. Checked against the directory listing at
+ * startup now, so a name that drifts fails here rather than in the middle of
+ * a production run.
+ */
+const MIGRATIONS = [
+  "20261012041600_integrations_foundation",
+  "20261012233800_integration_sync_progress",
+  "20261013033029_integration_recovery_attempts",
+];
+
+/**
+ * The policy and function files, in dependency order.
+ *
+ * 016 creates the privacy policies; its predicates call `app_user_id()` from
+ * 002, which is why the foundation is checked before anything is written.
+ * 017 creates the scheduler's scan, and 018 **drops 017's signature** and
+ * creates the four-argument one — so 017 must precede 018, and applying 018
+ * alone would leave `DROP FUNCTION IF EXISTS app_due_integrations(int, int)`
+ * dropping nothing and the function missing entirely.
+ */
+const POLICY_FILES = [
+  "prisma/postgres/016_integration_privacy.sql",
+  "prisma/postgres/017_due_integrations.sql",
+  "prisma/postgres/018_due_integrations_recovery.sql",
+];
+
+/** The application role, which the scheduler's function must be callable by. */
+const APP_ROLE = "tinycrm_app";
 
 /**
  * Re-applied because this migration adds foreign keys.
@@ -128,17 +160,23 @@ async function verify(client) {
   const checks = [];
   const add = (label, passed, detail = "") => checks.push([label, passed, detail]);
 
-  const migration = await client.query(
-    `SELECT "finished_at", "rolled_back_at" FROM "_prisma_migrations"
-      WHERE "migration_name" = $1 ORDER BY "started_at"`,
-    [MIGRATION],
-  );
-  const applied = migration.rows.filter((r) => r.finished_at && !r.rolled_back_at);
-  add(
-    `migration ${MIGRATION} applied exactly once`,
-    applied.length === 1,
-    `${applied.length} successful rows, ${migration.rows.length} total`,
-  );
+  for (const name of MIGRATIONS) {
+    const migration = await client.query(
+      `SELECT "finished_at", "rolled_back_at" FROM "_prisma_migrations"
+        WHERE "migration_name" = $1 ORDER BY "started_at"`,
+      [name],
+    );
+    const applied = migration.rows.filter((r) => r.finished_at && !r.rolled_back_at);
+    const unfinished = migration.rows.filter((r) => !r.finished_at && !r.rolled_back_at);
+    add(
+      `migration ${name} applied exactly once`,
+      applied.length === 1,
+      `${applied.length} successful, ${unfinished.length} unfinished, ${migration.rows.length} total` +
+        (unfinished.length
+          ? " — an unfinished row blocks migrate deploy; see scripts/diagnose-migration-state.mjs"
+          : ""),
+    );
+  }
 
   // The precondition. 016's policies call app_user_id(), created by
   // 002_row_level_security.sql. Without it `migrate deploy` succeeds, the
@@ -160,7 +198,9 @@ async function verify(client) {
     `SELECT table_name, column_name FROM information_schema.columns
       WHERE table_name IN ('EmailMessage','CalendarEvent','Integration')
         AND column_name IN ('source','visibility','ownerUserId','integrationId',
-                            'syncGeneration','tokenExpiresAt','lastError','disconnectedAt')`,
+                            'syncGeneration','tokenExpiresAt','lastError','disconnectedAt',
+                            'importedThrough','backfillTruncated','pagesImported',
+                            'recoveryAttempts')`,
   );
   const have = new Set(columns.rows.map((r) => `${r.table_name}.${r.column_name}`));
   for (const expected of [
@@ -169,6 +209,11 @@ async function verify(client) {
     "CalendarEvent.ownerUserId", "CalendarEvent.integrationId",
     "Integration.syncGeneration", "Integration.tokenExpiresAt",
     "Integration.lastError", "Integration.disconnectedAt",
+    // 20261012233800_integration_sync_progress
+    "Integration.importedThrough", "Integration.backfillTruncated",
+    "Integration.pagesImported",
+    // 20261013033029_integration_recovery_attempts
+    "Integration.recoveryAttempts",
   ]) {
     add(`column ${expected}`, have.has(expected));
   }
@@ -250,6 +295,59 @@ async function verify(client) {
       : `${stragglers.rows.map((r) => `${r.tbl}.${r.name}`).join(", ")}`,
   );
 
+  // ---- The scheduler's function, and who may call it --------------------
+  //
+  // Permissions are a separate question from existence, and the one that has
+  // already gone wrong: 017 shipped with REVOKE and no GRANT, so the function
+  // existed, the migration "succeeded", and every scheduled scan then failed
+  // with 42501 — a mailbox that stops syncing with nothing in the schema to
+  // show for it. Both halves are checked here.
+  const fn = await client.query(
+    `SELECT p.prosecdef AS secdef,
+            p.proconfig AS config,
+            pg_get_function_identity_arguments(p.oid) AS args,
+            pg_get_function_result(p.oid) AS result
+       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'app_due_integrations'`,
+  );
+  add("app_due_integrations exists exactly once", fn.rowCount === 1,
+    fn.rowCount === 1 ? fn.rows[0].args : `${fn.rowCount} overloads — 018 drops 017's signature`);
+  if (fn.rowCount === 1) {
+    const row = fn.rows[0];
+    add("  …takes the four-argument recovery signature", row.args === "p_idle_seconds integer, p_stale_seconds integer, p_max_recovery integer, p_limit integer", row.args);
+    add("  …is SECURITY DEFINER", row.secdef === true);
+    add("  …has a pinned search_path", (row.config ?? []).some((c) => String(c).startsWith("search_path=")));
+    const leaks = ["accountemail", "credentials", "synccursor", "scopes", "lasterror"]
+      .filter((c) => String(row.result).toLowerCase().includes(c));
+    add("  …returns identifiers only, no customer data", leaks.length === 0, leaks.join(", "));
+  }
+
+  const roleExists = await client.query(`SELECT 1 FROM pg_roles WHERE rolname = $1`, [APP_ROLE]);
+  add(`the ${APP_ROLE} role exists`, roleExists.rowCount === 1,
+    roleExists.rowCount ? "" : "002_row_level_security.sql creates it");
+
+  if (roleExists.rowCount === 1 && fn.rowCount === 1) {
+    const grants = await client.query(
+      `SELECT has_function_privilege($1, 'app_due_integrations(int,int,int,int)', 'EXECUTE') AS app,
+              has_function_privilege('public', 'app_due_integrations(int,int,int,int)', 'EXECUTE') AS pub`,
+      [APP_ROLE],
+    );
+    add(`${APP_ROLE} may execute the scheduler's scan`, grants.rows[0].app === true,
+      grants.rows[0].app ? "" : "42501 at every tick: the scan would find nothing, silently");
+    add("PUBLIC may NOT execute it", grants.rows[0].pub === false,
+      "a SECURITY DEFINER function open to PUBLIC is reachable by every role the database will ever have");
+  }
+
+  // The job claim function, which the worker needs for any of this to run at
+  // all. Not added by this release — checked because a release that leaves
+  // the scheduler callable and the queue unclaimable is still a dead sync.
+  const claim = await client.query(
+    `SELECT count(*)::int AS n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'app_claim_jobs'`,
+  );
+  add("app_claim_jobs exists (the worker's claim step)", claim.rows[0].n > 0,
+    claim.rows[0].n ? "" : "apply prisma/postgres/006_job_claim.sql");
+
   // Nothing stored in clear. There should be no credentials at all yet; if
   // there are, every one of them must look like src/lib/crypto.ts output.
   const creds = await client.query(
@@ -287,14 +385,38 @@ async function verify(client) {
 
 async function main() {
   const apply = process.argv.includes("--apply");
+  const rehearse = process.argv.includes("--rehearse");
   const before = readFileSync(SCHEMA, "utf8");
   const startingProvider = providerIn(before);
 
-  console.log(`\nOwner-admin panel migration — ${apply ? "APPLY" : "inspect only"}`);
+  console.log(
+    `\nIntegrations production migration — ${apply ? "APPLY" : "inspect only"}` +
+      `${rehearse ? " (REHEARSAL — refuses production)" : ""}`,
+  );
   console.log("=".repeat(70));
   console.log(`  local schema provider  ${startingProvider}`);
-  console.log(`  migration              ${MIGRATION}`);
-  console.log(`  policy file            ${POLICY_FILE}`);
+  for (const name of MIGRATIONS) console.log(`  migration              ${name}`);
+  for (const file of POLICY_FILES) console.log(`  policy file            ${file}`);
+  console.log(`  deferrability          ${DEFERRABLE_FILE}`);
+
+  // A migration named here that is not on disk would be reported as "not
+  // applied" forever and refuse a release that was fine. That is exactly what
+  // the previous single-migration constant did: it named
+  // 20261012031600_integrations_foundation, which has never existed.
+  const onDisk = new Set(
+    readdirSync(resolve(ROOT, "prisma/migrations-postgres"), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name),
+  );
+  const missing = MIGRATIONS.filter((m) => !onDisk.has(m));
+  if (missing.length > 0) {
+    console.error(
+      `\nREFUSED. These are named here but are not in prisma/migrations-postgres:\n` +
+        missing.map((m) => `  ${m}`).join("\n") +
+        `\n\nNothing was read or written. Fix the list before running this against anything.\n`,
+    );
+    process.exit(1);
+  }
 
   const url = await promptHidden("Owner/direct connection string (input hidden): ");
   let fp;
@@ -305,11 +427,25 @@ async function main() {
   }
   const match = PRODUCTION_FINGERPRINTS.get(fp);
   console.log(`\n  fingerprint  ${fp}`);
-  if (!match) {
+
+  // `--rehearse` inverts the guard rather than removing it. The whole point
+  // of a rehearsal is that it is NOT production, so a rehearsal pointed at
+  // production is the one mistake it must make impossible.
+  if (rehearse) {
+    if (match) {
+      console.error(
+        `\nREFUSED. --rehearse is for a scratch database and this is ${match}.\n` +
+          `Nothing was read or written.\n`,
+      );
+      process.exit(1);
+    }
+    console.log("  identified   not production — rehearsal");
+  } else if (!match) {
     console.error("\nREFUSED. Not a known production database. Nothing was read or written.\n");
     process.exit(1);
+  } else {
+    console.log(`  identified   ${match}`);
   }
-  console.log(`  identified   ${match}`);
   if (!/005bee3e08cc/.test(fp) && apply) {
     console.log(
       "\n  NOTE: this is the pooled endpoint. Migrations are usually applied\n" +
@@ -335,6 +471,40 @@ async function main() {
       process.exit(1);
     }
 
+    // ---- Which ROLE, not just which database --------------------------
+    //
+    // The fingerprint proves the host and the database name. It says nothing
+    // about the role: the owner URL and the application URL for the same Neon
+    // branch fingerprint identically. That gap has already cost a release —
+    // `migrate deploy` ran `ALTER TABLE "User"` as a role that does not own
+    // the table, PostgreSQL refused it with 42501, and the migration was left
+    // recorded as started and unfinished. See
+    // scripts/diagnose-migration-state.mjs.
+    //
+    // So the role is established here, before anything is written, by asking
+    // whether it owns the tables these migrations alter.
+    const who = await client.query(
+      `SELECT current_user AS role,
+              (SELECT string_agg(c.relname, ', ' ORDER BY c.relname)
+                 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public' AND c.relkind = 'r'
+                  AND c.relname IN ('Integration','EmailMessage','CalendarEvent')
+                  AND pg_get_userbyid(c.relowner) <> current_user) AS not_owned`,
+    );
+    const { role, not_owned: notOwned } = who.rows[0];
+    console.log(`\n  connected as  ${role}`);
+    if (notOwned) {
+      console.error(
+        `\nREFUSED. ${role} does not own: ${notOwned}.\n` +
+          `  ALTER TABLE would fail with 42501 partway through, leaving a migration\n` +
+          `  recorded as started and unfinished — which then blocks every later\n` +
+          `  migrate deploy until it is resolved by hand. Use the OWNER connection\n` +
+          `  string. Nothing was written.\n`,
+      );
+      process.exit(1);
+    }
+    console.log(`  owns Integration, EmailMessage and CalendarEvent — ALTER will not be refused`);
+
     if (!apply) {
       console.log("\n  Inspect only. Nothing was changed. Re-run with --apply.\n");
       return;
@@ -357,11 +527,20 @@ async function main() {
       console.log("\n  Applying migrations…");
       run("npx", ["prisma", "migrate", "deploy"], url);
 
-      console.log(`\n  Applying ${DEFERRABLE_FILE} (this migration adds foreign keys)…`);
+      // The foundation migration adds four foreign keys (ownerUserId and
+      // integrationId on EmailMessage and CalendarEvent). 003 is not in the
+      // migration history — SQLite has no equivalent — and only affects the
+      // keys that exist when it runs, so without re-applying it those four
+      // stay non-deferrable and the deployment gate refuses the next
+      // production build. That is not hypothetical; it blocked the admin
+      // panel release with its migration already applied.
+      console.log(`\n  Re-applying ${DEFERRABLE_FILE} (these migrations add foreign keys)…`);
       run("node", ["scripts/apply-sql.mjs", DEFERRABLE_FILE], url);
 
-      console.log(`\n  Applying ${POLICY_FILE}…`);
-      run("node", ["scripts/apply-sql.mjs", POLICY_FILE], url);
+      for (const file of POLICY_FILES) {
+        console.log(`\n  Applying ${file}…`);
+        run("node", ["scripts/apply-sql.mjs", file], url);
+      }
     } finally {
       console.log(`\n  Restoring the local schema to ${startingProvider}…`);
       run("node", ["scripts/use-provider.mjs", startingProvider], url);
