@@ -60,7 +60,42 @@ const PRODUCTION_FINGERPRINTS = new Map([
   ["005bee3e08cc", "production, DIRECT endpoint"],
 ]);
 
-const FLAGS = ["files", "documentAi"];
+/**
+ * Which canary this run is for.
+ *
+ * Two features have now been rolled out one workspace at a time, and they are
+ * separate keystrokes on purpose: enabling document Q&A and enabling mailbox
+ * sync are different decisions with different blast radii, and a script that
+ * did both at once would make "the canary" ambiguous at exactly the moment it
+ * must not be.
+ *
+ * `--feature documents` is the default, so every previously documented
+ * invocation keeps doing precisely what it did.
+ */
+const FEATURES = {
+  documents: {
+    flags: ["files", "documentAi"],
+    capability: "documentQa",
+    label: "document Q&A canary",
+    refusal: "document questions would be refused with a \"Pro feature\" message rather than answered",
+  },
+  integrations: {
+    flags: ["integrations"],
+    capability: "emailCalendarSync",
+    label: "email and calendar sync canary",
+    refusal: "Connect would be refused with a \"Pro feature\" message rather than starting a sync",
+  },
+};
+
+const featureArg = process.argv.includes("--feature")
+  ? process.argv[process.argv.indexOf("--feature") + 1]
+  : "documents";
+const FEATURE = FEATURES[featureArg];
+if (!FEATURE) {
+  console.error(`\nUnknown --feature "${featureArg}". One of: ${Object.keys(FEATURES).join(", ")}\n`);
+  process.exit(1);
+}
+const FLAGS = FEATURE.flags;
 /**
  * Does a **stored** plan value grant documentQa?
  *
@@ -77,18 +112,49 @@ const FLAGS = ["files", "documentAi"];
  * assertion below fails loudly if it ever drifts from the source.
  */
 const PLAN_ALIASES = { lifetime: "legacy_lifetime" };
-const DOCUMENT_QA_PLANS = new Set(["pro", "legacy_pro", "legacy_lifetime"]);
+/**
+ * The plans that grant the capability behind each canary.
+ *
+ * The same three today, which is a coincidence worth not relying on: these are
+ * two separate capabilities in plans.ts and either could move. Asserted
+ * against the source below rather than trusted.
+ */
+const ENTITLED_PLANS = {
+  documentQa: new Set(["pro", "legacy_pro", "legacy_lifetime"]),
+  emailCalendarSync: new Set(["pro", "legacy_pro", "legacy_lifetime"]),
+};
 
 function entitled(storedPlan) {
   const resolved = PLAN_ALIASES[storedPlan] ?? storedPlan;
-  return DOCUMENT_QA_PLANS.has(resolved);
+  return ENTITLED_PLANS[FEATURE.capability].has(resolved);
 }
 
-/** Fails if the alias table here stops matching src/lib/plans.ts. */
+/** Fails if the alias table or the capability sets here stop matching src/lib/plans.ts. */
 function assertAliasesMatchSource() {
   const { readFileSync } = require("node:fs");
   const { resolve } = require("node:path");
   const source = readFileSync(resolve(import.meta.dirname, "../src/lib/plans.ts"), "utf8");
+
+  // Which plans actually grant each capability, read out of the source rather
+  // than remembered. A capability that moved between plans would otherwise
+  // make this script enable a canary the product then refuses, or refuse one
+  // it would have allowed.
+  for (const [capability, expected] of Object.entries(ENTITLED_PLANS)) {
+    const granting = new Set();
+    for (const match of source.matchAll(/^\s{2}(\w+):\s*\{/gm)) {
+      const tail = source.slice(match.index, match.index + 3000);
+      const cap = new RegExp(`${capability}:\\s*(true|false)`).exec(tail);
+      if (cap && cap[1] === "true") granting.add(match[1]);
+    }
+    const same =
+      granting.size === expected.size && [...expected].every((plan) => granting.has(plan));
+    if (!same) {
+      throw new Error(
+        `${capability} is granted by {${[...granting].sort().join(", ")}} in src/lib/plans.ts, ` +
+          `but this script expects {${[...expected].sort().join(", ")}}. Update both.`,
+      );
+    }
+  }
   for (const [stored, planId] of Object.entries(PLAN_ALIASES)) {
     const pattern = new RegExp(`${stored}:\\s*"${planId}"`);
     if (!pattern.test(source)) {
@@ -227,8 +293,7 @@ async function main() {
     if (enabling && !entitled(workspace.owner_plan)) {
       console.error(
         `\nREFUSED. ${workspace.name}'s owner is on "${workspace.owner_plan}", which does not ` +
-          `grant documentQa, so document questions would be refused with a "Pro feature" ` +
-          `message rather than answered. Nothing was changed.\n`,
+          `grant ${FEATURE.capability}, so ${FEATURE.refusal}. Nothing was changed.\n`,
       );
       process.exit(1);
     }
@@ -251,7 +316,7 @@ async function main() {
          VALUES (gen_random_uuid()::text, $1, $2, $3, $4, now())
          ON CONFLICT ("key", "workspaceId") DO UPDATE
            SET "enabled" = $3, "updatedAt" = now()`,
-        [key, target, enabling, "document Q&A canary"],
+        [key, target, enabling, FEATURE.label],
       );
     }
 
@@ -267,7 +332,10 @@ async function main() {
       `SELECT "key", "enabled" FROM "FeatureFlag" WHERE "workspaceId" = $1 AND "key" = ANY($2) ORDER BY "key"`,
       [target, FLAGS],
     );
-    check(after.rows.length === FLAGS.length, `both flags exist for this workspace`);
+    check(
+      after.rows.length === FLAGS.length,
+      `${FLAGS.length === 1 ? "the flag exists" : "both flags exist"} for this workspace`,
+    );
     for (const row of after.rows) {
       check(row.enabled === enabling, `${row.key} = ${enabling}`);
     }
