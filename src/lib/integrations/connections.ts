@@ -244,6 +244,13 @@ export async function completeConnection(input: {
     // cursor issued under the previous grant.
     syncCursor: null,
     backfillCompletedAt: null,
+    // The page budget belongs to the **attempt**, so it resets here and
+    // nowhere else. It is deliberately not reset by a retry or by a queued
+    // continuation: forty chained jobs share one budget, and a counter that
+    // reset per job would be the same as having no cap at all.
+    pagesImported: 0,
+    backfillTruncated: false,
+    importedThrough: null,
   };
 
   const row = existing
@@ -257,6 +264,16 @@ export async function completeConnection(input: {
         },
         select: { id: true },
       });
+
+  // The import starts here rather than on the next cron tick, so a customer
+  // who has just granted access sees something happen. One page is queued; the
+  // chain carries itself from there.
+  const { enqueueNextPage } = await import("@/lib/integrations/sync/worker");
+  await enqueueNextPage({
+    workspaceId: state.workspaceId,
+    ownerUserId: state.userId,
+    payload: { integrationId: row.id, generation: data.syncGeneration, cursor: null },
+  });
 
   log.info("integration connected", {
     provider: input.provider.id,

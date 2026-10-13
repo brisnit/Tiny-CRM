@@ -4,6 +4,8 @@ import { AppError } from "@/lib/errors";
 import { log } from "@/lib/logger";
 import type { Transport } from "@/lib/integrations/oauth-client";
 
+export type { Transport };
+
 /**
  * Reading mail and events from Microsoft Graph, one bounded page at a time.
  *

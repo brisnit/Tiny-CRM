@@ -23,6 +23,7 @@ import { decryptSecret } from "../src/lib/crypto";
 import { withTenantContext } from "../src/lib/tenant-db";
 import { accessTokenFor, disconnectConnection } from "../src/lib/integrations/connections";
 import { PROVIDERS } from "../src/lib/integrations/providers";
+import { BACKFILL_WINDOW_DAYS, MAX_BACKFILL_PAGES } from "../src/lib/integrations/sync/graph";
 
 if (!env.databaseUrl.startsWith("file:")) {
   console.error("\nThis verifies the LOCAL canary. Refusing to run against a non-SQLite database.\n");
@@ -254,15 +255,124 @@ async function disconnect() {
   console.log("\n  The connection is now disconnected. Reconnect from Settings when you want it back.\n");
 }
 
+/**
+ * Reports what a real sync actually did — counts, dates and privacy only.
+ *
+ * **Nothing here prints a subject, a snippet, an address, a thread id or a
+ * token.** Verifying an import must not become a way of reading the mailbox,
+ * and a verification report is exactly the kind of output that gets pasted
+ * into a chat window or a ticket. Lengths, counts and dates carry everything
+ * needed to judge whether the import behaved.
+ */
+async function syncReport() {
+  const row = await connection();
+  console.log("\n4. What the import did");
+  console.log("=".repeat(70));
+
+  const state = await db.integration.findUniqueOrThrow({
+    where: { id: row.id },
+    select: {
+      status: true, syncState: true, lastSyncAt: true, syncCursor: true,
+      pagesImported: true, backfillTruncated: true, backfillCompletedAt: true,
+      importedThrough: true, syncGeneration: true,
+    },
+  });
+
+  const messages = await db.emailMessage.findMany({
+    where: { integrationId: row.id },
+    select: {
+      sentAt: true, visibility: true, ownerUserId: true, source: true,
+      contactId: true, subject: true, snippet: true,
+    },
+  });
+
+  console.log(`\n    status           ${state.status} / ${state.syncState}`);
+  console.log(`    generation       ${state.syncGeneration}`);
+  console.log(`    pages fetched    ${state.pagesImported} of ${MAX_BACKFILL_PAGES}`);
+  console.log(`    messages         ${messages.length}`);
+  console.log(`    linked           ${messages.filter((m) => m.contactId).length}`);
+  console.log(`    unlinked         ${messages.filter((m) => !m.contactId).length}`);
+
+  const dates = messages.map((m) => m.sentAt.getTime()).sort((a, b) => a - b);
+  console.log(`    oldest imported  ${dates.length ? new Date(dates[0]!).toISOString().slice(0, 10) : "—"}`);
+  console.log(`    newest imported  ${dates.length ? new Date(dates.at(-1)!).toISOString().slice(0, 10) : "—"}`);
+  console.log(`    importedThrough  ${state.importedThrough?.toISOString().slice(0, 10) ?? "—"}`);
+  console.log(`    last checked     ${state.lastSyncAt?.toISOString() ?? "never"}`);
+
+  console.log("\n  Completeness");
+  const windowStart = new Date(Date.now() - BACKFILL_WINDOW_DAYS * 86_400_000);
+  check(
+    !state.backfillTruncated,
+    "the import reached the end of the window",
+    state.backfillTruncated
+      ? `stopped at the ${MAX_BACKFILL_PAGES}-page cap; resume is offered and the cursor is kept`
+      : `${BACKFILL_WINDOW_DAYS}-day window from ${windowStart.toISOString().slice(0, 10)}`,
+  );
+  if (state.backfillTruncated) {
+    check(Boolean(state.syncCursor), "a cursor was kept, so resuming continues rather than restarts");
+  }
+  check(Boolean(state.backfillCompletedAt), "the backfill finished rather than stalling");
+
+  console.log("\n  Privacy of what was imported");
+  check(
+    messages.every((m) => m.visibility === "private"),
+    "every imported message is private",
+    `${messages.filter((m) => m.visibility !== "private").length} were not`,
+  );
+  check(
+    messages.every((m) => m.ownerUserId === row.userId),
+    "every imported message is owned by the connecting account",
+  );
+  check(
+    messages.every((m) => m.source === "imported"),
+    "every imported message is marked imported, so none is AI-eligible",
+  );
+
+  // What a colleague would see. Counted through the application's own
+  // visibility rule rather than asserted from the column, because that is the
+  // path a page actually takes.
+  const { visibleToUser } = await import("../src/lib/integrations/visibility");
+  const otherUser = await db.user.findFirst({
+    where: { id: { not: row.userId } },
+    select: { id: true },
+  });
+  if (otherUser) {
+    const visibleToThem = await db.emailMessage.count({
+      where: { integrationId: row.id, ...visibleToUser(otherUser.id) },
+    });
+    check(visibleToThem === 0, "another account can see none of them", `${visibleToThem} visible`);
+  } else {
+    console.log("    (no second account in this database to check visibility against)");
+  }
+
+  const activities = await db.activity.count({
+    where: { contactId: { in: messages.map((m) => m.contactId).filter(Boolean) as string[] } },
+  });
+  check(activities === 0, "no workspace-visible activity row was created for them");
+
+  console.log("\n  AI exclusion");
+  const aiEligible = await db.emailMessage.count({
+    where: { integrationId: row.id, source: "seed" },
+  });
+  check(aiEligible === 0, "none of them is classified as seed data");
+
+  // Proof that no content is being printed: the report never touched these.
+  const withContent = messages.filter((m) => m.subject || m.snippet).length;
+  console.log(
+    `\n    (${withContent} messages carry a subject or snippet; none has been printed here)\n`,
+  );
+}
+
 const which = process.argv.find((a) => a.startsWith("--"));
 const run =
   which === "--encryption" ? encryption :
   which === "--refresh" ? refresh :
   which === "--disconnect" ? disconnect :
+  which === "--sync" ? syncReport :
   null;
 
 if (!run) {
-  console.error("\nUsage: --encryption | --refresh | --disconnect\n");
+  console.error("\nUsage: --encryption | --refresh | --disconnect | --sync\n");
   process.exit(1);
 }
 run()

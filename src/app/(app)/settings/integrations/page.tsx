@@ -47,6 +47,7 @@ export default async function IntegrationSettings({
       select: {
         provider: true, status: true, accountEmail: true, lastSyncAt: true,
         syncState: true, backfillCompletedAt: true, lastError: true,
+        importedThrough: true, backfillTruncated: true,
       },
     }),
     workspaceId ? await integrationsEnabled(workspaceId) : false,
@@ -119,6 +120,14 @@ export default async function IntegrationSettings({
                 </div>
 
                 <div className="flex shrink-0 items-center gap-2">
+                  {state.canResume ? (
+                    <form method="post" action={`/api/integrations/${provider.vendor}/resume`}>
+                      <input type="hidden" name="provider" value={provider.id} />
+                      <Button size="sm" variant="outline" type="submit">
+                        Resume import
+                      </Button>
+                    </form>
+                  ) : null}
                   {state.canDisconnect ? (
                     <DisconnectControl provider={provider.id} label={provider.label} />
                   ) : null}

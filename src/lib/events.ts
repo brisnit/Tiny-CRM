@@ -48,6 +48,14 @@ export const DOMAIN_EVENTS = [
   // Emitted with a future availableAt, so the worker performs it when the
   // grace period ends rather than immediately.
   "workspace.deletion_due",
+  /**
+   * One page of an email or calendar import.
+   *
+   * A job per page rather than a loop in one job: the queue already supplies
+   * the claim, the backoff, the dead-letter state and — the one that matters —
+   * a point between pages at which a disconnect can take effect.
+   */
+  "integration.sync",
 ] as const;
 
 export type DomainEventName = (typeof DOMAIN_EVENTS)[number];

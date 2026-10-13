@@ -118,6 +118,18 @@ const EXCEPTIONS: Record<string, string> = {
     "memberships, and a module that opens its own grants itself the scope it " +
     "should be verifying. Writes are scoped to one Integration row by id, and " +
     "the deletes are scoped to that row's integrationId",
+  "src/lib/integrations/sync/worker.ts":
+    "every export asserts a tenant context first. runSyncPage is called by the " +
+    "job runner, which establishes one from the event's own workspace and " +
+    "actor — the actor being the connecting user, which is what makes the " +
+    "Integration row readable at all under its owner-scoped policy. " +
+    "startBackfill and resumeBackfill are called from a route or an action " +
+    "that has already established the caller's context. The module does not " +
+    "open one of its own, for the reason documents/retrieve.ts gives: the " +
+    "context belongs to whoever earned the workspace. Writes are scoped to a " +
+    "single Integration row by id; the WorkspaceMember read resolves the " +
+    "owner's own record scope so a restricted member's mail is never linked " +
+    "to a contact they cannot see",
   "src/lib/integrations/gate.ts":
     "integrationsEntitled reads the workspace OWNER's plan, for exactly the " +
     "reason documents/gate.ts does: the capability belongs to the workspace and " +

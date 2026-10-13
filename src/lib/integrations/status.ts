@@ -25,6 +25,10 @@ export type ConnectionView = {
   lastSyncAt: Date | null;
   syncState: string;
   backfillCompletedAt: Date | null;
+  /** How far back the import actually reached. */
+  importedThrough: Date | null;
+  /** The page cap stopped it before the end of the window. */
+  backfillTruncated: boolean;
   lastError: string | null;
 };
 
@@ -38,7 +42,15 @@ export type ConnectionSummary = {
   problem: string | null;
   canConnect: boolean;
   canDisconnect: boolean;
+  /** Offer to continue an import the cap stopped. */
+  canResume?: boolean;
 };
+
+/** A date alone, for "imported back to …", where a time would be noise. */
+function day(date: Date | null): string {
+  if (!date) return "an unknown date";
+  return date.toISOString().slice(0, 10);
+}
 
 function when(date: Date | null): string {
   if (!date) return "never";
@@ -71,19 +83,39 @@ export function summarise(connection: ConnectionView | null): ConnectionSummary 
       };
 
     case "connected": {
-      // The three honest readings of a live connection.
-      const importLine = connection.lastSyncAt
-        ? `Last imported ${when(connection.lastSyncAt)}.`
-        : connection.syncState === "backfilling"
-          ? "Importing your recent mail and meetings now."
-          : "Nothing imported yet — importing has not started.";
+      // Four honest readings of a live connection, and the order matters: an
+      // incomplete import must not be reported as a finished one just because
+      // something was imported.
+      let importLine: string;
+      let problem: string | null = null;
+
+      if (connection.backfillTruncated) {
+        // The cap stopped it. Saying how far it reached and that there is more
+        // is the whole point — "imported" must never mean more than it did.
+        importLine =
+          `Imported back to ${day(connection.importedThrough)}, and stopped there. ` +
+          `There is older mail in the window that has not been imported.`;
+        problem = "This import is incomplete. Resume it to continue from where it stopped.";
+      } else if (connection.syncState === "backfilling") {
+        importLine = connection.importedThrough
+          ? `Importing now — back to ${day(connection.importedThrough)} so far.`
+          : "Importing your recent mail and meetings now.";
+      } else if (connection.lastSyncAt && connection.backfillCompletedAt) {
+        importLine =
+          `Imported back to ${day(connection.importedThrough)}. ` +
+          `Last checked ${when(connection.lastSyncAt)}.`;
+      } else {
+        importLine = "Nothing imported yet — importing has not started.";
+      }
+
       return {
         label: "Connected",
-        tone: "connected",
+        tone: connection.backfillTruncated ? "attention" : "connected",
         importLine,
-        problem: null,
+        problem,
         canConnect: false,
         canDisconnect: true,
+        canResume: connection.backfillTruncated === true,
       };
     }
 
@@ -158,4 +190,12 @@ export const CALLBACK_MESSAGES: Record<string, { tone: "ok" | "warn"; text: stri
   unavailable: { tone: "warn", text: "That connection is not available yet." },
   invalid: { tone: "warn", text: "That connection attempt could not be verified. Please start again." },
   failed: { tone: "warn", text: "That connection could not be completed. Please try again." },
+  resuming: {
+    tone: "ok",
+    text: "Continuing the import from where it stopped. This page will say when it has.",
+  },
+  "nothing-to-resume": {
+    tone: "warn",
+    text: "There is nothing to resume — that import is not incomplete.",
+  },
 };

@@ -111,6 +111,26 @@ export function registerJobHandlers(): void {
   });
 
   // --- Overdue tasks ------------------------------------------------------
+  // --- Email and calendar import ------------------------------------------
+  //
+  // One page per job. The handler decides for itself whether to enqueue the
+  // next one, so a disconnect between pages stops the chain without anything
+  // having to cancel queued work.
+  registerHandler("integration.sync", async (job) => {
+    const { runSyncPage } = await import("@/lib/integrations/sync/worker");
+    const payload = job.payload as { integrationId?: string; generation?: number; cursor?: string | null };
+    if (typeof payload.integrationId !== "string" || typeof payload.generation !== "number") {
+      // A malformed payload cannot be retried into shape.
+      const { PermanentJobError } = await import("@/lib/jobs");
+      throw new PermanentJobError("integration.sync payload is missing integrationId or generation");
+    }
+    await runSyncPage({
+      integrationId: payload.integrationId,
+      generation: payload.generation,
+      cursor: payload.cursor ?? null,
+    });
+  });
+
   registerHandler("task.overdue", async (job) => {
     const task = await db.task.findFirst({
       where: { id: job.entityId, workspaceId: job.workspaceId },

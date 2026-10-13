@@ -275,7 +275,15 @@ async function handleFailure(
             status: "failed",
             claimedBy: null,
             claimedUntil: null,
-            availableAt: new Date(Date.now() + backoffMs(job.attempts)),
+            // The later of our backoff and anything the provider asked for,
+            // so a retry can be pushed out but never pulled in.
+            availableAt: new Date(
+              Date.now() +
+                Math.max(
+                  backoffMs(job.attempts),
+                  error instanceof RetryAfterError ? error.retryAfterMs : 0,
+                ),
+            ),
             lastError: message.slice(0, 500),
           },
     }),
@@ -313,6 +321,32 @@ async function handleFailure(
 }
 
 /** Marks a failure as not worth retrying. */
+/**
+ * Asks the runner not to retry before a given moment.
+ *
+ * The backoff schedule is 2s, 8s, 32s, 2m — fine for a transient fault and
+ * wrong for a provider that told us how long to wait. Microsoft Graph answers
+ * `429` with `Retry-After` in seconds, and retrying sooner is how an
+ * integration gets throttled harder rather than less.
+ *
+ * The runner takes the **later** of this and the ordinary backoff, so a
+ * handler can only ever push a retry further out, never pull it closer. A
+ * provider asking for 1 second does not get a retry in 1 second when our own
+ * backoff says 32.
+ *
+ * The attempt still counts. A throttle that outlasts `maxAttempts` therefore
+ * dead-letters rather than retrying forever, which is the right trade: silent
+ * infinite waiting is worse than a visible stop.
+ */
+export class RetryAfterError extends Error {
+  readonly retryAfterMs: number;
+  constructor(retryAfterMs: number, message: string) {
+    super(message);
+    this.name = "RetryAfterError";
+    this.retryAfterMs = Math.max(0, retryAfterMs);
+  }
+}
+
 export class PermanentJobError extends Error {
   constructor(message: string) {
     super(message);
