@@ -13,7 +13,9 @@ import {
   backfillStartUrl,
   CursorExpiredError,
   fetchPage,
+  incrementalStartUrl,
   MAX_BACKFILL_PAGES,
+  MAX_INCREMENTAL_PAGES,
   RateLimitedError,
   type Transport,
 } from "@/lib/integrations/sync/graph";
@@ -48,6 +50,23 @@ export type SyncPayload = {
   generation: number;
   /** Null on the first page of a backfill. */
   cursor: string | null;
+  /**
+   * Which kind of pass this is. Absent means `backfill`, so a job queued
+   * before this field existed still runs as the backfill it was enqueued as.
+   */
+  mode?: "backfill" | "incremental";
+  /**
+   * Pages fetched so far **by this incremental chain**.
+   *
+   * Deliberately in the payload, which is exactly what the backfill cap must
+   * never do. The two bounds are different in kind: a backfill's budget spans
+   * every job of one attempt and has to survive re-enqueueing, so it lives on
+   * the row; an incremental pass is a single short chain whose budget should
+   * start again at the next pass, because the next pass is reading a different
+   * and newer window. A row counter would make the second incremental run
+   * inherit the first one's spend.
+   */
+  page?: number;
 };
 
 /** Enqueues the next page of an existing chain. */
@@ -136,6 +155,54 @@ export async function resumeBackfill(input: {
   return { resumed: true };
 }
 
+/**
+ * Queues an incremental pass over everything that arrived since the last one.
+ *
+ * Refuses unless the backfill has finished and is not truncated: an import
+ * that has not reached the end of its window yet should finish that — or be
+ * resumed — before it starts chasing new mail, or the two chains would race
+ * for the same page budget and report nonsense progress.
+ *
+ * Returns what it decided and why, so the caller can log a skip rather than
+ * guess at silence.
+ */
+export async function startIncremental(input: {
+  integrationId: string;
+  workspaceId: string;
+  ownerUserId: string;
+}): Promise<{ queued: boolean; reason: string }> {
+  assertTenantContext("startIncremental");
+  const row = await db.integration.findUnique({
+    where: { id: input.integrationId },
+    select: {
+      syncGeneration: true, status: true, syncState: true,
+      backfillCompletedAt: true, backfillTruncated: true,
+    },
+  });
+  if (!row) return { queued: false, reason: "no such connection" };
+  if (row.status !== "connected") return { queued: false, reason: row.status };
+  if (!row.backfillCompletedAt) return { queued: false, reason: "the backfill has not finished" };
+  if (row.backfillTruncated) return { queued: false, reason: "the backfill is incomplete" };
+  if (row.syncState !== "idle") return { queued: false, reason: `already ${row.syncState}` };
+
+  await db.integration.update({
+    where: { id: input.integrationId },
+    data: { syncState: "syncing" },
+  });
+  await enqueueNextPage({
+    workspaceId: input.workspaceId,
+    ownerUserId: input.ownerUserId,
+    payload: {
+      integrationId: input.integrationId,
+      generation: row.syncGeneration,
+      cursor: null,
+      mode: "incremental",
+      page: 0,
+    },
+  });
+  return { queued: true, reason: "queued" };
+}
+
 /** The handler. `transport` is injectable so tests never reach Graph. */
 export async function runSyncPage(
   payload: SyncPayload,
@@ -150,7 +217,7 @@ export async function runSyncPage(
     where: { id: payload.integrationId },
     select: {
       id: true, workspaceId: true, userId: true, provider: true, status: true,
-      accountEmail: true, syncGeneration: true, syncCursor: true,
+      accountEmail: true, syncGeneration: true, syncCursor: true, lastSyncAt: true,
     },
   });
 
@@ -172,7 +239,15 @@ export async function runSyncPage(
 
   const provider = providerFor(row.provider) ?? PROVIDERS.outlook;
   const token = await accessTokenFor(row.id, provider, options.transport);
-  const url = payload.cursor ?? backfillStartUrl();
+
+  // An incremental pass with no `lastSyncAt` has no "since" to read from.
+  // Rather than invent one — midnight, or the epoch, both of which import the
+  // wrong thing — it falls back to the bounded backfill window, which is the
+  // same question asked safely.
+  const incremental = payload.mode === "incremental";
+  const url =
+    payload.cursor ??
+    (incremental && row.lastSyncAt ? incrementalStartUrl(row.lastSyncAt) : backfillStartUrl());
 
   let page;
   try {
@@ -232,6 +307,7 @@ export async function runSyncPage(
           generation: payload.generation,
           messages: page.items,
           nextCursor: page.nextLink,
+          incremental,
           visibleContactWhere: { workspaceId: row.workspaceId },
         }),
     );
@@ -245,12 +321,35 @@ export async function runSyncPage(
     throw error;
   }
 
-  const done = !page.nextLink || result.truncated;
+  // An incremental chain is bounded by its own page count, carried in the
+  // payload. Hitting the bound stops the chain rather than queueing more: the
+  // next scheduled pass will read from `lastSyncAt`, which this pass has been
+  // advancing all along, so stopping early loses nothing but time.
+  const pagesSoFar = (payload.page ?? 0) + 1;
+  const outOfIncrementalPages = incremental && pagesSoFar >= MAX_INCREMENTAL_PAGES;
+
+  const done = !page.nextLink || result.truncated || outOfIncrementalPages;
   if (!done) {
     await enqueueNextPage({
       workspaceId: row.workspaceId,
       ownerUserId: row.userId,
-      payload: { integrationId: row.id, generation: payload.generation, cursor: page.nextLink },
+      payload: {
+        integrationId: row.id,
+        generation: payload.generation,
+        cursor: page.nextLink,
+        ...(incremental ? { mode: "incremental" as const, page: pagesSoFar } : {}),
+      },
+    });
+  } else if (outOfIncrementalPages) {
+    // Leave no chain half-open: the row says `syncing` while a chain is
+    // running, and nothing else will clear it once this one stops.
+    await db.integration.update({
+      where: { id: row.id },
+      data: { syncState: "idle" },
+    });
+    log.warn("incremental pass stopped at its page cap", {
+      integrationId: row.id,
+      cap: MAX_INCREMENTAL_PAGES,
     });
   } else if (result.truncated) {
     log.warn("backfill stopped at the page cap", {

@@ -106,7 +106,11 @@ export async function importPage(input: ImportPageInput): Promise<ImportPageResu
         syncCursor: input.nextCursor,
         pagesImported: { increment: pagesIncrement },
         lastSyncAt: new Date(),
-        syncState: input.nextCursor ? "backfilling" : "idle",
+        syncState: input.nextCursor
+          ? input.incremental
+            ? "syncing"
+            : "backfilling"
+          : "idle",
       },
     });
     if (claimed.count === 0) throw new GenerationChangedError(input.generation);
@@ -201,19 +205,33 @@ export async function importPage(input: ImportPageInput): Promise<ImportPageResu
         ? oldest
         : state.importedThrough;
 
+    const finished = !input.nextCursor || truncated;
+
     await tx.integration.update({
       where: { id: input.integrationId },
       data: {
         importedThrough: reachedBack,
-        backfillTruncated: truncated,
-        // Finished when there is no next page, or when the cap stopped us —
-        // and in the second case `backfillTruncated` is what stops that
-        // reading as "everything is here".
-        backfillCompletedAt: !input.nextCursor || truncated ? new Date() : null,
-        syncState: !input.nextCursor || truncated ? "idle" : "backfilling",
+        syncState: finished ? "idle" : input.incremental ? "syncing" : "backfilling",
         // A truncated backfill keeps its cursor, so resuming later is a
         // decision rather than a restart.
-        syncCursor: truncated ? input.nextCursor : input.nextCursor,
+        syncCursor: input.nextCursor,
+        // An incremental pass must not touch either of these. Writing
+        // `backfillCompletedAt: null` mid-chain — which the unconditional
+        // version did on every page that had a next page — would make a
+        // connection whose backfill finished weeks ago look like one that
+        // never finished, and `startIncremental` refuses those, so the
+        // connection would stop syncing permanently after its first
+        // multi-page incremental pass. Nothing caught that, because nothing
+        // ran an incremental pass.
+        ...(input.incremental
+          ? {}
+          : {
+              backfillTruncated: truncated,
+              // Finished when there is no next page, or when the cap stopped
+              // us — and in the second case `backfillTruncated` is what stops
+              // that reading as "everything is here".
+              backfillCompletedAt: finished ? new Date() : null,
+            }),
       },
     });
 

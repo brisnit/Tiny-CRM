@@ -122,6 +122,7 @@ function applySchema() {
     "014_document_intelligence.sql",
     "015_platform_admin_policies.sql",
     "016_integration_privacy.sql",
+    "017_due_integrations.sql",
   ]) {
     execFileSync("node", ["scripts/apply-sql.mjs", `prisma/postgres/${file}`], {
       cwd: ROOT, stdio: "ignore", env,

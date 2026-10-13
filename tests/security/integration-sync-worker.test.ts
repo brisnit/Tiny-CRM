@@ -6,8 +6,18 @@ import { runAsTestIdentity } from "../../src/lib/auth/context";
 import { withTenantContext } from "../../src/lib/tenant-db";
 import { encryptSecret } from "../../src/lib/crypto";
 import { RetryAfterError } from "../../src/lib/jobs";
-import { MAX_BACKFILL_PAGES } from "../../src/lib/integrations/sync/graph";
-import { runSyncPage, startBackfill, resumeBackfill } from "../../src/lib/integrations/sync/worker";
+import {
+  BACKFILL_WINDOW_DAYS,
+  INCREMENTAL_OVERLAP_MS,
+  MAX_BACKFILL_PAGES,
+  MAX_INCREMENTAL_PAGES,
+} from "../../src/lib/integrations/sync/graph";
+import {
+  runSyncPage,
+  startBackfill,
+  resumeBackfill,
+  startIncremental,
+} from "../../src/lib/integrations/sync/worker";
 import type { Transport } from "../../src/lib/integrations/oauth-client";
 
 /**
@@ -492,5 +502,297 @@ describe("the runner, not just the handler, respects Retry-After", () => {
     // the tests above would pass for the wrong reason.
     const scheduled = await scheduledDelay(new Error("an ordinary transient failure"));
     assertDelayEquals(scheduled, PINNED_BACKOFF_MS, "a failure carrying no Retry-After");
+  });
+});
+
+describe("the incremental pass, which is what keeps a mailbox current", () => {
+  /**
+   * None of this existed. Connecting ran a bounded backfill and the chain
+   * carried itself to the end of its window; after that a mailbox went quiet
+   * forever. `deltaStartUrl()` was written but had no callers, `deltaLink` was
+   * parsed and discarded, `importPage`'s `incremental` flag was never set by
+   * anybody, and nothing anywhere enqueued a second pass. The canary showed it
+   * as 320 messages imported and then nothing, which looks identical to a
+   * mailbox that received no new mail.
+   */
+
+  /** Puts the connection where a finished backfill leaves it. */
+  async function backfilled(lastSyncAt: Date): Promise<void> {
+    await db.integration.update({
+      where: { id: integrationId },
+      data: {
+        syncState: "idle",
+        backfillCompletedAt: new Date(Date.now() - 86_400_000),
+        backfillTruncated: false,
+        pagesImported: 7,
+        syncCursor: null,
+        lastSyncAt,
+      },
+    });
+  }
+
+  /** Records the URLs a run asked Graph for, so the window can be asserted. */
+  function recordingProvider(pages: Record<string, unknown>[]): {
+    transport: Transport;
+    urls: string[];
+  } {
+    const urls: string[] = [];
+    let call = 0;
+    const transport: Transport = async (url: string) => {
+      urls.push(url);
+      const body = pages[Math.min(call, pages.length - 1)]!;
+      call += 1;
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    return { transport, urls };
+  }
+
+  test("an incremental pass reads from lastSyncAt, with an overlap, not from the window start", async () => {
+    const lastSyncAt = new Date(Date.now() - 3 * 86_400_000);
+    await backfilled(lastSyncAt);
+
+    const { transport, urls } = recordingProvider([graphMessages(["inc-1"])]);
+    await asOwner(() =>
+      runSyncPage(
+        { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+        { transport },
+      ),
+    );
+
+    assert.equal(urls.length, 1);
+    const asked = new URL(urls[0]!);
+    const filter = asked.searchParams.get("$filter") ?? "";
+    const match = /receivedDateTime ge (.+)$/.exec(filter);
+    assert.ok(match, `the incremental pass did not filter on receivedDateTime: ${filter}`);
+
+    const from = new Date(match[1]!).getTime();
+    assert.equal(
+      from,
+      lastSyncAt.getTime() - INCREMENTAL_OVERLAP_MS,
+      "the incremental window did not start one overlap before the last sync",
+    );
+    // The thing that would make this pointless: reading the 30-day window again.
+    const windowStart = Date.now() - BACKFILL_WINDOW_DAYS * 86_400_000;
+    assert.ok(
+      from > windowStart,
+      "the incremental pass re-read the whole backfill window instead of only new mail",
+    );
+  });
+
+  test("an incremental pass does not spend the backfill's page budget", async () => {
+    await backfilled(new Date(Date.now() - 3 * 86_400_000));
+    const { transport } = recordingProvider([graphMessages(["inc-a"])]);
+    await asOwner(() =>
+      runSyncPage(
+        { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+        { transport },
+      ),
+    );
+    const after = await db.integration.findUniqueOrThrow({
+      where: { id: integrationId },
+      select: { pagesImported: true },
+    });
+    assert.equal(
+      after.pagesImported,
+      7,
+      "an incremental page was charged to the backfill's budget, which would exhaust it over time",
+    );
+  });
+
+  test("a multi-page incremental pass does not erase the completed backfill", async () => {
+    /**
+     * The defect this was written for: `importPage` wrote
+     * `backfillCompletedAt: null` on every page that had a next page. On a
+     * backfill that is correct — it is still running. On an incremental pass
+     * it reopens a backfill that finished weeks ago, and `startIncremental`
+     * refuses to schedule a connection whose backfill has not completed, so
+     * the connection would never sync again. A single-page incremental pass
+     * would not have caught it; it takes a second page.
+     */
+    await backfilled(new Date(Date.now() - 3 * 86_400_000));
+    const completedBefore = (
+      await db.integration.findUniqueOrThrow({
+        where: { id: integrationId },
+        select: { backfillCompletedAt: true },
+      })
+    ).backfillCompletedAt;
+
+    const withNext = {
+      ...graphMessages(["inc-p1"]),
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?$skiptoken=next",
+    };
+    const { transport } = recordingProvider([withNext]);
+    await asOwner(() =>
+      runSyncPage(
+        { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+        { transport },
+      ),
+    );
+
+    const after = await db.integration.findUniqueOrThrow({
+      where: { id: integrationId },
+      select: { backfillCompletedAt: true, backfillTruncated: true, syncState: true },
+    });
+    assert.deepEqual(
+      after.backfillCompletedAt,
+      completedBefore,
+      "an incremental page reopened a backfill that had already finished",
+    );
+    assert.equal(after.backfillTruncated, false, "an incremental page set the truncation flag");
+    assert.equal(after.syncState, "syncing", "a running incremental chain reported the wrong state");
+  });
+
+  test("the overlap re-reads mail without duplicating it or changing who owns it", async () => {
+    await backfilled(new Date(Date.now() - 3 * 86_400_000));
+    const page = graphMessages(["overlap-1", "overlap-2"]);
+
+    const first = await asOwner(() =>
+      runSyncPage(
+        { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+        { transport: recordingProvider([page]).transport },
+      ),
+    );
+    assert.equal(first.imported, 2);
+
+    // The next pass overlaps the previous one by design.
+    const second = await asOwner(() =>
+      runSyncPage(
+        { integrationId, generation: 1, cursor: null, mode: "incremental", page: 0 },
+        { transport: recordingProvider([page]).transport },
+      ),
+    );
+    assert.equal(second.imported, 0, "the overlap imported the same mail twice");
+    assert.equal(second.duplicates, 2, "the overlap was not recognised as already imported");
+
+    const rows = await db.emailMessage.findMany({
+      where: { integrationId },
+      select: { visibility: true, ownerUserId: true, source: true },
+    });
+    assert.equal(rows.length, 2, "re-reading the overlap created extra rows");
+    assert.ok(
+      rows.every((r) => r.visibility === "private" && r.ownerUserId === tenant.ownerId && r.source === "imported"),
+      "an incrementally imported message lost its privacy, owner or provenance",
+    );
+  });
+
+  test("the incremental chain is bounded, and leaves no connection stuck syncing", async () => {
+    await backfilled(new Date(Date.now() - 3 * 86_400_000));
+    const withNext = {
+      ...graphMessages(["cap-1"]),
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?$skiptoken=more",
+    };
+    const { transport } = recordingProvider([withNext]);
+
+    // One short of the cap: this page is the last one allowed.
+    const result = await asOwner(() =>
+      runSyncPage(
+        {
+          integrationId,
+          generation: 1,
+          cursor: null,
+          mode: "incremental",
+          page: MAX_INCREMENTAL_PAGES - 1,
+        },
+        { transport },
+      ),
+    );
+
+    assert.equal(result.done, true, "the incremental chain continued past its cap");
+    assert.equal(await queued(), 0, "a capped incremental chain queued more work");
+    const after = await db.integration.findUniqueOrThrow({
+      where: { id: integrationId },
+      select: { syncState: true },
+    });
+    assert.equal(
+      after.syncState,
+      "idle",
+      "a capped chain left the connection reporting 'syncing', which blocks every future pass",
+    );
+  });
+
+  test("startIncremental refuses what it should and queues what it should", async () => {
+    const start = () =>
+      asOwner(() =>
+        startIncremental({
+          integrationId,
+          workspaceId: tenant.workspaceId,
+          ownerUserId: tenant.ownerId,
+        }),
+      );
+
+    // Backfill still running.
+    await db.integration.update({
+      where: { id: integrationId },
+      data: { syncState: "backfilling", backfillCompletedAt: null, lastSyncAt: new Date() },
+    });
+    assert.equal((await start()).queued, false, "scheduled a connection mid-backfill");
+
+    // Backfill stopped at the cap: resume is the right action, not a new pass.
+    await db.integration.update({
+      where: { id: integrationId },
+      data: { syncState: "idle", backfillCompletedAt: new Date(), backfillTruncated: true },
+    });
+    assert.equal((await start()).queued, false, "scheduled a connection whose import is incomplete");
+
+    // Disconnected.
+    await db.integration.update({
+      where: { id: integrationId },
+      data: { backfillTruncated: false, status: "disconnected" },
+    });
+    assert.equal((await start()).queued, false, "scheduled a disconnected connection");
+
+    // Ready.
+    await db.integration.update({
+      where: { id: integrationId },
+      data: { status: "connected" },
+    });
+    const ok = await start();
+    assert.equal(ok.queued, true, `a ready connection was not scheduled: ${ok.reason}`);
+    assert.equal(await queued(), 1);
+    const event = await db.domainEvent.findFirstOrThrow({
+      where: { name: "integration.sync", entityId: integrationId },
+      select: { payload: true },
+    });
+    const payload = JSON.parse(event.payload) as { mode?: string; cursor?: string | null };
+    assert.equal(payload.mode, "incremental", "the scheduled pass was not an incremental one");
+    assert.equal(payload.cursor, null);
+
+    // And it must not queue a second one on top of the first.
+    assert.equal((await start()).queued, false, "scheduled a second pass over a running one");
+    assert.equal(await queued(), 1, "a duplicate incremental pass was queued");
+  });
+
+  test("the scheduler queues connections that are behind and leaves fresh ones alone", async () => {
+    const { scheduleDueSyncs } = await import("../../src/lib/integrations/sync/schedule");
+
+    // Fresh: synced a minute ago.
+    await db.integration.update({
+      where: { id: integrationId },
+      data: {
+        status: "connected",
+        syncState: "idle",
+        backfillCompletedAt: new Date(Date.now() - 86_400_000),
+        backfillTruncated: false,
+        lastSyncAt: new Date(Date.now() - 60_000),
+      },
+    });
+    const fresh = await scheduleDueSyncs({ idleMs: 30 * 60_000 });
+    assert.equal(fresh.queued, 0, "a connection synced a minute ago was scheduled again");
+
+    // Behind: synced two hours ago.
+    await db.integration.update({
+      where: { id: integrationId },
+      data: { lastSyncAt: new Date(Date.now() - 2 * 3_600_000) },
+    });
+    const behind = await scheduleDueSyncs({ idleMs: 30 * 60_000 });
+    assert.equal(behind.queued, 1, "a connection two hours behind was not scheduled");
+    assert.equal(await queued(), 1);
+
+    // Having been scheduled, it is no longer idle, so the next tick skips it.
+    const again = await scheduleDueSyncs({ idleMs: 30 * 60_000 });
+    assert.equal(again.queued, 0, "the scheduler queued a second pass over a running one");
   });
 });

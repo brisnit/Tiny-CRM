@@ -52,6 +52,15 @@ const ALLOWED: Record<string, string> = {
   "src/lib/automations.ts":
     "D6: automations run workspace-wide and what reaches a person is filtered at delivery",
   "src/lib/security/alerts.ts": "security alerts must be written whoever triggered them",
+  "src/lib/integrations/sync/schedule.ts":
+    "The scheduler queues an incremental pass for each connection that is " +
+    "behind. It enters each connection's OWN workspace context to do it, and " +
+    "declares no record restriction there because it reads no record: " +
+    "`startIncremental` reads the Integration row and writes a DomainEvent, " +
+    "neither of which is record-scoped. The cross-tenant step is the listing " +
+    "that precedes this, which on PostgreSQL is `app_due_integrations` — a " +
+    "SECURITY DEFINER function returning four identifiers and no content " +
+    "(prisma/postgres/017), for the same reason `app_claim_jobs` exists.",
 
   // --- Identity and membership, which precede any record -------------------
   "src/lib/auth/context.ts":

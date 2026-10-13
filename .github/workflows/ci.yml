@@ -207,6 +207,7 @@ jobs:
           node scripts/apply-sql.mjs prisma/postgres/014_document_intelligence.sql
           node scripts/apply-sql.mjs prisma/postgres/015_platform_admin_policies.sql
           node scripts/apply-sql.mjs prisma/postgres/016_integration_privacy.sql
+          node scripts/apply-sql.mjs prisma/postgres/017_due_integrations.sql
         env:
           DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
 

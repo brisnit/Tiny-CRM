@@ -27,6 +27,29 @@ export const PAGE_SIZE = 50;
  */
 export const MAX_BACKFILL_PAGES = 40;
 
+/**
+ * The most pages one incremental pass will fetch.
+ *
+ * Far smaller than the backfill cap because an incremental pass reads only
+ * what arrived since the last one. If it ever needs more than this, something
+ * has gone wrong — a connection left unsynced for weeks, or a cursor that is
+ * not advancing — and the right answer is to stop and say so rather than page
+ * through a mailbox under a cap meant for a different job.
+ */
+export const MAX_INCREMENTAL_PAGES = 10;
+
+/**
+ * How far before `lastSyncAt` an incremental pass starts reading.
+ *
+ * Two clocks are involved — ours and Microsoft's — and a page can be written
+ * while later mail is still arriving. Starting exactly at `lastSyncAt` would
+ * drop anything that landed in the gap. The overlap re-reads a few minutes of
+ * mail that is already imported, which costs one deduplicated page and is the
+ * cheapest insurance available: the unique key on
+ * (workspace, owner, provider, externalId) makes a re-read a no-op.
+ */
+export const INCREMENTAL_OVERLAP_MS = 5 * 60_000;
+
 export type GraphMessage = {
   id: string;
   conversationId?: string;
@@ -152,10 +175,39 @@ export async function fetchPage(
   };
 }
 
-/** The delta endpoint, for everything that changed since the last pass. */
-export function deltaStartUrl(): string {
+/**
+ * The first page of an incremental pass: mail that arrived since the last one.
+ *
+ * ## Why this rather than a delta query
+ *
+ * Graph does have a delta endpoint, and it was the obvious choice until the
+ * documentation was read properly. `message: delta` is **folder-scoped** —
+ * `GET /me/mailFolders/{id}/messages/delta` — while the backfill reads
+ * `/me/messages`, which is every folder. A delta cursor on the inbox would
+ * therefore cover strictly less mail than the import that preceded it, and
+ * silently: a customer whose mail is filed by a rule into another folder would
+ * see the backfill bring it in and then nothing ever again. Matching the
+ * backfill's coverage with delta means one cursor per folder plus folder
+ * reconciliation, which is a great deal of machinery to buy change tracking
+ * this release does not use — nothing here renders deletions or read-state
+ * changes.
+ *
+ * `$deltatoken=latest`, which would have made a cheap baseline, is documented
+ * for Entra resources and (as `token=latest`) for OneDrive and SharePoint. It
+ * is **not** among the query parameters the v1.0 `message: delta` reference
+ * lists, so it is not relied on here.
+ *
+ * A windowed re-query reuses the one path the canary has already proven over
+ * 320 real messages, covers every folder, and leans on the same unique key to
+ * make the overlap free. What it does not do is notice deletions.
+ */
+export function incrementalStartUrl(since: Date): string {
+  const from = new Date(since.getTime() - INCREMENTAL_OVERLAP_MS).toISOString();
   const params = new URLSearchParams({
     $select: "id,conversationId,subject,bodyPreview,receivedDateTime,isRead,from,toRecipients",
+    $filter: `receivedDateTime ge ${from}`,
+    $orderby: "receivedDateTime desc",
+    $top: String(PAGE_SIZE),
   });
-  return `${GRAPH}/me/messages/delta?${params.toString()}`;
+  return `${GRAPH}/me/messages?${params.toString()}`;
 }
