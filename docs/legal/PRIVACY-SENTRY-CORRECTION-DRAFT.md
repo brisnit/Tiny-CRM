@@ -56,7 +56,7 @@ Add to the § 5 table, in the same shape as the existing rows:
 
 | Who | What they get | Where |
 |---|---|---|
-| Sentry | Error reports: the type and message of a fault, a scrubbed stack trace, the request id, the route path, and the user and workspace ids. No CRM field values, no note or document contents, no request bodies, no credentials. | **To be confirmed** — read the Sentry organisation's region setting before publishing; do not write a country we have not checked |
+| Sentry | Error reports, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace. | **To be confirmed** — read the Sentry organisation's region setting before publishing; do not write a country we have not checked |
 
 And beneath it:
 
@@ -64,15 +64,24 @@ And beneath it:
 > instrumentation, which would otherwise capture request bodies, local
 > variables and a trail of recent activity. We send a fixed set of fields
 > assembled by hand: what went wrong, where in the code, which request, and
-> which account. Messages and stack traces are filtered before they are sent
-> to remove quoted database rows, addresses and credentials. Search terms are
-> removed from the route before it leaves, because a search term is the name
-> of somebody you were looking for.
+> which account. Your records, notes, documents and credentials are not among
+> those fields, so they are not attached to a report.
+>
+> The message and stack trace that are sent are written by the software, not
+> by you, and they are filtered before they leave to remove database rows
+> quoted by an error, email addresses, and anything shaped like a credential.
+> Search terms are removed from the route, because a search term is the name
+> of somebody you were looking for. Filtering reduces what an error message
+> can disclose; it is a control we apply rather than a guarantee about every
+> possible fault.
 
 ## What the correction must NOT claim
 
-It must not say error reports cannot contain customer data. I tried to write
-that sentence and it did not survive being checked.
+It must not say error reports cannot contain customer data, and the table row
+must not carry a list of absolutes either. Both were drafted and neither
+survived being checked — the row originally read "No CRM field values, no note
+or document contents, no request bodies, no credentials", which is the same
+guarantee in a smaller space.
 
 Scrubbing removes **shapes**: a quoted Prisma row, a PostgreSQL
 `Failing row contains (…)` detail, a JSON document quoted by a parse failure,

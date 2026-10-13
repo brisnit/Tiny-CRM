@@ -23,7 +23,7 @@ printed), and `getAdapter()` installs the Sentry adapter whenever it is set.
 
 | Subprocessor | Purpose | Location | Basis |
 |---|---|---|---|
-| Sentry | Error reporting: the type and message of a fault, a scrubbed stack trace, the request id, the route path, and the user and workspace ids | **Not confirmed** — Sentry's region is an organisation setting and has not been read | Verified from code (`src/lib/observability.ts`, `SentryAdapter`) and from `SENTRY_DSN` being present in the Production environment |
+| Sentry | Error reporting, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace | **Not confirmed** — Sentry's region is an organisation setting and has not been read | Verified from code (`src/lib/observability.ts`, `SentryAdapter`) and from `SENTRY_DSN` being present in the Production environment |
 
 "Not confirmed" for the location is deliberate and matches how Annex B already
 treats Resend and Amazon SES. Do not write "United States" without reading the
@@ -76,7 +76,8 @@ were leaking until that probe found them.
 > code, which request, and which account — assembled explicitly rather than
 > captured automatically, so record contents, note text, prompts, passwords
 > and tokens are not attached to it. The message and stack trace that are sent
-> are filtered to remove quoted database rows, addresses and credentials.
+> are filtered before they leave to remove database rows quoted by an error,
+> email addresses, and anything shaped like a credential.
 
 This describes the control rather than asserting an outcome. It is weaker as a
 sentence and stronger as a commitment: the control is something we keep, where

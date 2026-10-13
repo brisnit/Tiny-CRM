@@ -38,6 +38,27 @@ should be a log entry, not a recollection.
 
 ---
 
+## Two notices, kept apart
+
+Two changes may reach customers: the integration sections and the Sentry
+correction. They are **separate changes on separate timetables** — the Sentry
+correction describes something already happening and is recommended to ship
+first, while the integration sections wait on a date that has not been set.
+
+So the wording in `FINAL-WORDING.md` is two notices, not one:
+
+- **Notice A** — the Sentry correction, sent alone when that publishes.
+- **Notice B** — the integration sections, sent when the effective date is
+  fixed.
+- If both publish together, Notice B carries Notice A's substance beneath a
+  divider, under the heading *"Separately: a correction to the same notice"*,
+  so nobody has to work out which notice period applies to which change.
+
+Mixing them into one undifferentiated email would be the worst option
+available: a customer would read a 30-day notice about an optional feature and
+a correction taking effect immediately as though they were one thing, and
+could not tell which deadline governed what.
+
 ## Subject
 
 > A change to the Tiny CRM privacy notice, effective {EFFECTIVE_DATE}
@@ -74,14 +95,19 @@ pre-header gimmick.
 > * **The access is read-only.** Tiny CRM asks for permission to read your
 >   mail and calendar, and asks for no permission to send, reply, create,
 >   change or delete anything. It holds no ability to do so.
+> * Reading your mailbox means making requests to Microsoft for your own data,
+>   using the authorisation you grant when you connect. Those requests do not
+>   carry your Tiny CRM records.
 > * **What you import is visible to you alone** — not to colleagues who share
 >   your workspace. There is currently no way to share an imported item with
 >   your workspace, and attaching one to a contact does not change that.
-> * **Your correspondence is never sent to an AI provider**, whatever your
->   workspace's AI setting is. Connecting a mailbox lets Tiny CRM show your
->   correspondence to you; it is not consent to send it anywhere else.
-> * **Disconnecting destroys the stored access immediately**, and asks whether
->   to keep or delete what was already imported. Keeping is the default.
+> * **Imported mail and meetings are never included in a request sent to an AI
+>   model provider**, whatever your workspace's AI setting is.
+> * **Disconnecting immediately destroys the access and refresh tokens we
+>   hold**, so Tiny CRM stops syncing. It does not withdraw the permission at
+>   Microsoft — to do that, remove Tiny CRM from the connected applications in
+>   your Microsoft account. You are asked whether to keep or delete what was
+>   already imported; keeping is the default.
 >
 > **What is not changing**
 >
@@ -105,11 +131,23 @@ pre-header gimmick.
   recipients will never connect anything, and the honest headline for them is
   that this does not affect them. Burying that under the detail would make a
   no-op change read as alarming.
-- **"never sent to an AI provider"** is stated flatly because the code states
-  it flatly — the exclusion keys on an immutable provenance column, not on a
-  setting. If that ever softens to "by default", the email has to soften with
-  it, and `tests/unit/integration-privacy-copy.test.ts` is what would fail
-  first.
+- **"never included in a request sent to an AI model provider"** is stated
+  flatly because the code states it flatly — the exclusion keys on an
+  immutable provenance column, not on a setting. The scope is deliberate: the
+  predicate is applied in the three places that build a model-provider
+  request, and nowhere else, so a broader claim about "anywhere else" or
+  "everything that leaves our servers" would cover paths it does not touch.
+  If it ever softens to "by default", the email has to soften with it, and
+  `tests/unit/integration-privacy-copy.test.ts` is what would fail first.
+- **The Microsoft bullet exists** because "read-only" alone invites the
+  reading that nothing goes to Microsoft at all. Requests do: that is how
+  reading a mailbox works. Saying so costs a line and avoids a correction
+  later.
+- **The disconnect bullet names both tokens and the limit of what we can
+  revoke.** Microsoft offers no revocation endpoint for delegated grants, so
+  the authorisation survives a disconnect until the customer removes it in
+  their Microsoft account. Implying otherwise would be the most consequential
+  overstatement in the email.
 - **The offer to confirm no connection exists has been removed**, and this is
   the change I would most like a second opinion on. It was a good idea: the
   question "has anyone connected my mailbox?" is exactly the one this email

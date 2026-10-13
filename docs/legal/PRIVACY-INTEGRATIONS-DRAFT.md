@@ -125,19 +125,28 @@ sharing. If manual filing is built later, the sentence can come back.
 
 Add, before the subprocessor table:
 
-> **Microsoft, when you connect Outlook.** Microsoft is your own provider, not
-> a company we pass your data to: the flow is inbound. When you connect, you
-> authorise Tiny CRM through Microsoft's own consent screen, and Tiny CRM then
-> reads from Microsoft Graph using that authorisation. **The access is
-> read-only.** Tiny CRM requests permission to read mail and read calendars and
-> requests no permission to send, reply, create, modify or delete anything in
-> your mailbox or calendar, and holds no capability to do so.
+> **Microsoft, when you connect Outlook.** Connecting sends you to Microsoft
+> to sign in and approve the access, and Tiny CRM then exchanges and
+> periodically refreshes an access token with Microsoft's servers. Each time
+> it reads your mailbox or calendar it makes a request to Microsoft Graph
+> carrying that token and the terms of the request — the date range it is
+> asking about and the list of fields it wants back.
 >
-> Your correspondence is not sent to Anthropic — see § 6. Error reports used
-> to diagnose faults are assembled from a fixed list of fields — what went
-> wrong, where in the code, which request, which account — so message and
-> meeting contents are not attached to them, and the text that is sent is
-> filtered to remove quoted database rows, addresses and credentials.
+> So traffic does flow to Microsoft, and it is worth being plain about what it
+> is: requests for your own data, sent to your own provider, using an
+> authorisation you granted. Those requests do not carry your Tiny CRM
+> records, notes, files or contacts. **The access is read-only.** Tiny CRM
+> asks for permission to read mail and read calendars; it asks for no
+> permission to send, reply, create, modify or delete anything in your mailbox
+> or calendar, and holds no ability to do so.
+>
+> Your correspondence is not included in requests to Anthropic — see § 6.
+> Error reports used to diagnose faults are assembled from a fixed list of
+> fields — what went wrong, where in the code, which request, which account —
+> so your records, notes and documents are not attached to them. The fault
+> message and stack trace are written by the software rather than by you, and
+> are filtered before they leave to remove database rows quoted by an error,
+> email addresses, and anything shaped like a credential.
 
 *Verified:* the Outlook providers request `Mail.Read`, `Calendars.Read`,
 `User.Read`, `offline_access`, `openid`, `profile`, `email` and nothing
@@ -150,19 +159,23 @@ to a mailbox or calendar endpoint.
 
 Add as a further bullet:
 
-> **Imported mail and meetings are never sent to a model provider**, whatever a
-> workspace's AI setting is. Connecting a mailbox lets Tiny CRM show your
-> correspondence inside the CRM; it is not consent to send that correspondence
-> to Anthropic, and those are treated as separate decisions. Imported items are
-> excluded from the daily brief, from answers, from recommendations and from
-> every other feature that leaves our servers. Demonstration data seeded into a
-> new workspace is not imported correspondence and is not covered by this
+> **Imported mail and meetings are never included in a request sent to an AI
+> model provider**, whatever a workspace's AI setting is. Connecting a mailbox
+> lets Tiny CRM show your correspondence inside the CRM; it is not consent to
+> send that correspondence to Anthropic, and those are treated as separate
+> decisions. Imported items are excluded from the daily brief, from answers,
+> and from the recommendations the service generates — the three features that
+> build a request to a model provider. Demonstration data seeded into a new
+> workspace is not imported correspondence and is not covered by this
 > exclusion.
 
 *Verified:* `EXCLUDE_IMPORTED` keys on `source = "imported"`, written once at
-import and never changed, and is spread into both `aiContextFor` and
-`recommendations` — the two call sites that previously pulled subjects and
-snippets into a provider prompt.
+import and never changed, and is spread into `aiContextFor` (calendar and
+mail) and `recommendations`. **Those are the only places it is applied**,
+which is exactly why the sentence now says "a request sent to an AI model
+provider" rather than "every feature that leaves our servers". The earlier,
+broader claim covered paths this predicate does not touch — error reports and
+backups among them — and was not true of them.
 
 ---
 
@@ -188,8 +201,15 @@ chain down instead of retrying.
 Add:
 
 > **Disconnecting a mailbox or calendar.** Disconnecting immediately destroys
-> the stored access token, so no further import is possible. You are asked what
-> to do with what has already been imported:
+> the access token and the refresh token Tiny CRM holds, so Tiny CRM stops
+> syncing and cannot read your mailbox or calendar again.
+>
+> Disconnecting here does not remove the authorisation you granted at
+> Microsoft. Microsoft provides no way for us to revoke it on your behalf, so
+> if you want the permission itself withdrawn, remove Tiny CRM from the
+> connected applications in your Microsoft account.
+>
+> You are asked what to do with what has already been imported:
 >
 > - **Keep it** (the default): imported messages and meetings stay in your CRM,
 >   still visible only to you, and remain attached to any record they were
@@ -200,9 +220,14 @@ Add:
 > Deleting your account or workspace removes imported items with everything
 > else, as described above.
 
-*Verified:* `disconnectConnection` destroys `credentials` and
-`tokenExpiresAt`, bumps the generation so in-flight work stands down, and
-deletes imported rows only when `keepImported` is false. Nothing re-opens a
+*Verified:* `disconnectConnection` nulls `credentials` — the sealed document
+holding BOTH the access token and the refresh token — and `tokenExpiresAt`,
+bumps the generation so in-flight work stands down, and deletes imported rows
+only when `keepImported` is false. `providers.ts` sets `revokeUrl: null` for
+both Outlook providers, with the note that Microsoft offers no revocation
+endpoint for delegated grants; Google's providers do carry one. So the
+authorisation genuinely persists at Microsoft after a disconnect, and the
+notice must say so rather than implying the grant is gone. Nothing re-opens a
 disconnected connection; recovery and retry both refuse any connection that is
 not `connected`.
 
