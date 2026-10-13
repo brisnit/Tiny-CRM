@@ -104,11 +104,20 @@ Add:
 > **To show your correspondence beside the records it concerns.** A connected
 > mailbox or calendar is read so that messages and meetings appear against the
 > contact they involve. Tiny CRM matches an item to a contact only when exactly
-> one contact in your workspace has a matching email address; otherwise the
-> item is left unattached for you to file by hand.
+> one contact in your workspace has a matching email address. Anything it
+> cannot match that way is still imported and still private to you; it simply
+> is not shown against a record.
 
 *Verified:* `associateContact` links only on an exact, unambiguous,
 accessible single match, and records a reason when it declines.
+
+**Changed after checking.** This read "otherwise the item is left unattached
+for you to file by hand". **There is no way to file one by hand.** The only
+write to an imported row anywhere in the application is the importer
+refreshing a rescheduled meeting — nothing lets a person set, change or
+remove the contact on an imported message or meeting. The sentence promised a
+control that does not exist, in the same way the Settings copy did about
+sharing. If manual filing is built later, the sentence can come back.
 
 ---
 

@@ -92,9 +92,7 @@ pre-header gimmick.
 > You can read the updated notice in full at https://tinycrm.biz/privacy —
 > the integration sections are marked with the date they take effect.
 >
-> If you have questions, or you would like us to confirm that no connection
-> has ever been made on your account, reply to this message or write to
-> privacy@tinycrm.biz.
+> If you have questions, write to privacy@tinycrm.biz.
 >
 > — Artifact Digital LLC
 > 178 N. Cuyamaca St., El Cajon, CA 92020, United States
@@ -112,10 +110,30 @@ pre-header gimmick.
   setting. If that ever softens to "by default", the email has to soften with
   it, and `tests/unit/integration-privacy-copy.test.ts` is what would fail
   first.
-- **The offer to confirm no connection exists** is there because a customer
-  cannot easily prove a negative about their own account, and the question
-  "has anyone connected my mailbox?" is exactly the one this email provokes.
-  It should be answerable from the admin panel before the email goes out.
+- **The offer to confirm no connection exists has been removed**, and this is
+  the change I would most like a second opinion on. It was a good idea: the
+  question "has anyone connected my mailbox?" is exactly the one this email
+  provokes, and a customer cannot easily prove that negative themselves. But
+  the admin panel surfaces nothing about integrations — `customerDetail`
+  selects no integration field at all — so answering it means an operator
+  writing a database query by hand, per request. Worse, the answer could not
+  be "never": a connection leaves an `Integration` row that survives a
+  disconnect, but a deleted workspace takes its rows with it, so the honest
+  answer is about what exists now, not about all history.
+
+  Three ways forward, in the order I would pick them: drop the offer (done
+  here); or narrow it to what is answerable — "we can tell you whether any
+  connection exists on your account" — and accept the manual query; or build
+  it into the admin panel first and then offer it. Re-adding an unqualified
+  "never" is the one option I would argue against.
+
+- **"reply to this message" has been removed, pending one check.** The body
+  said to reply or write to privacy@tinycrm.biz. Whether a reply arrives
+  anywhere depends on the `MAIL_FROM` address, and the default in code is
+  `no-reply@localhost`. The production value is set but encrypted, so I have
+  not read it. If the From address accepts replies, put the phrase back; if
+  it is a no-reply address, inviting a reply to a privacy notice is a small
+  but real broken promise.
 - **No link to connect anything.** This is a notice, not an announcement. A
   call to action in a privacy email makes consent look like marketing.
 - **"not available to customers"**, not "not available". The narrower phrasing
@@ -135,5 +153,11 @@ pre-header gimmick.
 - [ ] A send mechanism exists that reaches **every** account address, and has
       been tested against a list that is known-complete rather than a query
       somebody wrote that morning.
+- [ ] The `MAIL_FROM` address is known, and either accepts replies or the
+      email does not invite one
+- [ ] `privacy@tinycrm.biz` is confirmed to be a mailbox somebody reads.
+      `tinycrm.biz` has MX records (`mx1`/`mx2.spacemail.com`), so the domain
+      accepts mail — that is **not** the same as the address existing or
+      being monitored, and I cannot establish either from here
 - [ ] Someone other than its author has read it.
 - [ ] The send is logged with its date and recipient count.
