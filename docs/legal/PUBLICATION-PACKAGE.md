@@ -236,7 +236,128 @@ assumed.
 
 ---
 
-## 6. Delivery and retry plan
+## 5b. Recipient review — separating fixtures from people
+
+Your count: **28 accounts, 17 on test domains, 0 live subscriptions.** That
+last number resolves one question immediately — nobody has a subscription, so
+**the cancellation right in terms § 11 currently applies to nobody.** The line
+stays in the email (someone may subscribe before the send), but it costs
+nothing if it still applies to no one on the day.
+
+`scripts/review-recipients.mjs` is read-only. It deletes nothing, changes
+nothing, sends nothing, and is not wired to anything that acts on its output.
+
+### It classifies on provenance, not on how an address looks
+
+A domain heuristic fails in both directions, and one of them is dangerous:
+
+- it would **exclude a real customer** at an unusual domain;
+- it would **include the seeded demo accounts**, which use realistic
+  addresses on purpose (`prisma/seed/data.ts` is full of names like
+  `greg.hall@outlook.com`).
+
+So each account is matched against the code that actually mints it:
+
+| Rule | Evidence |
+| --- | --- |
+| `seed-demo-owner` | `prisma/seed/index.ts` creates `owner@tinycrm.app` verbatim |
+| `seed-demo-free` | the same file creates `demo@tinycrm.app` verbatim |
+| `canary-local` | `scripts/canary-local.ts` creates `canary@localhost.test` |
+| `unit-fixture` | `tests/helpers/fixtures.ts` mints `<label>-<role>-<n>@test.local` |
+| `verify-seed` | `prisma/seed/test-seed.ts` mints `<label>-<role>-<run>@verify.local` |
+| `reserved-test-tld` | RFC 2606 reserves `.test`, `.invalid`, `.localhost` — not registrable, so undeliverable |
+| `example-domain` | RFC 2606 reserves `example.com/net/org` for documentation |
+
+The rules were exercised against eleven known addresses, including the three
+real ones and the realistic-looking seeded contact domain: all eleven
+classified correctly.
+
+### What it will not exclude on
+
+- **An unverified address.** Someone who never clicked the link is still a
+  data subject and is still owed the notice. Reported, never acted on.
+- **No subscription.** Everyone is in that position; it distinguishes nobody.
+- **Dormancy.** Not signing in recently is not evidence of being synthetic.
+
+### Anything it cannot place goes to you
+
+An address no rule matches, on an account with no sign-in, no workspace, no
+membership and no records, is reported as **AMBIGUOUS** with those signals
+listed — not excluded. Three weak signals are a reason for a person to look,
+not for a script to decide.
+
+### Expected shape, to be confirmed by running it
+
+From your 17-on-test-domains figure, most of those should land under
+`unit-fixture` and `reserved-test-tld`, leaving roughly a dozen real
+accounts. I am not asserting the split — run it and the output will give
+exact counts with a reason beside every exclusion.
+
+```
+node scripts/review-recipients.mjs
+node scripts/review-recipients.mjs --full   # every account with its verdict
+```
+
+### It is a snapshot, deliberately
+
+Accounts created between the review and the send are not in it. Re-run it on
+the day. `send-notice.ts --live` enforces this independently: it refuses when
+the list has grown past the `--max` you approved, so a quiet increase cannot
+widen the audience without someone noticing.
+
+---
+
+## 6. The timeline, stated so Sentry is not misread
+
+The two changes publish on the **same day** and take effect on **different
+terms**. The page and the email must both carry that distinction, because the
+obvious simplification — "everything changes on 23 November" — would say
+something false about Sentry.
+
+| | Publishes | Takes effect | What the reader should conclude |
+| --- | --- | --- | --- |
+| **Sentry disclosure** | 20 Oct 2026, with the email | **Already true.** The row describes processing that has been happening | "They were already using this and had not said so. Now they have." |
+| **Integration sections** | 20 Oct 2026, marked as pending | **23 Nov 2026** | "This is coming. It does not affect me unless I connect." |
+
+**Sentry does not start processing on 23 November, and nothing may imply it
+does.** It has been receiving error reports throughout. The correction is to
+the notice, not to the product, and the page says so in those words:
+
+> **Added as a correction.** Sentry has received error reports throughout;
+> this row should have been here already.
+
+So on 20 October the page shows:
+
+- the **current** notice, still in force, still authoritative;
+- the **Sentry row inside it**, live immediately, labelled as a correction to
+  what was already happening;
+- the **integration sections**, each marked *"Takes effect 23 November
+  2026"*, visible but explicitly not yet in force.
+
+And a banner at the top naming only what is pending:
+
+> **Parts of this notice change on 23 November 2026.** The sections about
+> email and calendar connections are marked below and do not apply until
+> then. Everything else on this page, including the subprocessor list, is in
+> force now.
+
+That last clause is the one that keeps Sentry honest: the subprocessor list is
+**in force now**, not pending.
+
+### Which revised provisions take effect 23 November
+
+Only these, and only if a customer connects something:
+
+§ 2 (what is collected) · § 4 (how it is used) · § 5 Microsoft paragraph ·
+§ 6 (AI exclusion) · § 7 (token encryption) · § 8 (disconnect and retention) ·
+§ 9 (your choices).
+
+The § 5 **subprocessor table row for Sentry** is not in that list. It is live
+on publication.
+
+---
+
+## 7. Delivery and retry plan
 
 **No send mechanism exists yet.** `src/lib/mail.ts` sends transactional mail
 one message at a time — verification, reset, invitations. There is nothing
@@ -275,7 +396,41 @@ notice by email to your account address".
 
 ---
 
-## 7. Still open before approval
+## 8. If notice is late, fails, or cannot be confirmed
+
+The effective date is only meaningful if notice was actually given. These
+rules are written down now, before there is any pressure to wave one through.
+
+**The clock runs per recipient, from when their notice was accepted.** Not
+from the day the run started. Someone reached three days late is owed 30 days
+from *their* day.
+
+| Situation | Effect on the effective date | Effect on activation |
+| --- | --- | --- |
+| Run completes, all accepted, ≥31 days before the date | None | Integrations may be enabled on the date |
+| Any recipient **never attempted** | **The date does not apply to them.** Send, then their 30 days run from that send | Hold activation until every recipient has had 30 days |
+| Any recipient **failed at send** after retries | Same — they have not been given notice | Same |
+| Send slips so any recipient has **fewer than 30 days** | **Move the effective date**, do not shorten the notice | Activation follows the moved date |
+| **Unresolved** (accepted, no delivery signal) | Date stands | Activation proceeds |
+| Confirmed **bounced**, once observable | Treat as not given: correct the address or reach them another way | Hold for those accounts |
+
+**Why unresolved does not block.** The commitment is to *give* notice by email
+to the account address, which is discharged by sending to the address on
+record. It is not a guarantee of reading. If it were, no notice period could
+ever close. Accepted-and-unresolved is notice given; a known bounce is not.
+
+**The asymmetry is deliberate.** Moving a date costs a little embarrassment.
+Activating a feature for someone who was never told about it is the thing the
+clause exists to prevent, and it cannot be undone afterwards.
+
+**Activation is gated on the reconciliation, not the calendar.** Before the
+`integrations` flag is enabled for anyone, the run must show: every recipient
+attempted, zero failed, and the earliest acceptance at least 30 days earlier.
+That is three numbers from `--reconcile`, not a date in a diary.
+
+---
+
+## 9. Still open before approval
 
 - [ ] **The two dates** — 20 October and 23 November, or your alternatives.
 - [ ] **One email or two** — combined is recommended.
@@ -286,8 +441,17 @@ notice by email to your account address".
       this message" can go back into the email; if not, the current wording
       stands.
 - [ ] **The recipient count**, from the dry run.
-- [ ] **The send mechanism**, which does not exist and needs building and
-      testing against a known-complete list.
+- [x] ~~The send mechanism.~~ **Built and tested** —
+      `scripts/send-notice.ts`, dry run by default, exercised end to end
+      against the local sink: 5 recipients, 5 accepted, re-run skipped all 5,
+      reconciliation arithmetic checks out, and `--live` refused when the
+      adapter was not the real provider. The test ledger was deleted
+      afterwards.
+- [ ] **A mail-provider delivery webhook**, which does not exist. Without it
+      `delivered` and `bounced` cannot be populated and every accepted
+      message stays `unresolved`. Not a blocker for sending — see § 8 — but it
+      is the difference between knowing notice arrived and knowing it was
+      accepted for delivery.
 - [ ] **Someone other than its author reads the email.**
 
 ## Confirmed, and no longer open
