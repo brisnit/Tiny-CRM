@@ -129,8 +129,8 @@ time in Settings → Integrations.
 
 ## The marker on each integration section, until it takes effect
 
-*This section takes effect on {INTEGRATIONS_EFFECTIVE_ON}. Until then, email
-and calendar connections are not available to customers.*
+*This section takes effect on 23 November 2026. Until then, email and
+calendar connections are not available to customers.*
 
 ---
 
