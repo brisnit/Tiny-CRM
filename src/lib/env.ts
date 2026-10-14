@@ -23,6 +23,16 @@ function optional(key: string): string | undefined {
   return value && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+/**
+ * The sender used when MAIL_FROM is not set.
+ *
+ * Fine in development, where the sink and the log adapter never reach a
+ * provider. In production it is a guaranteed rejection: no mail provider will
+ * send from `localhost`. Named rather than inlined so the production check
+ * below tests the same value the adapter would actually use.
+ */
+const DEV_MAIL_FROM = "Tiny CRM <no-reply@localhost>";
+
 export const NODE_ENV = process.env.NODE_ENV ?? "development";
 export const isProduction = NODE_ENV === "production";
 export const isTest = NODE_ENV === "test";
@@ -77,7 +87,7 @@ export const env = {
   mailAdapter: (optional("MAIL_ADAPTER") ?? "auto") as "auto" | "sink" | "log",
   mailProviderUrl: optional("MAIL_PROVIDER_URL"),
   mailProviderToken: optional("MAIL_PROVIDER_TOKEN"),
-  mailFrom: optional("MAIL_FROM") ?? "Tiny CRM <no-reply@localhost>",
+  mailFrom: optional("MAIL_FROM") ?? DEV_MAIL_FROM,
 
   /** Security alerting. Without a webhook, alerts are recorded and logged only. */
   alertWebhookUrl: optional("ALERT_WEBHOOK_URL"),
@@ -466,6 +476,43 @@ export function productionWarnings(): string[] {
       warnings.push(
         "No mail provider is configured — password reset and email verification " +
           "cannot deliver. Set MAIL_PROVIDER_URL and MAIL_PROVIDER_TOKEN.",
+      );
+    } else if (env.mailFrom === DEV_MAIL_FROM) {
+      /**
+       * A provider IS configured and the sender is the development fallback.
+       *
+       * This is the worst of the three states, and the only one nothing used
+       * to report. With no provider, mail obviously does not go; the warning
+       * above says so. With a provider and a real sender, mail goes. With a
+       * provider and no MAIL_FROM, every message is handed to the provider
+       * and refused — `localhost` is not a domain anyone can verify — so
+       * password reset, email verification, workspace invitations and
+       * sign-in alerts all fail, and the only trace is a provider status
+       * code in a log nobody is reading.
+       *
+       * The same shape as the blank ANTHROPIC_API_KEY recorded in
+       * instrumentation.ts: the variable looked present and carried nothing
+       * usable. That one cost a release to diagnose.
+       *
+       * A warning, not a boot failure, for the reason written above the
+       * APP_URL check: refusing to serve traffic to fix an email address
+       * turns a broken reset flow into a total outage.
+       */
+      warnings.push(
+        "MAIL_FROM is not set, so mail would be sent from " +
+          `${DEV_MAIL_FROM} — which no provider will accept. A mail provider ` +
+          "IS configured, so every message is being handed to it and rejected: " +
+          "password reset, email verification, workspace invitations and " +
+          "sign-in alerts are all failing. Set MAIL_FROM to an address on a " +
+          "domain verified with the provider, e.g. " +
+          '"Tiny CRM <no-reply@yourdomain>".',
+      );
+    } else if (!/^[^<>@\s]+@[^<>@\s]+\.[^<>@\s]+$|<[^<>@\s]+@[^<>@\s]+\.[^<>@\s]+>\s*$/.test(env.mailFrom)) {
+      // Either a bare address or a display name with the address in angle
+      // brackets. Anything else is rejected by the provider, not by us.
+      warnings.push(
+        `MAIL_FROM does not look like an email address or "Name <address>" ` +
+          `(got ${JSON.stringify(env.mailFrom)}). Providers reject a malformed sender.`,
       );
     }
 

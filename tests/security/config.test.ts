@@ -163,6 +163,67 @@ describe("production configuration gate", () => {
   });
 });
 
+describe("the mail sender is reported when it cannot work", () => {
+  /**
+   * Production had MAIL_PROVIDER_URL and MAIL_PROVIDER_TOKEN set and no
+   * MAIL_FROM. The provider was therefore selected, every message was sent
+   * from the development fallback `no-reply@localhost`, and every one was
+   * refused — because `localhost` is not a domain any provider will verify.
+   *
+   * Nothing said so. The existing warning only fires when the provider is
+   * ABSENT, which was the one state that was fine. The boot log showed a
+   * single unrelated warning and a line saying the app had started.
+   */
+  const PROVIDER = {
+    MAIL_PROVIDER_URL: "https://api.example.test/emails",
+    MAIL_PROVIDER_TOKEN: "token-value-not-a-real-one",
+  };
+
+  test("a provider with no MAIL_FROM warns, and names what breaks", () => {
+    const { status, output } = check({ ...PROVIDER, MAIL_FROM: undefined });
+    assert.equal(status, 0, "this must warn, not refuse to boot");
+    assert.match(output, /MAIL_FROM is not set/);
+    assert.match(output, /no-reply@localhost/, "the warning does not name the address being used");
+    assert.match(output, /password reset/, "the warning does not say what is broken");
+  });
+
+  test("an empty MAIL_FROM is the same case, not a different one", () => {
+    // Which is what an environment variable set to nothing looks like.
+    const { status, output } = check({ ...PROVIDER, MAIL_FROM: "   " });
+    assert.equal(status, 0);
+    assert.match(output, /MAIL_FROM is not set/);
+  });
+
+  test("a real sender on a real domain warns about nothing", () => {
+    const { status, output } = check({
+      ...PROVIDER,
+      MAIL_FROM: "Tiny CRM <no-reply@tinycrm.biz>",
+    });
+    assert.equal(status, 0);
+    assert.doesNotMatch(output, /MAIL_FROM/, `a valid sender was warned about:\n${output}`);
+  });
+
+  test("a bare address with no display name is also fine", () => {
+    const { status, output } = check({ ...PROVIDER, MAIL_FROM: "no-reply@tinycrm.biz" });
+    assert.equal(status, 0);
+    assert.doesNotMatch(output, /MAIL_FROM/, `a valid sender was warned about:\n${output}`);
+  });
+
+  test("something that is not an address at all is reported", () => {
+    const { status, output } = check({ ...PROVIDER, MAIL_FROM: "Tiny CRM" });
+    assert.equal(status, 0);
+    assert.match(output, /does not look like an email address/);
+  });
+
+  test("no provider configured still reports the provider, not the sender", () => {
+    // The pre-existing case, asserted so the new branch cannot swallow it.
+    const { status, output } = check({ MAIL_FROM: undefined });
+    assert.equal(status, 0);
+    assert.match(output, /No mail provider is configured/);
+    assert.doesNotMatch(output, /MAIL_FROM is not set/);
+  });
+});
+
 describe("demo data cannot reach production", () => {
   /**
    * The seed script deletes every row and creates accounts with a published

@@ -66,6 +66,16 @@ export async function register() {
   log.info("tiny crm starting", {
     env: env.nodeEnv,
     release: env.release,
+    /**
+     * The sender every outgoing message carries, on the boot line.
+     *
+     * Same reasoning as `anthropicUsable` below: a variable that is present
+     * but carries nothing usable is invisible from outside, and the only
+     * cheap way to tell "not configured" from "configured and wrong" is to
+     * put the resolved value where the first boot log will show it. Not a
+     * secret — it is printed on the From: line of every email we send.
+     */
+    mailFrom: env.mailFrom,
     database: isProduction ? "postgres" : env.databaseUrl.startsWith("file:") ? "sqlite" : "postgres",
     aiProvider: env.aiProvider,
     demoAuth: env.allowDemoAuth,
