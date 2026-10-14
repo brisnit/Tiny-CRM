@@ -66,6 +66,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 import { promptHidden } from "./lib/prompt-hidden.mjs";
@@ -267,8 +268,33 @@ function classify(row) {
   };
 }
 
+/**
+ * A stable identifier for one recipient, for comparing two runs.
+ *
+ * A hash and not the address. The point of a snapshot file is to answer "has
+ * the audience changed since you reviewed it", which needs only equality —
+ * and a file of customer email addresses sitting on somebody's disk, or
+ * worse committed, is a disclosure created for no reason. Full addresses are
+ * printed to the screen at run time, where they are already visible.
+ */
+function mask(email) {
+  const [local, domain] = String(email).split("@");
+  if (!domain) return "[unreadable]";
+  return `${local.slice(0, 1)}${"•".repeat(Math.max(1, local.length - 1))}@${domain}`;
+}
+
+const idOf = (email) = createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 16);
+
+/** Reads the argument that follows a flag: `--snapshot out.json`. */
+function flagValue(name) {
+  const i = process.argv.indexOf(name);
+  return i !== -1 ? process.argv[i + 1] : undefined;
+}
+
 async function main() {
   const full = process.argv.includes("--full");
+  const snapshotTo = flagValue("--snapshot");
+  const compareTo = flagValue("--compare");
 
   console.log("\nRecipient review — read-only, proposes nothing it can act on");
   console.log("=".repeat(74));
@@ -375,6 +401,68 @@ async function main() {
         const v = classify(row);
         console.log(`    ${v.verdict.padEnd(10)} ${row.email.padEnd(38)} created ${row.created_at.toISOString().slice(0, 10)}`);
       }
+    }
+
+    // ---- Comparison against a previously approved audience ---------------
+    if (compareTo) {
+      let before;
+      try {
+        before = JSON.parse(readFileSync(compareTo, "utf8"));
+      } catch (error) {
+        console.error(`\n  COULD NOT READ ${compareTo}: ${error.message}`);
+        console.error("  Refusing to report 'no changes' when nothing was compared.\n");
+        process.exit(1);
+      }
+
+      const previous = new Map((before.recipients ?? []).map((r) => [r.id, r]));
+      const current = new Map(buckets.INCLUDE.map((r) => [idOf(r.email), r]));
+
+      const added = buckets.INCLUDE.filter((r) => !previous.has(idOf(r.email)));
+      const removed = (before.recipients ?? []).filter((r) => !current.has(r.id));
+
+      console.log("\n  CHANGES SINCE THE APPROVED AUDIENCE");
+      console.log(`    approved ${previous.size} on ${before.takenAt?.slice(0, 10) ?? "an unrecorded date"}, ` +
+        `${current.size} now`);
+
+      if (added.length === 0 && removed.length === 0) {
+        console.log("    No change. The approved list and this run are the same people.");
+      } else {
+        if (added.length) {
+          console.log(`\n    ADDED (${added.length}) — not covered by the approval:`);
+          for (const r of added) {
+            console.log(`      ${r.email.padEnd(38)} created ${r.created_at.toISOString().slice(0, 10)}` +
+              `, plan ${r.plan}${r.verified ? "" : ", UNVERIFIED"}`);
+          }
+        }
+        if (removed.length) {
+          // Shown masked: the address is not in the file, by design.
+          console.log(`\n    NO LONGER PRESENT (${removed.length}):`);
+          for (const r of removed) console.log(`      ${r.masked}  (${r.id})`);
+          console.log("      An account that has gone is not an account that was notified.");
+        }
+        console.log("\n    These need your approval before the send. --max must match the");
+        console.log("    number you approve, and send-notice.ts refuses past it.");
+      }
+    }
+
+    // ---- Writing a snapshot to compare against later ----------------------
+    if (snapshotTo) {
+      const payload = {
+        takenAt: new Date().toISOString(),
+        database: match,
+        counts: {
+          accounts: rows.length,
+          include: buckets.INCLUDE.length,
+          exclude: buckets.EXCLUDE.length,
+          ambiguous: buckets.AMBIGUOUS.length,
+        },
+        // Hashes and masked forms only. See idOf above.
+        recipients: buckets.INCLUDE.map((r) => ({ id: idOf(r.email), masked: mask(r.email) })),
+      };
+      writeFileSync(snapshotTo, `${JSON.stringify(payload, null, 2)}\n`);
+      console.log(`\n  SNAPSHOT WRITTEN  ${snapshotTo}`);
+      console.log("    Hashes and masked addresses, not a list of customer emails.");
+      console.log(`    Compare a later run with:  --compare ${snapshotTo}`);
     }
 
     console.log("\n  THIS IS A SNAPSHOT");

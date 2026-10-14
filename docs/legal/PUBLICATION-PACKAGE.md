@@ -78,17 +78,19 @@ One message, both changes, clearly separated. No "reply to this message" —
 the `MAIL_FROM` address has not been confirmed to accept replies. No offer to
 confirm historical connections — the admin panel cannot answer it.
 
-**Settled for this package**, and reflected in the text below without
-annotation:
+**APPROVED 14 October 2026.** These are decided, not proposed:
 
 | | |
 | --- | --- |
-| **Publication and send** | 20 October 2026 |
-| **Integration provisions take effect** | 23 November 2026 — 34 days later |
-| **Sentry correction** | Published 20 October as a labelled correction. It describes processing already happening, so there is nothing for it to "take effect" on; the notice is what changes. |
+| **Publication and send** | **20 October 2026** |
+| **Integration provisions take effect** | **23 November 2026** — 34 days later |
+| **Sentry correction** | Published **20 October** as a labelled correction describing existing processing. There is nothing for it to "take effect" on; the notice is what changes. |
+| **Form** | One combined email |
+| **Contact** | privacy@tinycrm.biz. No "reply to this message". |
 
-This is the proposal put forward for approval. Nothing is scheduled against
-these dates and nothing sends until you approve them.
+Two approvals still stand between this and a send, and they are not these:
+the **final copy** of the email and page, and the **refreshed audience**.
+Nothing publishes or sends until both are given.
 
 > **Subject:** Changes to the Tiny CRM privacy notice, with new sections
 > effective 23 November 2026
@@ -176,11 +178,13 @@ these dates and nothing sends until you approve them.
 > — Artifact Digital LLC, 178 N. Cuyamaca St., El Cajon, CA 92020, United
 > States
 
-### The alternative, recorded but not proposed
+### The alternative, not taken
 
-If the correction were instead held to 23 November, two passages change and
-nothing else does. Kept here so the choice stays visible rather than
-disappearing into a decision nobody can find later:
+Holding the correction to 23 November was the other option. It was
+considered and **declined** on 14 October; the correction publishes on the
+20th. Recorded so the decision stays findable rather than looking like
+something nobody thought about. Had it been taken, two passages would have
+changed and nothing else:
 
 | | Recommended (as written above) | If held to 23 November |
 | --- | --- | --- |
@@ -449,6 +453,35 @@ exact counts with a reason beside every exclusion.
 node scripts/review-recipients.mjs
 node scripts/review-recipients.mjs --full   # every account with its verdict
 ```
+
+### Refreshing it before the send, mechanically
+
+The eight were reviewed on 13 October; the send is on the 20th. Anyone who
+signs up in between is a data subject the approval does not cover, and
+eyeballing two printed lists a week apart is exactly the comparison people
+get wrong.
+
+So the script now writes and reads a snapshot:
+
+```
+node scripts/review-recipients.mjs --snapshot recipient-snapshot.json
+# …nearer the send date…
+node scripts/review-recipients.mjs --compare recipient-snapshot.json
+```
+
+The comparison prints `ADDED` with full addresses and creation dates — new
+people need a decision — and `NO LONGER PRESENT` masked, because the file
+deliberately does not contain addresses. It holds a truncated SHA-256 per
+recipient plus a masked form: enough to answer "has this changed", not
+enough to be a customer mailing list sitting on a disk. `.gitignore` covers
+it as well.
+
+If the file cannot be read, the run **exits non-zero** rather than printing
+"no changes", which is the failure that would otherwise look like success.
+
+Exercised against synthetic lists: identical, one added, one removed, one
+swapped, reordered, and differing only in case and surrounding whitespace.
+The last two must report no change and do.
 
 ### It is a snapshot, deliberately
 
@@ -725,11 +758,15 @@ repaired.
 
 ## 9. Still open before approval
 
-- [ ] **Approval of the package as proposed** — 20 October publication and
-      send, 23 November integration effectiveness, one combined email, the
-      Sentry correction published 20 October as a labelled correction. These
-      are written into the text throughout rather than left as placeholders;
-      approving the package approves them together.
+- [x] ~~Approval of the dates and the form.~~ **GIVEN 14 October 2026**:
+      20 October publication and send, 23 November integration
+      effectiveness, one combined email, the Sentry correction published
+      20 October as a labelled correction, privacy@tinycrm.biz as the
+      contact, no "reply to this message".
+- [ ] **Final copy approved** — the email and the page, read in full.
+- [ ] **Refreshed audience approved** — re-run near the send date and
+      compared against the eight already reviewed. Any account created
+      since is not covered by the earlier approval.
 - [x] ~~The production sender address is valid and authorized in Resend.~~
       **CLOSED 14 October 2026, by a real delivery.** `tinycrm.biz` is
       Verified in Resend; Production `MAIL_FROM` is
@@ -746,9 +783,9 @@ repaired.
       invitations and sign-in alerts were all failing silently. Fixed by
       configuration; PR #44 added the reporting that would have surfaced it,
       and the diagnostic endpoint that proved the fix.
-- [ ] **Whether the `MAIL_FROM` address accepts replies.** Separate from the
-      above and still unread. If it does, "reply to this message" can go back
-      into the email; if not, the current wording stands.
+- [x] ~~Whether the `MAIL_FROM` address accepts replies.~~ **Moot.**
+      privacy@tinycrm.biz is the contact and "reply to this message" stays
+      out of the email, whatever no-reply@tinycrm.biz does with a reply.
 - [ ] **The recipient count**, re-run near the send date.
 - [x] ~~Delivery reconciliation.~~ **Built and tested** —
       `--record` reads a CSV of dashboard outcomes into the ledger, and the
@@ -770,9 +807,11 @@ repaired.
       workable at eight recipients and would not be at eighty. It remains the
       thing that would make delivery evidence trustworthy without a person in
       the loop.
-- [ ] **Who reads the Resend dashboard**, and when relative to the send. The
-      gate does not open until every recipient is recorded, so this is on the
-      critical path to activation rather than a tidy-up afterwards.
+- [x] ~~Who reads the Resend dashboard, and when.~~ **The operator, after
+      the send and again the next day.** The second read is the one that
+      matters: a bounce can arrive well after the provider accepted the
+      message, so a single same-day look would record a delivery that later
+      failed.
 - [ ] **Someone other than its author reads the email.**
 
 ## Confirmed, and no longer open
