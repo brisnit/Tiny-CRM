@@ -74,6 +74,48 @@ export function LegalPage({
   );
 }
 
+/**
+ * A banner naming what on this page is not yet in force.
+ *
+ * Deliberately says what IS in force as well. A banner that mentions only
+ * the pending change invites the reader to treat the whole page as
+ * provisional — and on this page the subprocessor list is current, so that
+ * reading would be wrong in the direction that matters.
+ */
+export function PendingChangeBanner({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mt-6 rounded-md border border-hairline bg-subtle/40 px-4 py-3 text-[13px] leading-relaxed text-muted">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The marker on a section that is published but not yet in force.
+ *
+ * Note what this is NOT used for: the Sentry subprocessor row. That row
+ * describes processing that has been happening all along, so marking it
+ * "takes effect later" would assert the opposite of a correction — that the
+ * processing starts then. Corrections get `CorrectionNote` instead.
+ */
+export function TakesEffect({ on }: { on: string }) {
+  return (
+    <p className="mt-3 rounded-md border-l-2 border-hairline bg-subtle/30 py-2 pl-3 text-[12.5px] italic leading-relaxed text-faint">
+      This section takes effect on {on}. Until then, email and calendar
+      connections are not available to customers.
+    </p>
+  );
+}
+
+/** A disclosure added to describe something that was already true. */
+export function CorrectionNote({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="mt-3 rounded-md border-l-2 border-hairline bg-subtle/30 py-2 pl-3 text-[12.5px] leading-relaxed text-faint">
+      {children}
+    </p>
+  );
+}
+
 export function Section({ id, heading, children }: { id: string; heading: string; children: React.ReactNode }) {
   return (
     <section id={id} className="scroll-mt-20">
