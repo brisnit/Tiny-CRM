@@ -55,9 +55,13 @@ holds no ability to do so.
 
 ## § 5. Where data goes — new subprocessor row
 
-| Who | What they get | Where the data is stored |
+The live page's third column is headed **"Reported location or routing"**,
+and the row below is written to drop into it unchanged. Two earlier drafts
+headed it "Where" and "Location", both of which say more than was checked.
+
+| Service | Purpose | Reported location or routing |
 | --- | --- | --- |
-| Sentry | Error reports, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace. | United States |
+| Sentry | Error reports, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace. | United States — our Sentry organisation's Data Storage Region |
 
 **Error reports are deliberately narrow.** We do not use Sentry's automatic
 instrumentation, which would otherwise capture request bodies, local variables
