@@ -122,6 +122,68 @@ describe("correspondence cannot ride out in an error report", () => {
     assert.doesNotMatch(scrubMessage("refused delivery to someone@client.test"), /someone@/);
   });
 
+  test("a report stays useful: ordinary messages and stack frames survive", () => {
+    /**
+     * The other half of the job, and the one a scrubbing rule breaks first.
+     * This file already records an incident where an unbounded pattern
+     * erased every frame — "an error report with no frames is not a safer
+     * report, it is a useless one" — and the JSON rule added here repeated
+     * it exactly: applied to a stack whose top line is a SyntaxError it
+     * removed all three frames, so the report said a parse failed and
+     * nothing about where. Caught by probing a STACK rather than a message.
+     */
+    const plain = "Cannot read properties of undefined (reading 'id')";
+    assert.equal(scrubMessage(plain), plain, "an ordinary message was altered");
+
+    const ordinary = scrubStack(
+      [
+        "TypeError: Cannot read properties of undefined (reading 'id')",
+        "    at resolveActor (/app/src/lib/auth/access.ts:51:26)",
+        "    at requirePlatformAdmin (/app/src/lib/admin/authorize.ts:137:23)",
+        "    at async POST (/app/src/app/api/x/route.ts:12:3)",
+      ].join("\n"),
+    );
+    assert.equal((ordinary?.match(/\n\s+at /g) ?? []).length, 3, "ordinary frames were lost");
+    assert.match(ordinary ?? "", /access\.ts/, "the stack no longer names the code that failed");
+
+    // The regression: a redactable shape on the FIRST line of a stack.
+    const jsonStack = scrubStack(
+      [
+        "SyntaxError: Unexpected token A in JSON at position 42",
+        "    at JSON.parse (<anonymous>)",
+        "    at runJobs (/app/src/lib/jobs.ts:210:20)",
+        "    at async drain (/app/scripts/worker.ts:50:18)",
+      ].join("\n"),
+    );
+    assert.equal(
+      (jsonStack?.match(/\n\s+at /g) ?? []).length,
+      3,
+      "the JSON rule ate the stack frames — bound it at the first frame",
+    );
+    assert.match(jsonStack ?? "", /jobs\.ts/, "the stack no longer names the code that failed");
+
+    const rowStack = scrubStack(
+      [
+        'error: new row for relation "EmailMessage" violates check constraint "c"',
+        "DETAIL:  Failing row contains (a, b, Q4 pricing for Acme, c).",
+        "    at Parser.parseErrorMessage (/app/node_modules/pg/x.js:1:1)",
+        "    at importPage (/app/src/lib/x.ts:94:5)",
+      ].join("\n"),
+    );
+    assert.equal((rowStack?.match(/\n\s+at /g) ?? []).length, 2, "the row rule ate the frames");
+    assert.doesNotMatch(rowStack ?? "", /Q4 pricing/, "the row survived in the stack");
+
+    // And the fault is still identifiable in each message.
+    assert.match(
+      scrubMessage('new row for relation "EmailMessage" violates check constraint "c"\n' +
+        "DETAIL:  Failing row contains (a, Q4 pricing for Acme)."),
+      /violates check constraint/,
+    );
+    const parsed = scrubMessage('Unexpected token A in JSON at position 42: {"subject":"Q4"}');
+    assert.match(parsed, /Unexpected token/);
+    assert.match(parsed, /position 42/, "the offset was mangled — anchor the lookbehind on the colon");
+  });
+
   test("prose written into an error message is NOT removed, and cannot be", () => {
     /**
      * The honest boundary, asserted rather than left to be discovered.

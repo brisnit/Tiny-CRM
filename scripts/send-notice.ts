@@ -136,7 +136,12 @@ async function record(noticeId: string, path: string, apply: boolean) {
   const { readFileSync } = await import("node:fs");
   const lines = readFileSync(path, "utf8").split("\n").map((l) => l.trim()).filter(Boolean);
 
-  const parsed: { email: string; status: Status; providerMessageId: string | null }[] = [];
+  const parsed: {
+    email: string;
+    status: Status;
+    providerMessageId: string | null;
+    line: number;
+  }[] = [];
   const problems: string[] = [];
   for (const [index, line] of lines.entries()) {
     const cells = line.split(",").map((c) => c.trim());
@@ -150,15 +155,65 @@ async function record(noticeId: string, path: string, apply: boolean) {
       problems.push(`line ${index + 1}: status "${status}" is not delivered or bounced`);
       continue;
     }
-    parsed.push({ email: email.toLowerCase(), status, providerMessageId: providerMessageId || null });
+    parsed.push({
+      email: email.toLowerCase(),
+      status,
+      providerMessageId: providerMessageId || null,
+      line: index + 1,
+    });
+  }
+
+  /**
+   * A recipient may appear once.
+   *
+   * Two lines for one address is not a harmless repetition: if they disagree
+   * the later write wins silently, so a file saying both `delivered` and
+   * `bounced` for somebody would record whichever was typed last. Copying a
+   * dashboard by hand is exactly where that happens. Refuse the file instead
+   * of picking.
+   */
+  const byEmail = new Map<string, number[]>();
+  for (const row of parsed) {
+    byEmail.set(row.email, [...(byEmail.get(row.email) ?? []), row.line]);
+  }
+  for (const [email, lines] of byEmail) {
+    if (lines.length > 1) {
+      problems.push(`${email}: appears ${lines.length} times (lines ${lines.join(", ")}) — one line per recipient`);
+    }
   }
 
   const known = new Map(
     (await ledger(noticeId)).map((r) => [r.key, r]),
   );
   for (const row of parsed) {
-    if (!known.has(row.email)) {
+    const entry = known.get(row.email);
+    if (!entry) {
       problems.push(`${row.email}: no ledger entry — was this address ever sent to?`);
+      continue;
+    }
+
+    /**
+     * The message id must be the one this recipient's send recorded.
+     *
+     * Transcribing ids off a dashboard puts them one row out of step with
+     * the addresses beside them, and a shifted column is invisible in the
+     * resulting file: every line looks well formed. Checking each id against
+     * the one the send already wrote turns that into a refusal. Only checked
+     * when the send recorded an id — the local sink does not issue them.
+     */
+    let sent: { providerMessageId?: string | null } = {};
+    try { sent = JSON.parse(entry.result ?? "{}") as typeof sent; } catch { sent = {}; }
+    const expected = sent.providerMessageId ?? null;
+    if (expected && row.providerMessageId && row.providerMessageId !== expected) {
+      problems.push(
+        `${row.email}: message id ${row.providerMessageId} is not the id recorded for ` +
+          `this recipient's send (${expected}) — check the column alignment`,
+      );
+    }
+    if (expected && !row.providerMessageId) {
+      problems.push(
+        `${row.email}: the send recorded message id ${expected}, but this line gives none`,
+      );
     }
   }
 

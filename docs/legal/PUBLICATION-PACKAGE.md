@@ -78,6 +78,17 @@ One message, both changes, clearly separated. No "reply to this message" —
 the `MAIL_FROM` address has not been confirmed to accept replies. No offer to
 confirm historical connections — the admin panel cannot answer it.
 
+**Two provisional elements, marked inline below and not approved.**
+
+1. **The dates.** 20 October (send) and 23 November (effective).
+2. **When the Sentry correction publishes.** The email is written for the
+   recommended option — the correction goes live with the page on the send
+   date, because it describes processing already happening. The alternative
+   is to hold it to 23 November with the integration sections. The two
+   passages marked `[PROVISIONAL …]` are the only text that differs between
+   those options; replacement wording for each is given directly after the
+   email. Nothing else in the message changes.
+
 > **Subject:** Changes to the Tiny CRM privacy notice, with new sections
 > effective 23 November 2026
 >
@@ -91,6 +102,7 @@ confirm historical connections — the admin panel cannot answer it.
 >   full.
 > - **The second is live on the page now.** It is a correction to our list of
 >   providers, and it describes something that was already the case.
+>   `[PROVISIONAL — timing of the Sentry correction not yet approved]`
 >
 > ---
 >
@@ -134,6 +146,7 @@ confirm historical connections — the admin panel cannot answer it.
 >
 > This one applies to everybody, it is on the page now rather than on 23
 > November, and nothing about how Tiny CRM works is changing.
+> `[PROVISIONAL — timing of the Sentry correction not yet approved]`
 >
 > Our notice lists the companies that process data on our behalf. That list
 > was incomplete: it did not name **Sentry**, which receives error reports
@@ -163,6 +176,21 @@ confirm historical connections — the admin panel cannot answer it.
 >
 > — Artifact Digital LLC, 178 N. Cuyamaca St., El Cajon, CA 92020, United
 > States
+
+### If the correction is held to 23 November instead
+
+Replace the two marked passages, and change nothing else:
+
+| | Recommended (as written above) | If held to 23 November |
+| --- | --- | --- |
+| Opening bullet 2 | "**The second is live on the page now.** It is a correction to our list of providers, and it describes something that was already the case." | "**The second also takes effect on 23 November 2026.** It is a correction to our list of providers, describing something that was already the case; we are giving it the same notice period." |
+| Part 2 opening line | "This one applies to everybody, it is on the page now rather than on 23 November, and nothing about how Tiny CRM works is changing." | "This one applies to everybody, and nothing about how Tiny CRM works is changing." |
+
+Neither version may say or imply that Sentry begins processing on 23
+November. In the held version the *notice* takes effect then; the processing
+has been happening throughout, and the paragraph saying so stays either way.
+
+The subject line is unchanged in both: it dates only the new sections.
 
 ### Why it is shaped this way
 
@@ -538,9 +566,20 @@ The procedure, after the send:
 5. Then `--apply` to write the outcomes into the ledger, and `--reconcile` to
    see the gate.
 
-`--record` refuses the whole file rather than part of it if any line is
-malformed, if a status is anything other than `delivered` or `bounced`, or if
-an address has no ledger entry — all three were exercised. It preserves the
+`--record` refuses the whole file rather than part of it. It refuses on a
+malformed line, a status other than `delivered` or `bounced`, an address with
+no ledger entry, **a recipient appearing more than once**, and **a message id
+that is not the one that recipient's send recorded** (or a missing id where
+the send recorded one). All of them were exercised.
+
+The last two exist because of how this particular error is made. Copying a
+dashboard by hand puts the id column one row out of step with the addresses
+beside it, and a shifted column is invisible in the resulting file — every
+line is well formed. Checking each id against the one already written at
+send time turns an invisible transcription error into a refusal; a shifted
+column now fails on every row it touched. A duplicated recipient is refused
+rather than resolved, because two lines that disagree would otherwise record
+whichever was typed last. It preserves the
 acceptance timestamp on the row, because the notice window is measured from
 it and overwriting it would silently move everyone's deadline.
 
