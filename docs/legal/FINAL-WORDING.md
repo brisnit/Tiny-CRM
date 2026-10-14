@@ -1,6 +1,8 @@
 # Tiny CRM — proposed privacy wording
 
-**Nothing here is published or sent. Every date is a placeholder.**
+**Nothing here is published or sent.** The dates that appear — 20 October
+2026 for publication and sending, 23 November 2026 for the integration
+provisions — are **proposed and pending approval**.
 
 No commentary, no evidence notes, no rationale — this is the text itself. The
 reasoning behind each passage is in the other drafts under `docs/legal/`.
@@ -154,138 +156,19 @@ error, email addresses, and anything shaped like a credential.
 
 # Customer email
 
-Two changes may reach customers: the integration sections, and the Sentry
-correction. **They are separate changes on separate timetables**, and the
-wording below keeps them separate so that nobody has to work out which notice
-period applies to which.
+**The customer email lives in `PUBLICATION-PACKAGE.md` § 3, and only there.**
 
-If the Sentry correction publishes on its own — the recommended order — send
-**Notice A** alone now, and **Notice B** when the integration date is fixed.
-If both publish together, send Notice B with Notice A's section included
-beneath the divider, exactly as written.
+This section used to hold a second copy, written when the plan was two
+separate notices — Notice A for the Sentry correction and Notice B for the
+integration sections. That plan was replaced by one combined email. The copy
+here was not updated, and a review PDF was generated from it after the
+combined email had already been agreed, which is how a stale draft reached a
+reviewer.
 
-## Notice A — the Sentry correction
+One copy, one source. The review PDF is now assembled from the package by
+`scripts/build-review-pdf.mjs` rather than from a transcription, so this
+cannot recur.
 
-**Subject:** A correction to the Tiny CRM privacy notice: an error-reporting
-provider we had not listed
-
-> Hello,
->
-> We are writing to correct our privacy notice. Nothing about how Tiny CRM
-> works is changing, and nothing you do needs to change.
->
-> Our notice lists the companies that process data on our behalf. That list
-> was incomplete: it did not name **Sentry**, which receives error reports
-> from Tiny CRM when something goes wrong. Sentry has been receiving these
-> reports throughout, and we should have listed it.
->
-> **What an error report contains.** A fixed set of fields, assembled by hand
-> rather than captured automatically: what went wrong, where in the code,
-> which request, and which account. Your records, notes, documents and
-> credentials are not among those fields. The fault message and stack trace
-> are filtered before they are sent, to remove database rows quoted by an
-> error, email addresses, and anything shaped like a credential.
->
-> **What is changing:** the notice, so that it is accurate. Not the product,
-> and not what we collect.
->
-> This correction takes effect on {SENTRY_CORRECTION_EFFECTIVE_DATE}. The
-> updated notice is at https://tinycrm.biz/privacy.
->
-> If you have questions, write to privacy@tinycrm.biz.
->
-> — Artifact Digital LLC, 178 N. Cuyamaca St., El Cajon, CA 92020, United
-> States
-
-## Notice B — the integration sections
-
-**Subject:** A change to the Tiny CRM privacy notice, effective
-{EFFECTIVE_DATE}
-
-> Hello,
->
-> We are adding email and calendar connections to Tiny CRM. You do not have to
-> use them, and nothing changes for you unless you choose to connect an
-> account. We are writing because our privacy notice is changing to describe
-> them, and we give at least 30 days' notice before a material change takes
-> effect.
->
-> **The change takes effect on {EFFECTIVE_DATE}.** Until then, the current
-> notice continues to apply in full, and email and calendar connections are
-> not available to customers.
->
-> **What the new sections say**
->
-> If you choose to connect a mailbox or calendar:
->
-> - Tiny CRM reads it so your messages and meetings appear beside the contacts
->   they concern. It stores subjects, a short preview, the sender and
->   recipients, times, and for meetings the title, location, online-meeting
->   link and start and end times. It does not store message bodies or
->   attachments.
-> - The access is read-only. Tiny CRM asks for permission to read your mail
->   and calendar, and asks for no permission to send, reply, create, change or
->   delete anything. It holds no ability to do so.
-> - Reading your mailbox means making requests to Microsoft for your own data,
->   using the authorisation you grant when you connect. Those requests do not
->   carry your Tiny CRM records.
-> - What you import is visible to you alone — not to colleagues who share your
->   workspace. There is currently no way to share an imported item with your
->   workspace, and attaching one to a contact does not change that.
-> - Imported mail and meetings are never included in a request sent to an AI
->   model provider, whatever your workspace's AI setting is.
-> - Disconnecting immediately destroys the access and refresh tokens we hold,
->   so Tiny CRM stops syncing. It does not withdraw the permission at
->   Microsoft — to do that, remove Tiny CRM from the connected applications in
->   your Microsoft account. You are asked whether to keep or delete what was
->   already imported; keeping is the default.
->
-> **What is not changing**
->
-> Nothing about how your existing CRM records, files or account information
-> are handled. If you never connect a mailbox or calendar, nothing in this
-> update applies to you.
->
-> You can read the updated notice in full at https://tinycrm.biz/privacy — the
-> integration sections are marked with the date they take effect.
->
-> If you have questions, write to privacy@tinycrm.biz.
->
-> — Artifact Digital LLC, 178 N. Cuyamaca St., El Cajon, CA 92020, United
-> States
-
-### If both changes publish together
-
-Append this beneath Notice B, under a divider, so the two are not confused:
-
-> **Separately: a correction to the same notice.**
->
-> Unrelated to the above, and on its own timetable: our subprocessor list did
-> not name Sentry, which receives error reports from Tiny CRM when something
-> goes wrong. It has been receiving them throughout and should have been
-> listed. Nothing about how Tiny CRM works is changing — only the notice, so
-> that it is accurate. What an error report contains is described in the
-> notice. This correction takes effect on
-> {SENTRY_CORRECTION_EFFECTIVE_DATE}.
-
-**Two edits are required when the notices are combined, and the second is
-easy to miss.**
-
-1. The two dates are separate placeholders and may resolve to different days.
-   Do not collapse them into one.
-2. Notice B's closing line must change. Standing alone it reads *"If you never
-   connect a mailbox or calendar, nothing in this update applies to you"* —
-   true of an email about integrations, and **false** once the Sentry
-   correction is in the same message, because that correction applies to
-   everyone. Replace it with:
-
-   > If you never connect a mailbox or calendar, the optional integration
-   > changes do not affect you unless you connect.
-
-   Leaving the original in a combined email would tell a customer that a
-   correction about an undisclosed subprocessor does not concern them.
-
----
 
 # Unresolved before any of this is published or sent
 
@@ -344,16 +227,21 @@ decision taken.
       subprocessor-notification duty.** The terms have not been read against
       these changes.
 
-## The placeholders
+## The dates, and what they are
 
-| Placeholder | Appears in | Fixed when |
+The placeholders are gone; real dates are written into the text so it can be
+read as the finished thing. **They are proposed, not approved**, and nothing
+is scheduled against them.
+
+| | Proposed date | Status |
 | --- | --- | --- |
-| `{EFFECTIVE_DATE}` | Notice B, subject and body | The publication and send dates are approved together |
-| `{INTEGRATIONS_EFFECTIVE_ON}` | The marker on each integration section | The same decision — it is the same date as `{EFFECTIVE_DATE}` |
-| `{SENTRY_CORRECTION_EFFECTIVE_DATE}` | Notice A, and the combined-notice paragraph | A separate decision, on its own timetable. **Not** the same date as the two above unless you choose it to be |
+| Publication of the page, and the customer email | **20 October 2026** | Pending approval |
+| Integration provisions take effect | **23 November 2026** — 34 days later | Pending approval |
+| Sentry correction | Published **20 October 2026** as a labelled correction | Pending approval. It describes processing already happening, so nothing "takes effect"; the notice is what changes |
 
-~~`{SENTRY_REGION}`~~ — resolved to **United States** and written into both
-disclosure rows.
+~~`{SENTRY_REGION}`~~ — resolved to **United States**, from our own Sentry
+organisation's Data Storage Region setting, and written into both disclosure
+rows as a statement about where data is stored rather than where the company
+is established.
 
-No date appears anywhere in this document. Nothing here has been published,
-and no email has been sent.
+Nothing here has been published, and no email has been sent.
