@@ -98,6 +98,19 @@ export const POLICIES = {
   options: { limit: 120, windowMs: MINUTE, label: "lookups" },
   analytics: { limit: 30, windowMs: MINUTE, label: "analytics requests", per: { user: 30, workspace: 120 } },
 
+  // --- Operator diagnostics -------------------------------------------------
+  //
+  // Counted even though the endpoint already requires CRON_SECRET, because
+  // the secret is a long-lived environment variable and the thing on the
+  // other side is outbound mail to a fixed inbox. Without a cap, one leaked
+  // secret is an unbounded mail flood at our own privacy contact and our
+  // provider quota. Deliberately small: a configuration test is something a
+  // person runs once or twice, not a loop.
+  diagnosticMail: {
+    limit: 3, windowMs: HOUR, label: "mail diagnostics",
+    per: { ip: 3, global: 5 },
+  },
+
   // --- Writes and bulk operations ------------------------------------------
   mutation: { limit: 240, windowMs: MINUTE, label: "changes" },
   bulk: { limit: 10, windowMs: MINUTE, label: "bulk actions", per: { user: 10, workspace: 30 } },

@@ -117,6 +117,152 @@ describe("the mail diagnostics endpoint is not an open relay", () => {
     assert.match(String(sent[0].text), /contains no customer data/);
   });
 
+  test("it is rate limited, and the cap is small", async () => {
+    /**
+     * CRON_SECRET is a long-lived environment variable. If it leaks, the
+     * thing on the other side is outbound mail to a fixed inbox, so the
+     * secret alone is not a sufficient control: without a cap, one leaked
+     * value is an unbounded flood at our own privacy contact and at the
+     * provider quota.
+     *
+     * Run in a fresh process so the limiter's counters start empty and are
+     * not shared with whatever else the suite has already counted.
+     */
+    const script = `(async () => {
+      process.env.CRON_SECRET = ${JSON.stringify(secret)};
+      process.env.MAIL_PROVIDER_URL = "https://api.example.test/emails";
+      process.env.MAIL_PROVIDER_TOKEN = "token-not-a-real-one";
+      process.env.MAIL_FROM = "Tiny CRM <no-reply@tinycrm.test>";
+      let sends = 0;
+      globalThis.fetch = async () => {
+        sends += 1;
+        return new Response(JSON.stringify({ id: "re_test" }), { status: 200 });
+      };
+      const { POST } = await import("./src/app/api/diagnostics/mail/route.ts");
+      const statuses = [];
+      for (let i = 0; i < 6; i += 1) {
+        const res = await POST(new Request("https://example.test/api/diagnostics/mail", {
+          method: "POST",
+          headers: { authorization: "Bearer " + process.env.CRON_SECRET, "x-forwarded-for": "203.0.113.9" },
+        }));
+        statuses.push(res.status);
+      }
+      console.log(JSON.stringify({ statuses, sends }));
+    })().catch((e) => { console.error(e); process.exit(1); });`;
+    const run = spawnSync("npx", ["tsx", "--eval", script], {
+      cwd: resolve(import.meta.dirname, "../.."),
+      encoding: "utf8",
+      env: { ...process.env, NODE_OPTIONS: "--require ./scripts/allow-server-modules.cjs" },
+    });
+    const line = (run.stdout ?? "").trim().split("\n").filter((l) => l.startsWith("{")).pop();
+    assert.ok(line, `no result from the subprocess:\n${run.stdout}\n${run.stderr}`);
+    const { statuses, sends } = JSON.parse(line);
+
+    assert.ok(
+      statuses.includes(429),
+      `six calls in a row were never refused — is the limiter wired up? ${JSON.stringify(statuses)}`,
+    );
+    assert.ok(sends <= 3, `the cap let ${sends} messages through; it should be at most 3`);
+    assert.equal(statuses[0], 200, "the first call should succeed");
+  });
+
+  test("the 429 carries retry-after, so a caller is told how long", async () => {
+    const script = `(async () => {
+      process.env.CRON_SECRET = ${JSON.stringify(secret)};
+      process.env.MAIL_PROVIDER_URL = "https://api.example.test/emails";
+      process.env.MAIL_PROVIDER_TOKEN = "token-not-a-real-one";
+      process.env.MAIL_FROM = "Tiny CRM <no-reply@tinycrm.test>";
+      globalThis.fetch = async () => new Response(JSON.stringify({ id: "re_test" }), { status: 200 });
+      const { POST } = await import("./src/app/api/diagnostics/mail/route.ts");
+      let last;
+      for (let i = 0; i < 6; i += 1) {
+        last = await POST(new Request("https://example.test/api/diagnostics/mail", {
+          method: "POST",
+          headers: { authorization: "Bearer " + process.env.CRON_SECRET, "x-forwarded-for": "203.0.113.10" },
+        }));
+      }
+      console.log(JSON.stringify({ status: last.status, retryAfter: last.headers.get("retry-after") }));
+    })().catch((e) => { console.error(e); process.exit(1); });`;
+    const run = spawnSync("npx", ["tsx", "--eval", script], {
+      cwd: resolve(import.meta.dirname, "../.."),
+      encoding: "utf8",
+      env: { ...process.env, NODE_OPTIONS: "--require ./scripts/allow-server-modules.cjs" },
+    });
+    const line = (run.stdout ?? "").trim().split("\n").filter((l) => l.startsWith("{")).pop();
+    assert.ok(line, `no result:\n${run.stdout}\n${run.stderr}`);
+    const { status, retryAfter } = JSON.parse(line);
+    assert.equal(status, 429);
+    assert.ok(Number(retryAfter) > 0, `retry-after was ${JSON.stringify(retryAfter)}`);
+  });
+
+  test("an unauthenticated flood does not consume the operator's budget", async () => {
+    /**
+     * The ordering the limiter depends on. If the cap were counted before
+     * the secret check, anyone could exhaust it from outside and lock the
+     * operator out of their own diagnostic — a denial of service handed
+     * over for free. Unauthenticated callers send no mail, so they are not
+     * the thing being rationed.
+     */
+    const script = `(async () => {
+      process.env.CRON_SECRET = ${JSON.stringify(secret)};
+      process.env.MAIL_PROVIDER_URL = "https://api.example.test/emails";
+      process.env.MAIL_PROVIDER_TOKEN = "token-not-a-real-one";
+      process.env.MAIL_FROM = "Tiny CRM <no-reply@tinycrm.test>";
+      globalThis.fetch = async () => new Response(JSON.stringify({ id: "re_test" }), { status: 200 });
+      const { POST } = await import("./src/app/api/diagnostics/mail/route.ts");
+      const call = (headers) => POST(new Request("https://example.test/api/diagnostics/mail", {
+        method: "POST", headers: { "x-forwarded-for": "203.0.113.11", ...headers },
+      }));
+      for (let i = 0; i < 20; i += 1) await call({ authorization: "Bearer wrong-secret-value" });
+      const res = await call({ authorization: "Bearer " + process.env.CRON_SECRET });
+      console.log(JSON.stringify({ status: res.status }));
+    })().catch((e) => { console.error(e); process.exit(1); });`;
+    const run = spawnSync("npx", ["tsx", "--eval", script], {
+      cwd: resolve(import.meta.dirname, "../.."),
+      encoding: "utf8",
+      env: { ...process.env, NODE_OPTIONS: "--require ./scripts/allow-server-modules.cjs" },
+    });
+    const line = (run.stdout ?? "").trim().split("\n").filter((l) => l.startsWith("{")).pop();
+    assert.ok(line, `no result:\n${run.stdout}\n${run.stderr}`);
+    assert.equal(
+      JSON.parse(line).status,
+      200,
+      "twenty unauthenticated calls exhausted the operator's rate limit",
+    );
+  });
+
+  test("the Authorization header never reaches a log", async () => {
+    /**
+     * Asserted on the whole log stream rather than on the route's own calls,
+     * because the route is not the only thing that logs during a request.
+     * The secret is distinctive, so searching for it is exact.
+     */
+    const script = `(async () => {
+      process.env.CRON_SECRET = ${JSON.stringify(secret)};
+      process.env.MAIL_PROVIDER_URL = "https://api.example.test/emails";
+      process.env.MAIL_PROVIDER_TOKEN = "token-not-a-real-one";
+      process.env.MAIL_FROM = "Tiny CRM <no-reply@tinycrm.test>";
+      // A rejection, because the failure paths are where detail usually leaks.
+      globalThis.fetch = async () => new Response("no", { status: 403 });
+      const { POST } = await import("./src/app/api/diagnostics/mail/route.ts");
+      await POST(new Request("https://example.test/api/diagnostics/mail", {
+        method: "POST",
+        headers: { authorization: "Bearer " + process.env.CRON_SECRET, "x-forwarded-for": "203.0.113.12" },
+      }));
+    })().catch((e) => { console.error(e); process.exit(1); });`;
+    const run = spawnSync("npx", ["tsx", "--eval", script], {
+      cwd: resolve(import.meta.dirname, "../.."),
+      encoding: "utf8",
+      env: { ...process.env, NODE_OPTIONS: "--require ./scripts/allow-server-modules.cjs" },
+    });
+    const output = `${run.stdout ?? ""}${run.stderr ?? ""}`;
+    assert.ok(output.length > 0, "the subprocess produced no output at all, so this proved nothing");
+    assert.doesNotMatch(output, /test-cron-secret-value/, "the secret appeared in the log stream");
+    assert.doesNotMatch(output, /authorization/i, "an authorization header was logged");
+    // And the rejection WAS logged, so the absence above is not silence.
+    assert.match(output, /mail provider rejected a message/, "the rejection was not logged at all");
+  });
+
   test("it refuses when the real provider is not selected", () => {
     /**
      * A success against the development sink looks exactly like proof and is

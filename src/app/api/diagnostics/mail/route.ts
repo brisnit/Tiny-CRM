@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 
 import { env } from "@/lib/env";
 import { mailAdapterKind, sendMail } from "@/lib/mail";
+import { checkRateLimit, clientAddress } from "@/lib/rate-limit";
 
 /**
  * Proves the production mail path actually delivers, on demand.
@@ -80,6 +81,34 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!authorized(request)) {
     // Deliberately no detail: this endpoint is public-routable.
     return NextResponse.json({ ok: false }, { status: 401, headers: noStore });
+  }
+
+  /**
+   * Rate limited AFTER the secret check, deliberately.
+   *
+   * The resource being protected is outbound mail, and an unauthenticated
+   * caller sends none — they get a 401 and nothing happens. Counting them
+   * would let anyone exhaust the budget from outside and lock the operator
+   * out of their own diagnostic, which is a denial of service handed over
+   * for free.
+   *
+   * What the cap is actually for: CRON_SECRET is a long-lived environment
+   * variable, and if it ever leaks, the thing on the other side is an
+   * unbounded mail flood at our own privacy inbox and our provider quota.
+   * Three an hour per address, five across all of them.
+   */
+  const limit = await checkRateLimit("diagnosticMail", {
+    ip: clientAddress(request.headers),
+    global: "diagnostic-mail",
+  });
+  if (!limit.ok) {
+    return NextResponse.json(
+      { ok: false, error: "Rate limited. This endpoint sends real email." },
+      {
+        status: 429,
+        headers: { ...noStore, "retry-after": String(limit.retryAfterSeconds) },
+      },
+    );
   }
 
   const adapter = mailAdapterKind();
