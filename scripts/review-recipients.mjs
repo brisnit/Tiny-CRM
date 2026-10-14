@@ -68,6 +68,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 
 import { promptHidden } from "./lib/prompt-hidden.mjs";
 
@@ -277,13 +278,44 @@ function classify(row) {
  * worse committed, is a disclosure created for no reason. Full addresses are
  * printed to the screen at run time, where they are already visible.
  */
-function mask(email) {
+export function mask(email) {
   const [local, domain] = String(email).split("@");
   if (!domain) return "[unreadable]";
   return `${local.slice(0, 1)}${"•".repeat(Math.max(1, local.length - 1))}@${domain}`;
 }
 
-const idOf = (email) = createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 16);
+export const idOf = (email) => createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 16);
+
+/**
+ * What a snapshot file contains. Hashes and masked forms, never addresses.
+ */
+export function snapshotPayload({ database, accounts, include, exclude, ambiguous, takenAt }) {
+  return {
+    takenAt: takenAt ?? new Date().toISOString(),
+    database,
+    counts: { accounts, include: include.length, exclude, ambiguous },
+    recipients: include.map((r) => ({ id: idOf(r.email), masked: mask(r.email) })),
+  };
+}
+
+/**
+ * Compares an approved snapshot against the current recipients.
+ *
+ * `added` carries the live rows, because a new person needs a decision and
+ * the address is already on screen. `removed` carries only what the file
+ * held — a hash and a masked form — because that is all the file is allowed
+ * to hold.
+ */
+export function compareAudience(before, include) {
+  const previous = new Map((before?.recipients ?? []).map((r) => [r.id, r]));
+  const current = new Map(include.map((r) => [idOf(r.email), r]));
+  return {
+    approvedCount: previous.size,
+    currentCount: current.size,
+    added: include.filter((r) => !previous.has(idOf(r.email))),
+    removed: (before?.recipients ?? []).filter((r) => !current.has(r.id)),
+  };
+}
 
 /** Reads the argument that follows a flag: `--snapshot out.json`. */
 function flagValue(name) {
@@ -414,15 +446,11 @@ async function main() {
         process.exit(1);
       }
 
-      const previous = new Map((before.recipients ?? []).map((r) => [r.id, r]));
-      const current = new Map(buckets.INCLUDE.map((r) => [idOf(r.email), r]));
-
-      const added = buckets.INCLUDE.filter((r) => !previous.has(idOf(r.email)));
-      const removed = (before.recipients ?? []).filter((r) => !current.has(r.id));
+      const { approvedCount, currentCount, added, removed } = compareAudience(before, buckets.INCLUDE);
 
       console.log("\n  CHANGES SINCE THE APPROVED AUDIENCE");
-      console.log(`    approved ${previous.size} on ${before.takenAt?.slice(0, 10) ?? "an unrecorded date"}, ` +
-        `${current.size} now`);
+      console.log(`    approved ${approvedCount} on ${before.takenAt?.slice(0, 10) ?? "an unrecorded date"}, ` +
+        `${currentCount} now`);
 
       if (added.length === 0 && removed.length === 0) {
         console.log("    No change. The approved list and this run are the same people.");
@@ -447,18 +475,13 @@ async function main() {
 
     // ---- Writing a snapshot to compare against later ----------------------
     if (snapshotTo) {
-      const payload = {
-        takenAt: new Date().toISOString(),
+      const payload = snapshotPayload({
         database: match,
-        counts: {
-          accounts: rows.length,
-          include: buckets.INCLUDE.length,
-          exclude: buckets.EXCLUDE.length,
-          ambiguous: buckets.AMBIGUOUS.length,
-        },
-        // Hashes and masked forms only. See idOf above.
-        recipients: buckets.INCLUDE.map((r) => ({ id: idOf(r.email), masked: mask(r.email) })),
-      };
+        accounts: rows.length,
+        include: buckets.INCLUDE,
+        exclude: buckets.EXCLUDE.length,
+        ambiguous: buckets.AMBIGUOUS.length,
+      });
       writeFileSync(snapshotTo, `${JSON.stringify(payload, null, 2)}\n`);
       console.log(`\n  SNAPSHOT WRITTEN  ${snapshotTo}`);
       console.log("    Hashes and masked addresses, not a list of customer emails.");
@@ -475,7 +498,20 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`\n${scrub(error?.message ?? error)}\n`);
-  process.exit(1);
-});
+/**
+ * Run only when invoked as a command.
+ *
+ * Without this guard, importing the module to test it would prompt for a
+ * connection string and then try to open a production database — so the
+ * comparison logic could only ever be tested by copying it somewhere else,
+ * which tests the copy.
+ */
+const invokedDirectly =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  main().catch((error) => {
+    console.error(`\n${scrub(error?.message ?? error)}\n`);
+    process.exit(1);
+  });
+}
