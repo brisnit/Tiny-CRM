@@ -341,6 +341,43 @@ Sixteen addresses, including the ones that must **not** match: `brisnit@gmail.co
 tag), `designbysmith@gmail.com`, and the two other real accounts. All sixteen
 behave as specified.
 
+### Two defects found by running it, both fixed
+
+**The plus-tag rule matched nothing.** The real addresses carry a run suffix —
+`brisnit+terms-check-32ff0980@gmail.com`, not `brisnit+terms-check@gmail.com`.
+I wrote the rule from the shorthand in the request rather than from the
+addresses themselves, so `includes()` never matched and all three fell through
+to AMBIGUOUS. That is the safe direction to fail, and still wrong.
+
+Now a pinned pattern: the tag must be one of the three known names and the
+suffix exactly eight hex characters, the shape `randomUUID().slice(0, 8)`
+produces. `brisnit+rc-zzzzzzzz@gmail.com`, `brisnit+newsletter@gmail.com` and
+`brisnit+rc-6aac145f@outlook.com` all still stay in — tested.
+
+**The header comment contradicted the classification.** It said every account
+"is matched against provenance the code actually creates" and listed only the
+code-provenance rules. That stopped being true the moment `operator-history`
+was added. Rewritten to describe all three classes and to say plainly that
+operator history is the weakest, rather than letting it inherit the authority
+of the other two.
+
+### Verified against your snapshot
+
+Replaying the 28 accounts as reported — nine on `tinycrm-test.local` with five
+populated, the three suffixed plus tags, the code-provenance fixtures, and
+eight real people:
+
+```
+accounts    28
+INCLUDE      8
+EXCLUDE     20
+AMBIGUOUS    0      expected 8 / 20 / 0 : MATCHES
+```
+
+The five populated probes are excluded on the domain rule regardless of their
+4,200 records, which is the correction you asked for. `designbysmith@gmail.com`
+and `brisnit@gmail.com` are both in the included eight.
+
 ### Expected shape, to be confirmed by running it
 
 From your 17-on-test-domains figure, most of those should land under

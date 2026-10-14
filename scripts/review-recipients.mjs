@@ -17,13 +17,18 @@
  * anything it cannot place confidently goes to AMBIGUOUS for you rather than
  * being quietly dropped.
  *
- * ## What counts as evidence
+ * ## What counts as evidence — three kinds, and they are not equal
  *
  * Not "the domain looks fake". A domain heuristic cuts both ways and both
  * ways are bad: it would exclude a real customer at an unusual domain, and it
  * would *include* the seeded demo accounts, which use realistic addresses on
- * purpose. So each account is matched against provenance the code actually
- * creates:
+ * purpose.
+ *
+ * So every exclusion names its evidence, and the output prints which kind it
+ * is, because one of the three is markedly weaker than the others:
+ *
+ * **`code-provenance`** — a line in this repository mints the address. These
+ * are literal, checkable facts about the tree:
  *
  *   - `tests/helpers/fixtures.ts` mints `<label>-<role>-<n>@test.local`
  *   - `prisma/seed/test-seed.ts` mints `<label>-<role>-<run>@verify.local`
@@ -31,8 +36,17 @@
  *     `demo@tinycrm.app`
  *   - `scripts/canary-local.ts` creates `canary@localhost.test`
  *
- * Those are literal, checkable facts about code in this repository, which is
- * why they are quoted in the output beside each decision.
+ * **`reserved-by-rfc`** — the domain cannot be registered, so no person can
+ * receive mail at it: `.test`, `.invalid`, `.localhost` (RFC 2606, RFC 6762)
+ * and `example.com/net/org`.
+ *
+ * **`operator-history`** — **no code in this repository mints these.** They
+ * exist because an operator created them during verification work, and the
+ * evidence is that person's account of it plus the shape of the address.
+ * `tinycrm-test.local` and the three plus tags are in this class. It is the
+ * weakest of the three and is labelled so rather than blended in; an earlier
+ * version of this comment claimed every exclusion had code provenance, which
+ * was not true once these rules were added.
  *
  * ## What is NOT evidence of a fixture
  *
@@ -96,15 +110,27 @@ const FIXTURE_RULES = [
   {
     id: "operator-plus-tag",
     evidence: "operator-history",
-    test: (e) =>
-      ["brisnit+terms-check@gmail.com", "brisnit+readiness@gmail.com", "brisnit+rc@gmail.com"].includes(e),
+    // The real addresses carry a run suffix — `terms-check-32ff0980`, not
+    // `terms-check`. The first version of this rule listed the bare tags and
+    // matched nothing, because it was written from a description of the
+    // addresses rather than from the addresses themselves. All three fell
+    // through to AMBIGUOUS, which is the safe direction to fail but still
+    // wrong.
+    //
+    // The tag is still pinned to the three known names, and the suffix must
+    // be exactly eight hex characters — the shape the verification scripts
+    // produce (`randomUUID().slice(0, 8)`). The suffix is optional so a bare
+    // variant is caught too. Anything else plus-addressed still goes to
+    // AMBIGUOUS.
+    test: (e) => /^brisnit\+(terms-check|readiness|rc)(-[0-9a-f]{8})?@gmail\.com$/.test(e),
     why:
       "plus-addressed tags on the owner's own address, created during terms, " +
-      "readiness and release-candidate verification. Gmail routes a plus tag to " +
-      "the same inbox, so these are the same person as brisnit@gmail.com, who " +
-      "is on the list in their own right — mailing the tags would mean four " +
-      "copies to one human. Matched exactly: any other brisnit+ tag goes to " +
-      "AMBIGUOUS rather than being swept up with them.",
+      "readiness and release-candidate verification, each with a run suffix. " +
+      "Gmail routes a plus tag to the same inbox, so these are the same person " +
+      "as brisnit@gmail.com, who is on the list in their own right — mailing " +
+      "the tags would mean four copies to one human. The tag names are pinned " +
+      "and the suffix must be eight hex characters; any other brisnit+ tag " +
+      "goes to AMBIGUOUS rather than being swept up with them.",
   },
 
   // ---- Code provenance --------------------------------------------------
