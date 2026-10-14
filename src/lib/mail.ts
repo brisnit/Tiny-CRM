@@ -169,9 +169,15 @@ class HttpAdapter implements MailAdapter {
       if (!response.ok) {
         // The response body can echo the request, which for these messages
         // means the link. It is never read or logged.
+        // The sender is on this line because a rejection is far more often
+        // the From: address than the message: an unverified or malformed
+        // sender fails every send identically, and a bare status code sends
+        // whoever is reading to look at the wrong thing. Ours, not a
+        // customer's, so there is nothing here to redact.
         log.error("mail provider rejected a message", {
           status: response.status,
           subject: message.subject,
+          from: this.from,
         });
         return { delivered: false, adapter: "http", error: `Provider returned ${response.status}` };
       }
