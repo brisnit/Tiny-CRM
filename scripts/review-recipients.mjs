@@ -346,18 +346,56 @@ async function main() {
   const client = new Client({ connectionString: url, connectionTimeoutMillis: 20_000 });
   await client.connect();
   try {
+    /**
+     * Can this connection produce meaningful activity counts at all?
+     *
+     * Two things have to be true, and only one of them is a privilege.
+     * Workspace, WorkspaceMember and Contact are under FORCE row-level
+     * security, so a role without BYPASSRLS reads **zero rows** from them
+     * even holding SELECT — and a zero is indistinguishable from an empty
+     * account. The review is about deciding who is a real person, so a
+     * column that silently reads "no records" for everybody is worse than
+     * no column: it looks like evidence.
+     *
+     * So the counts are shown only when they can be trusted, and the string
+     * "not accessible" is printed when they cannot.
+     */
+    const { rows: [access] } = await client.query(`
+      SELECT
+        (SELECT (rolsuper OR rolbypassrls) FROM pg_roles WHERE rolname = current_user) AS sees_through_rls,
+        has_table_privilege(current_user, '"Workspace"', 'SELECT')       AS can_workspace,
+        has_table_privilege(current_user, '"WorkspaceMember"', 'SELECT') AS can_member,
+        has_table_privilege(current_user, '"Contact"', 'SELECT')         AS can_contact
+    `);
+    const activityAvailable =
+      access.sees_through_rls === true &&
+      access.can_workspace && access.can_member && access.can_contact;
+
+    // Only the columns the classification actually reads. `id`, `name` and
+    // `planStatus` were selected and never used; a review connection should
+    // not be able to read them, so they are gone from both the query and the
+    // grant. Nothing authentication-related was ever selected and none of it
+    // is grantable to this role.
+    const activitySelect = activityAvailable
+      ? `(SELECT count(*)::int FROM "Workspace" w WHERE w."ownerId" = u."id") AS workspaces,
+         (SELECT count(*)::int FROM "WorkspaceMember" m WHERE m."userId" = u."id") AS memberships,
+         (SELECT count(*)::int FROM "Contact" c
+            WHERE c."workspaceId" IN (SELECT w2."id" FROM "Workspace" w2 WHERE w2."ownerId" = u."id")) AS records`
+      : `NULL::int AS workspaces, NULL::int AS memberships, NULL::int AS records`;
+
     const { rows } = await client.query(`
-      SELECT u."id", lower(u."email") AS email, u."name", u."plan", u."planStatus",
+      SELECT lower(u."email") AS email, u."plan",
              u."billingCustomerId", u."emailVerifiedAt" IS NOT NULL AS verified,
              u."deactivatedAt" IS NOT NULL AS suspended,
              u."lastSeenAt" AS last_seen_at, u."createdAt" AS created_at,
-             (SELECT count(*)::int FROM "Workspace" w WHERE w."ownerId" = u."id") AS workspaces,
-             (SELECT count(*)::int FROM "WorkspaceMember" m WHERE m."userId" = u."id") AS memberships,
-             (SELECT count(*)::int FROM "Contact" c
-               WHERE c."workspaceId" IN (SELECT w2."id" FROM "Workspace" w2 WHERE w2."ownerId" = u."id")) AS records
+             ${activitySelect}
         FROM "User" u
        ORDER BY u."createdAt" ASC
     `);
+
+    console.log(`  activity     ${activityAvailable
+      ? "readable"
+      : "NOT ACCESSIBLE — this connection cannot see through row-level security"}`);
 
     const buckets = { INCLUDE: [], EXCLUDE: [], AMBIGUOUS: [] };
     for (const row of rows) {
@@ -385,15 +423,24 @@ async function main() {
       console.log(`      ${group.why}`);
       for (const row of group.rows) {
         // Activity is printed, never acted on: a perf probe is busy by design.
-        const activity =
-          `${row.workspaces}w ${row.memberships}m ${row.records}r` +
-          `${row.last_seen_at ? " signed in" : " never signed in"}`;
+        const counts =
+          row.workspaces === null
+            ? "activity not accessible"
+            : `${row.workspaces}w ${row.memberships}m ${row.records}r`;
+        const activity = `${counts}${row.last_seen_at ? " · signed in" : " · never signed in"}`;
         console.log(`        ${row.email.padEnd(44)} ${activity}`);
       }
     }
     console.log("\n      Activity counts above are shown, not used. A populated account is");
     console.log("      not evidence of a real person — a performance probe creates a");
     console.log("      workspace and thousands of records, and a timezone probe signs in.");
+    if (!activityAvailable) {
+      console.log("\n      They read 'not accessible' here, which is the honest answer for a");
+      console.log("      connection restricted out of those tables. It is NOT a finding that");
+      console.log("      these accounts are empty. A role without BYPASSRLS reads zero rows");
+      console.log("      from them whatever is actually there, and printing those zeros");
+      console.log("      would look like evidence of exactly the thing it cannot see.");
+    }
 
     if (buckets.AMBIGUOUS.length) {
       console.log("\n  AMBIGUOUS — decide each of these yourself");
