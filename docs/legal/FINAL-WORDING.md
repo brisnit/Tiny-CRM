@@ -194,25 +194,26 @@ decision taken.
 
 ## Decisions
 
-- [ ] **The effective date**, which fixes `{EFFECTIVE_DATE}` and
-      `{INTEGRATIONS_EFFECTIVE_ON}` together. One decision, not two: the 30
-      days run from the email, so a publication date without a send date
-      cannot be measured against the commitment. At least 31 days between the
-      two.
-- [ ] **When the Sentry correction takes effect.**
-      `{SENTRY_CORRECTION_EFFECTIVE_DATE}` is deliberately unset. An earlier
-      draft said this correction took effect "immediately"; that was an
-      assumption, not a decision, and it has been removed from both Notice A
-      and the combined-notice paragraph. The date follows from the next
-      question and is yours to set.
-- [ ] **Whether the Sentry correction gets the 30 days**, or ships sooner as a
-      labelled correction. The argument runs both ways. The recommendation is
-      to give the 30 days: it costs only time, and the alternative asks a
-      customer to accept an interpretation we wrote about an omission of ours.
-- [ ] **Whether the Sentry correction ships ahead of the integration
-      release.** It corrects something already happening and has no dependency
-      on integrations. If it does ship first, Notice A goes alone — and the
-      two dates stay independent.
+- [x] ~~The effective date.~~ **APPROVED 14 October 2026.** Publication and
+      send on **20 October 2026**; the integration provisions take effect on
+      **23 November 2026**, 34 days later. One decision, not two: the 30 days
+      run from the email, so a publication date without a send date cannot be
+      measured against the commitment.
+- [x] ~~When the Sentry correction takes effect.~~ **It does not "take
+      effect".** It describes processing that has been happening throughout,
+      so the notice is what changes, not the product. It publishes with the
+      page on **20 October 2026**, labelled as a correction. An earlier draft
+      called it effective "immediately", which was an assumption rather than
+      a decision; this is the decision.
+- [x] ~~Whether the Sentry correction gets the 30 days.~~ **No** — it
+      publishes on the 20th as a labelled correction. The argument for giving
+      it the 30 days was that the alternative asks a customer to accept an
+      interpretation we wrote about an omission of ours. That argument was
+      put and not taken; recorded here rather than erased, because it is the
+      reasoning someone will want if the decision is ever questioned.
+- [x] ~~Whether the Sentry correction ships ahead of the integration
+      release.~~ **One combined email**, both changes, dated separately
+      within it.
 - [ ] **Whether to restore the offer to confirm no connection exists.** It was
       removed because the admin panel surfaces nothing about integrations, so
       answering means a manual database query, and the answer could not
