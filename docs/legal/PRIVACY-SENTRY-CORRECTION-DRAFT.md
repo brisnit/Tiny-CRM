@@ -56,7 +56,7 @@ Add to the § 5 table, in the same shape as the existing rows:
 
 | Who | What they get | Where |
 |---|---|---|
-| Sentry | Error reports, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace. | United States — read from the Sentry organisation's Data Storage Region setting |
+| Sentry | Error reports, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace. | United States — our Sentry organisation's Data Storage Region |
 
 And beneath it:
 

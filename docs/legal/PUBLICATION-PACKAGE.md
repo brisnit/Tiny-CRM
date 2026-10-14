@@ -78,16 +78,17 @@ One message, both changes, clearly separated. No "reply to this message" —
 the `MAIL_FROM` address has not been confirmed to accept replies. No offer to
 confirm historical connections — the admin panel cannot answer it.
 
-**Two provisional elements, marked inline below and not approved.**
+**Settled for this package**, and reflected in the text below without
+annotation:
 
-1. **The dates.** 20 October (send) and 23 November (effective).
-2. **When the Sentry correction publishes.** The email is written for the
-   recommended option — the correction goes live with the page on the send
-   date, because it describes processing already happening. The alternative
-   is to hold it to 23 November with the integration sections. The two
-   passages marked `[PROVISIONAL …]` are the only text that differs between
-   those options; replacement wording for each is given directly after the
-   email. Nothing else in the message changes.
+| | |
+| --- | --- |
+| **Publication and send** | 20 October 2026 |
+| **Integration provisions take effect** | 23 November 2026 — 34 days later |
+| **Sentry correction** | Published 20 October as a labelled correction. It describes processing already happening, so there is nothing for it to "take effect" on; the notice is what changes. |
+
+This is the proposal put forward for approval. Nothing is scheduled against
+these dates and nothing sends until you approve them.
 
 > **Subject:** Changes to the Tiny CRM privacy notice, with new sections
 > effective 23 November 2026
@@ -102,7 +103,6 @@ confirm historical connections — the admin panel cannot answer it.
 >   full.
 > - **The second is live on the page now.** It is a correction to our list of
 >   providers, and it describes something that was already the case.
->   `[PROVISIONAL — timing of the Sentry correction not yet approved]`
 >
 > ---
 >
@@ -146,13 +146,12 @@ confirm historical connections — the admin panel cannot answer it.
 >
 > This one applies to everybody, it is on the page now rather than on 23
 > November, and nothing about how Tiny CRM works is changing.
-> `[PROVISIONAL — timing of the Sentry correction not yet approved]`
 >
 > Our notice lists the companies that process data on our behalf. That list
 > was incomplete: it did not name **Sentry**, which receives error reports
-> from Tiny CRM when something goes wrong, and is based in the United States.
-> Sentry has been receiving these reports throughout, and we should have
-> listed it.
+> from Tiny CRM when something goes wrong. Our Sentry organisation stores
+> error-report data in the United States. Sentry has been receiving these
+> reports throughout, and we should have listed it.
 >
 > An error report is a fixed set of fields, assembled by hand rather than
 > captured automatically: what went wrong, where in the code, which request,
@@ -177,9 +176,11 @@ confirm historical connections — the admin panel cannot answer it.
 > — Artifact Digital LLC, 178 N. Cuyamaca St., El Cajon, CA 92020, United
 > States
 
-### If the correction is held to 23 November instead
+### The alternative, recorded but not proposed
 
-Replace the two marked passages, and change nothing else:
+If the correction were instead held to 23 November, two passages change and
+nothing else does. Kept here so the choice stays visible rather than
+disappearing into a decision nobody can find later:
 
 | | Recommended (as written above) | If held to 23 November |
 | --- | --- | --- |
@@ -231,11 +232,18 @@ export const INTEGRATIONS_EFFECTIVE_ON = "2026-11-23";
 **How the page distinguishes them.** A banner at the top, and a marker on each
 affected section:
 
-> **This notice is changing on 23 November 2026.** Two sections are marked
-> below. Until that date, the current text applies; the marked text does not
-> yet.
+> **Parts of this notice change on 23 November 2026.** The sections about
+> email and calendar connections are marked below and do not apply until
+> then. Everything else on this page, including the subprocessor list, is in
+> force now.
 
-and on each of §§ 2, 4, 5, 6, 7, 8, 9 where integration text is added:
+An earlier draft of this banner read "Two sections are marked below" and then
+marked seven, and said nothing about the subprocessor list — which is the one
+clause that keeps the Sentry row from being read as pending. The wording above
+is the one to use, and it is the same wording given in § 6.
+
+The marker goes on each of §§ 2, 4, 5, 6, 7, 8, 9 where integration text is
+added:
 
 > *Takes effect 23 November 2026. Until then, email and calendar connections
 > are not available to customers.*
@@ -538,6 +546,48 @@ delivery rows written, and the provider's accepted count. A discrepancy means
 somebody was not told, which matters when the clause says "at least 30 days'
 notice by email to your account address".
 
+### The production sender: what is confirmed and what is not
+
+**Confirmed, from public DNS.** The sending domain is set up for Resend:
+
+| Record | Value | What it shows |
+| --- | --- | --- |
+| `resend._domainkey.tinycrm.biz` TXT | RSA public key present | DKIM signing is published for Resend on the root domain |
+| `send.tinycrm.biz` TXT | `v=spf1 ip4:52.3.252.119 ip4:44.222.39.36 ip4:199.249.231.0/24 ~all` | A Resend sending subdomain with its own SPF, which is how Resend aligns the Return-Path |
+| `send.tinycrm.biz` MX | `send.forge.rmta.net`, `feedback.forge.rmta.net` | Resend's MTA and bounce-feedback endpoints |
+| `tinycrm.biz` MX | `mx1.spacemail.com`, `mx2.spacemail.com` | Inbound mail goes to Spacemail — consistent with `privacy@tinycrm.biz` being received |
+| `_dmarc.tinycrm.biz` TXT | `v=DMARC1; p=none;` | DMARC published, **not enforcing** |
+
+**Not confirmed, and not confirmable from here.** Reading `MAIL_FROM` and
+`MAIL_PROVIDER_TOKEN` out of the production environment was refused as
+credential materialisation. That refusal is right and was not worked around.
+So three things remain unverified:
+
+1. **The literal `MAIL_FROM` value.** DNS shows the domain is configured; it
+   cannot show which address the application sends as.
+2. **The Resend domain status.** Published DNS records are what Resend checks,
+   but "records exist" and "Resend has marked the domain Verified" are not the
+   same statement, and only the second one authorises a send.
+3. **That the from address sits on that verified domain.** A sender on a
+   different domain would be refused at send time, after the campaign had
+   begun.
+
+**One look closes all three:** Resend dashboard → **Domains** → `tinycrm.biz`
+should read **Verified**; then compare it against `MAIL_FROM` in Vercel →
+Settings → Environment Variables → Production. If you would rather have it
+from the API, the token is already in that environment:
+
+```
+curl -s -H "Authorization: Bearer $MAIL_PROVIDER_TOKEN" \
+  https://api.resend.com/domains | jq '.data[] | {name, status, region}'
+```
+
+**Worth noting separately:** DMARC is `p=none`, so nothing is enforced and a
+failure of alignment would not be rejected or reported. That is not a blocker
+for this campaign and is not a change to make the week of a send — but a
+one-off mailing to every customer is exactly the traffic that benefits from
+`p=quarantine` with a `rua` address, and it should be picked up afterwards.
+
 ### Reconciling delivery by hand
 
 There is no delivery webhook, so for this campaign the outcomes are recorded
@@ -666,15 +716,21 @@ repaired.
 
 ## 9. Still open before approval
 
-- [ ] **The two dates** — 20 October and 23 November, or your alternatives.
-- [ ] **One email or two** — combined is recommended.
-- [ ] **Whether the Sentry correction waits for 23 November** or publishes
-      sooner as a labelled correction, with the integration sections still
-      future-dated. The recommendation remains to give it the 30 days.
-- [ ] **The `MAIL_FROM` address.** Unread. If it accepts replies, "reply to
-      this message" can go back into the email; if not, the current wording
-      stands.
-- [ ] **The recipient count**, from the dry run.
+- [ ] **Approval of the package as proposed** — 20 October publication and
+      send, 23 November integration effectiveness, one combined email, the
+      Sentry correction published 20 October as a labelled correction. These
+      are written into the text throughout rather than left as placeholders;
+      approving the package approves them together.
+- [ ] **The production sender address is valid and authorized in Resend.**
+      Not confirmable from here: reading `MAIL_FROM` and `MAIL_PROVIDER_TOKEN`
+      out of the production environment was refused as credential
+      materialisation, which is the correct refusal. What public DNS shows is
+      in § 7 below; what it does not show is the Resend domain status and the
+      address itself. One dashboard look closes it.
+- [ ] **Whether the `MAIL_FROM` address accepts replies.** Separate from the
+      above and still unread. If it does, "reply to this message" can go back
+      into the email; if not, the current wording stands.
+- [ ] **The recipient count**, re-run near the send date.
 - [x] ~~Delivery reconciliation.~~ **Built and tested** —
       `--record` reads a CSV of dashboard outcomes into the ledger, and the
       activation gate blocks on unresolved and on bounced. Exercised against

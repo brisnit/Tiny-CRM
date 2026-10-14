@@ -21,9 +21,9 @@ printed), and `getAdapter()` installs the Sentry adapter whenever it is set.
 
 ### Proposed row
 
-| Subprocessor | Purpose | Location | Basis |
+| Subprocessor | Purpose | Where the data is stored | Basis |
 |---|---|---|---|
-| Sentry | Error reporting, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace | United States — read from the Sentry organisation's Data Storage Region setting | Verified from code (`src/lib/observability.ts`, `SentryAdapter`) and from `SENTRY_DSN` being present in the Production environment |
+| Sentry | Error reporting, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace | United States — our Sentry organisation's Data Storage Region | Verified from code (`src/lib/observability.ts`, `SentryAdapter`) and from `SENTRY_DSN` being present in the Production environment |
 
 The location is now **confirmed**, not inferred: read from the Sentry
 organisation's Data Storage Region setting. Both this row and the privacy

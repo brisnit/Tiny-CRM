@@ -55,7 +55,7 @@ holds no ability to do so.
 
 ## § 5. Where data goes — new subprocessor row
 
-| Who | What they get | Where |
+| Who | What they get | Where the data is stored |
 | --- | --- | --- |
 | Sentry | Error reports, assembled from a fixed list of fields: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace. | United States |
 
@@ -132,9 +132,9 @@ and calendar connections are not available to customers.*
 
 ## New subprocessor row
 
-| Subprocessor | Purpose | Location | Basis |
+| Subprocessor | Purpose | Where the data is stored | Basis |
 | --- | --- | --- | --- |
-| Sentry | Error reporting: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace | United States | Verified from code and configuration; region read from the Sentry organisation's Data Storage Region setting |
+| Sentry | Error reporting: the type and message of a fault, a filtered stack trace, the request identifier, the route path, and the identifiers of the user and workspace | United States | Verified from code and configuration; the storage location read from our Sentry organisation's Data Storage Region setting |
 
 ## Replacement for the closing sentence
 
