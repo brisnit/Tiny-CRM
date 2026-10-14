@@ -44,6 +44,7 @@ import { createInterface } from "node:readline";
 import { db } from "../src/lib/db";
 import { env } from "../src/lib/env";
 import { mailAdapterKind, sendMail } from "../src/lib/mail";
+import { noticeWindow, NOTICE_DAYS } from "../src/lib/legal/notice-window";
 
 /** Years, not days: this ledger is the evidence that notice was given. */
 const LEDGER_TTL_MS = 5 * 365 * 24 * 60 * 60 * 1000;
@@ -170,6 +171,51 @@ async function main() {
 
     const arithmetic = notAttempted + accepted + failed === list.length;
     console.log(`\n    arithmetic checks out: ${arithmetic ? "yes" : "NO — investigate"}`);
+
+    // ---- When activation becomes permissible -------------------------
+    //
+    // Measured from the LAST acceptance, not the first. The commitment is to
+    // each person, so it is met only when whoever was notified last has had
+    // their 30 days. See src/lib/legal/notice-window.ts.
+    const acceptedAt = existing
+      .filter((r) => r.status === "accepted" || r.status === "delivered")
+      .map((r) => {
+        try {
+          const parsed = JSON.parse(r.result ?? "{}") as { at?: string };
+          return parsed.at ? new Date(parsed.at) : r.createdAt;
+        } catch {
+          return r.createdAt;
+        }
+      });
+    const window = noticeWindow(acceptedAt);
+
+    console.log(`\n  NOTICE WINDOW (${NOTICE_DAYS} days, measured per person)`);
+    if (window.count === 0) {
+      console.log("    Nobody has been given notice. Activation is not permissible,");
+      console.log("    and no amount of waiting changes that.");
+    } else {
+      console.log(`    acceptances counted      ${window.count}`);
+      console.log(`    earliest acceptance      ${window.earliest?.toISOString()}   (context only)`);
+      console.log(`    latest acceptance        ${window.latest?.toISOString()}   <- the window runs from here`);
+      console.log(`    activation permissible   ${window.activationFrom?.toISOString()}`);
+      console.log(
+        `    elapsed for everyone     ${window.elapsed ? "yes" : `no — ${window.daysRemaining} day(s) to wait`}`,
+      );
+    }
+
+    const blockers = [
+      notAttempted > 0 ? `${notAttempted} never attempted` : null,
+      failed > 0 ? `${failed} failed at send` : null,
+      !window.elapsed ? "the notice window has not elapsed for everyone" : null,
+    ].filter(Boolean);
+    console.log("\n  ACTIVATION GATE");
+    if (blockers.length === 0) {
+      console.log("    All three conditions met: every recipient attempted, none failed,");
+      console.log("    and the last person notified has had the full period.");
+    } else {
+      console.log("    NOT PERMISSIBLE:");
+      for (const b of blockers) console.log(`      - ${b}`);
+    }
     await db.$disconnect();
     return;
   }

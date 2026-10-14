@@ -309,7 +309,7 @@ async function main() {
 
     console.log(`\n  ACCOUNTS  ${rows.length}`);
     console.log(`    proposed INCLUDE     ${String(buckets.INCLUDE.length).padStart(3)}   real people, to be sent the notice`);
-    console.log(`    proposed EXCLUDE     ${String(buckets.EXCLUDE.length).padStart(3)}   fixtures, each with code provenance`);
+    console.log(`    proposed EXCLUDE     ${String(buckets.EXCLUDE.length).padStart(3)}   test accounts, each with stated evidence (see classes below)`);
     console.log(`    AMBIGUOUS            ${String(buckets.AMBIGUOUS.length).padStart(3)}   ${buckets.AMBIGUOUS.length ? "YOUR CALL — not excluded by this script" : ""}`);
 
     console.log("\n  PROPOSED EXCLUSIONS — the TEST-ACCOUNT REVIEW GROUP");

@@ -524,8 +524,22 @@ clause exists to prevent, and it cannot be undone afterwards.
 
 **Activation is gated on the reconciliation, not the calendar.** Before the
 `integrations` flag is enabled for anyone, the run must show: every recipient
-attempted, zero failed, and the earliest acceptance at least 30 days earlier.
-That is three numbers from `--reconcile`, not a date in a diary.
+attempted, zero failed, and **the latest acceptance** at least 30 days
+earlier. Three numbers from `--reconcile`, not a date in a diary.
+
+**That said "earliest" until now, and it was wrong.** The commitment is to
+each person, so it is met only when whoever was notified *last* has had their
+30 days. With a single-batch send the two readings agree, which is why the
+error read fine. With a staggered send they do not:
+
+> A accepted on day 0, B accepted on day 10 after a retry. On day 31 the
+> earliest acceptance is 31 days old and the old rule said go. B has had 21
+> days — and B is the person who was hardest to reach in the first place.
+
+The rule now lives in `src/lib/legal/notice-window.ts` rather than in prose,
+is computed from the maximum acceptance time, and is covered by eight tests
+including the staggered case. Reverting it to the earliest fails three of
+them. `--reconcile` prints the window and an explicit activation gate.
 
 ---
 
