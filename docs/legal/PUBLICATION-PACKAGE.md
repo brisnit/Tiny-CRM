@@ -546,9 +546,17 @@ delivery rows written, and the provider's accepted count. A discrepancy means
 somebody was not told, which matters when the clause says "at least 30 days'
 notice by email to your account address".
 
-### The production sender: what is confirmed and what is not
+### The production sender: confirmed end to end
 
-**Confirmed, from public DNS.** The sending domain is set up for Resend:
+**CLOSED.** One configuration-test message was sent through the deployed
+diagnostic endpoint on 14 October 2026: HTTP 200, and it arrived at
+privacy@tinycrm.biz from `Tiny CRM <no-reply@tinycrm.biz>`.
+
+The DNS evidence below is kept because it is what the diagnosis was built
+from, and because it records what public lookups could and could not
+establish on their own — which turned out to be the important distinction.
+
+**From public DNS.** The sending domain is set up for Resend:
 
 | Record | Value | What it shows |
 | --- | --- | --- |
@@ -558,10 +566,11 @@ notice by email to your account address".
 | `tinycrm.biz` MX | `mx1.spacemail.com`, `mx2.spacemail.com` | Inbound mail goes to Spacemail — consistent with `privacy@tinycrm.biz` being received |
 | `_dmarc.tinycrm.biz` TXT | `v=DMARC1; p=none;` | DMARC published, **not enforcing** |
 
-**Not confirmed, and not confirmable from here.** Reading `MAIL_FROM` and
-`MAIL_PROVIDER_TOKEN` out of the production environment was refused as
-credential materialisation. That refusal is right and was not worked around.
-So three things remain unverified:
+**What DNS could not establish**, and what therefore needed a live send.
+Reading `MAIL_FROM` and `MAIL_PROVIDER_TOKEN` out of the production
+environment was refused as credential materialisation; that refusal was
+right and was not worked around. Three things were left open, and the
+delivery above answers all three:
 
 1. **The literal `MAIL_FROM` value.** DNS shows the domain is configured; it
    cannot show which address the application sends as.
@@ -721,12 +730,22 @@ repaired.
       Sentry correction published 20 October as a labelled correction. These
       are written into the text throughout rather than left as placeholders;
       approving the package approves them together.
-- [ ] **The production sender address is valid and authorized in Resend.**
-      Not confirmable from here: reading `MAIL_FROM` and `MAIL_PROVIDER_TOKEN`
-      out of the production environment was refused as credential
-      materialisation, which is the correct refusal. What public DNS shows is
-      in § 7 below; what it does not show is the Resend domain status and the
-      address itself. One dashboard look closes it.
+- [x] ~~The production sender address is valid and authorized in Resend.~~
+      **CLOSED 14 October 2026, by a real delivery.** `tinycrm.biz` is
+      Verified in Resend; Production `MAIL_FROM` is
+      `Tiny CRM <no-reply@tinycrm.biz>`, read from the boot line of release
+      `72ece27d`; and one configuration-test message sent through
+      `/api/diagnostics/mail` returned HTTP 200 and **arrived at
+      privacy@tinycrm.biz** from that sender. The whole chain was observed —
+      sender configured, provider accepted, message delivered to a monitored
+      inbox — rather than any link inferred from the one before it.
+
+      It had been broken, not merely unverified: `MAIL_FROM` carried no
+      value while a provider WAS configured, so every message was sent from
+      `no-reply@localhost` and refused. Password reset, email verification,
+      invitations and sign-in alerts were all failing silently. Fixed by
+      configuration; PR #44 added the reporting that would have surfaced it,
+      and the diagnostic endpoint that proved the fix.
 - [ ] **Whether the `MAIL_FROM` address accepts replies.** Separate from the
       above and still unread. If it does, "reply to this message" can go back
       into the email; if not, the current wording stands.
