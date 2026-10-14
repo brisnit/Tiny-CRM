@@ -79,12 +79,51 @@ describe("the notice window is measured from the last person notified", () => {
     assert.equal(w.activationFrom?.toISOString(), day(1 + 45).toISOString());
   });
 
-  test("invalid timestamps are discarded rather than poisoning the maximum", () => {
-    // An unparseable date arriving as NaN would otherwise make every
-    // comparison false and the window silently permissive.
-    const w = noticeWindow([day(1), new Date("not a date"), day(11)], { at: day(11 + NOTICE_DAYS) });
-    assert.equal(w.count, 2);
-    assert.equal(w.latest?.toISOString(), day(11).toISOString());
+  test("one valid old timestamp plus one invalid REFUSES", () => {
+    /**
+     * The case asked for, and the one that shows why discarding is wrong.
+     *
+     * An earlier version filtered unreadable timestamps out and computed the
+     * window from what remained. Here that would mean: the valid acceptance
+     * is 60 days old, far past the period, so elapsed — while one recipient's
+     * acceptance time is simply unknown. Discarding makes the answer MORE
+     * permissive, which is the opposite of what an unreadable record should
+     * do.
+     *
+     * If we cannot say when somebody was notified, we cannot say their 30
+     * days have passed.
+     */
+    const w = noticeWindow([day(1), new Date("not a date")], { at: day(1 + 60) });
+
+    assert.equal(w.elapsed, false, "an unreadable acceptance timestamp did not block the check");
+    assert.equal(w.invalid, 1);
+    assert.equal(w.count, 1, "the readable acceptance is still counted and reported");
+    assert.equal(w.activationFrom, null, "a date was offered despite an unreadable record");
+    assert.equal(w.daysRemaining, Number.POSITIVE_INFINITY);
+    assert.match(w.blocked ?? "", /could not be read/);
+  });
+
+  test("an invalid timestamp blocks even when every other recipient is long past", () => {
+    // Four acceptances a year old and one unreadable: still refused.
+    const w = noticeWindow(
+      [day(1), day(2), day(3), day(4), new Date(Number.NaN)],
+      { at: new Date(Date.UTC(2027, 9, 1)) },
+    );
+    assert.equal(w.elapsed, false);
+    assert.equal(w.invalid, 1);
+    assert.equal(w.count, 4);
+  });
+
+  test("all timestamps valid and the ledger is not blocked", () => {
+    const w = noticeWindow([day(1), day(11)], { at: day(11 + NOTICE_DAYS) });
+    assert.equal(w.invalid, 0);
+    assert.equal(w.blocked, null);
     assert.equal(w.elapsed, true);
+  });
+
+  test("an empty ledger is blocked, with the reason named", () => {
+    const w = noticeWindow([], { at: day(28) });
+    assert.equal(w.elapsed, false);
+    assert.match(w.blocked ?? "", /nobody has been given notice/);
   });
 });

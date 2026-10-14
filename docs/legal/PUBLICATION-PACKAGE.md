@@ -39,6 +39,13 @@ separate subprocessor-notification duty — the words "subprocessor" and
 
 ## 2. Proposed dates
 
+> **Both dates are provisional and neither is approved.** 20 October and 23
+> November appear throughout this document, in the email and in the page
+> copy, so that the package can be read as the finished thing. Nothing is
+> scheduled against them. The Sentry correction's publication timing is
+> separately unapproved — see the open item in § 9; the email in § 3 is
+> written for the recommended option and changes if you take the other.
+
 | | Date | |
 | --- | --- | --- |
 | **Send** | **Tuesday 20 October 2026** | 7 days from today, for approvals and a tested send mechanism |
@@ -71,14 +78,19 @@ One message, both changes, clearly separated. No "reply to this message" —
 the `MAIL_FROM` address has not been confirmed to accept replies. No offer to
 confirm historical connections — the admin panel cannot answer it.
 
-> **Subject:** Changes to the Tiny CRM privacy notice, effective 23 November
-> 2026
+> **Subject:** Changes to the Tiny CRM privacy notice, with new sections
+> effective 23 November 2026
 >
 > Hello,
 >
-> Our privacy notice is changing on **23 November 2026**. There are two
-> changes, and they are unrelated to each other. Until that date the current
-> notice continues to apply in full.
+> We have updated our privacy notice. There are two changes, they are
+> unrelated to each other, and they do not take effect at the same time.
+>
+> - **The first takes effect on 23 November 2026.** It covers an optional new
+>   feature. Until that date the current notice continues to apply to it in
+>   full.
+> - **The second is live on the page now.** It is a correction to our list of
+>   providers, and it describes something that was already the case.
 >
 > ---
 >
@@ -120,8 +132,8 @@ confirm historical connections — the admin panel cannot answer it.
 >
 > **2. A correction: an error-reporting provider we had not listed**
 >
-> This one applies to everybody, and nothing about how Tiny CRM works is
-> changing.
+> This one applies to everybody, it is on the page now rather than on 23
+> November, and nothing about how Tiny CRM works is changing.
 >
 > Our notice lists the companies that process data on our behalf. That list
 > was incomplete: it did not name **Sentry**, which receives error reports
@@ -157,6 +169,11 @@ confirm historical connections — the admin panel cannot answer it.
 - **The two changes are numbered and divided**, because one is optional and
   one applies to everybody. A reader who connects nothing still needs to read
   part 2.
+- **The opening dates them separately.** An earlier draft opened with "our
+  privacy notice is changing on 23 November", which is false about part 2: the
+  correction is live when the page publishes, and Sentry has been receiving
+  error reports throughout. One sentence covering both changes could only be
+  right about one of them.
 - **"The optional integration changes do not affect you unless you connect"**
   replaces "nothing in this update applies to you", which would be false in a
   combined email.
@@ -493,6 +510,46 @@ delivery rows written, and the provider's accepted count. A discrepancy means
 somebody was not told, which matters when the clause says "at least 30 days'
 notice by email to your account address".
 
+### Reconciling delivery by hand
+
+There is no delivery webhook, so for this campaign the outcomes are recorded
+manually. Eight recipients is small enough for a person to read the dashboard
+and write down what happened. This is a decision about *this* campaign, not a
+general method — at a hundred recipients it would be a bad one.
+
+The procedure, after the send:
+
+1. Open the Resend dashboard, **Emails**, and filter to the send window.
+2. For each recipient read the **status** and the **message id** (`re_…`).
+3. Write one line per recipient into a CSV:
+
+   ```
+   email,status,providerMessageId
+   someone@example.com,delivered,re_1a2b3c4d
+   other@example.com,bounced,re_2b3c4d5e
+   ```
+
+4. Dry-run it, which validates without writing:
+
+   ```
+   npx tsx scripts/send-notice.ts --notice=<id> --record=outcomes.csv
+   ```
+
+5. Then `--apply` to write the outcomes into the ledger, and `--reconcile` to
+   see the gate.
+
+`--record` refuses the whole file rather than part of it if any line is
+malformed, if a status is anything other than `delivered` or `bounced`, or if
+an address has no ledger entry — all three were exercised. It preserves the
+acceptance timestamp on the row, because the notice window is measured from
+it and overwriting it would silently move everyone's deadline.
+
+**What it does not do.** It records what a person read off a dashboard. It
+cannot tell you the dashboard was read correctly, it has no provider
+signature behind it, and `delivered` from Resend means the receiving server
+accepted the message — not that anyone read it. A webhook remains the thing
+that would make this trustworthy at any scale.
+
 ---
 
 ## 8. If notice is late, fails, or cannot be confirmed
@@ -510,22 +567,35 @@ from *their* day.
 | Any recipient **never attempted** | **The date does not apply to them.** Send, then their 30 days run from that send | Hold activation until every recipient has had 30 days |
 | Any recipient **failed at send** after retries | Same — they have not been given notice | Same |
 | Send slips so any recipient has **fewer than 30 days** | **Move the effective date**, do not shorten the notice | Activation follows the moved date |
-| **Unresolved** (accepted, no delivery signal) | Date stands | Activation proceeds |
-| Confirmed **bounced**, once observable | Treat as not given: correct the address or reach them another way | Hold for those accounts |
+| **Unresolved** (accepted, no delivery outcome recorded) | Date stands | **Hold.** Reconcile from the dashboard; if it still cannot be resolved, a person decides |
+| Confirmed **bounced** | Treat as not given: correct the address or reach them another way | **Hold** for those accounts |
 
-**Why unresolved does not block.** The commitment is to *give* notice by email
-to the account address, which is discharged by sending to the address on
-record. It is not a guarantee of reading. If it were, no notice period could
-ever close. Accepted-and-unresolved is notice given; a known bounce is not.
+**Unresolved and bounced both block activation, by your decision.** An earlier
+version of this section had unresolved *not* blocking, on the argument that
+the commitment is to give notice to the address on record and is discharged
+by sending — not a guarantee of reading. That argument stands on its own
+terms, and the position has still been overridden: with manual reconciliation
+available, an unresolved recipient is a recipient nobody has looked at yet,
+and that is a different thing from one whose delivery is genuinely
+unknowable.
+
+The practical consequence, stated plainly: the gate stays shut until every
+recipient is recorded `delivered`. If the dashboard cannot resolve somebody —
+no row, an ambiguous status — the gate will not open by itself and will not
+time out. Someone has to look at that recipient and decide, and the decision
+should be written down next to this paragraph when it happens.
 
 **The asymmetry is deliberate.** Moving a date costs a little embarrassment.
 Activating a feature for someone who was never told about it is the thing the
 clause exists to prevent, and it cannot be undone afterwards.
 
 **Activation is gated on the reconciliation, not the calendar.** Before the
-`integrations` flag is enabled for anyone, the run must show: every recipient
-attempted, zero failed, and **the latest acceptance** at least 30 days
-earlier. Three numbers from `--reconcile`, not a date in a diary.
+`integrations` flag is enabled for anyone, `--reconcile` must show all five:
+every recipient attempted, zero failed, **zero unresolved**, **zero bounced**,
+and **the latest acceptance** at least 30 days earlier. Numbers from the
+ledger, not a date in a diary. Each failing condition is printed as its own
+line under `NOT PERMISSIBLE`, so a run that is blocked for two reasons says
+so twice rather than reporting the first and stopping.
 
 **That said "earliest" until now, and it was wrong.** The commitment is to
 each person, so it is met only when whoever was notified *last* has had their
@@ -537,9 +607,21 @@ error read fine. With a staggered send they do not:
 > days — and B is the person who was hardest to reach in the first place.
 
 The rule now lives in `src/lib/legal/notice-window.ts` rather than in prose,
-is computed from the maximum acceptance time, and is covered by eight tests
+is computed from the maximum acceptance time, and is covered by eleven tests
 including the staggered case. Reverting it to the earliest fails three of
 them. `--reconcile` prints the window and an explicit activation gate.
+
+**An unreadable acceptance timestamp blocks the check.** The first version
+filtered bad timestamps out and computed the window from what remained, so
+that one `NaN` could not poison every comparison. That was right about the
+symptom and wrong about the remedy: discarding means a recipient whose
+acceptance time cannot be read silently stops counting, and the window is
+then computed from the others — which is *more* permissive, not less. A
+recipient whose acceptance time is unknown cannot be shown to have had their
+30 days. The window now refuses, names the count, and offers no date. Tested
+with one valid 60-day-old acceptance plus one unreadable one: refused, and
+the readable acceptance is still counted and reported so the ledger can be
+repaired.
 
 ---
 
@@ -554,17 +636,29 @@ them. `--reconcile` prints the window and an explicit activation gate.
       this message" can go back into the email; if not, the current wording
       stands.
 - [ ] **The recipient count**, from the dry run.
+- [x] ~~Delivery reconciliation.~~ **Built and tested** —
+      `--record` reads a CSV of dashboard outcomes into the ledger, and the
+      activation gate blocks on unresolved and on bounced. Exercised against
+      a throwaway local ledger of 5: all unresolved → refused despite the
+      window having elapsed; 3 delivered + 1 bounced + 1 unrecorded → refused
+      on both counts, listed separately; all 5 delivered → permitted. A
+      corrupted acceptance timestamp → refused, with no date and no countdown
+      printed. Malformed lines, an unknown status and an unknown address were
+      each refused without writing anything. The probe ledger was deleted.
 - [x] ~~The send mechanism.~~ **Built and tested** —
       `scripts/send-notice.ts`, dry run by default, exercised end to end
       against the local sink: 5 recipients, 5 accepted, re-run skipped all 5,
       reconciliation arithmetic checks out, and `--live` refused when the
       adapter was not the real provider. The test ledger was deleted
       afterwards.
-- [ ] **A mail-provider delivery webhook**, which does not exist. Without it
-      `delivered` and `bounced` cannot be populated and every accepted
-      message stays `unresolved`. Not a blocker for sending — see § 8 — but it
-      is the difference between knowing notice arrived and knowing it was
-      accepted for delivery.
+- [ ] **A mail-provider delivery webhook**, which still does not exist. For
+      this campaign it is replaced by hand reconciliation (§ 7), which is
+      workable at eight recipients and would not be at eighty. It remains the
+      thing that would make delivery evidence trustworthy without a person in
+      the loop.
+- [ ] **Who reads the Resend dashboard**, and when relative to the send. The
+      gate does not open until every recipient is recorded, so this is on the
+      critical path to activation rather than a tidy-up afterwards.
 - [ ] **Someone other than its author reads the email.**
 
 ## Confirmed, and no longer open

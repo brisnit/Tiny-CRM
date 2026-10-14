@@ -113,6 +113,94 @@ function noticeMessage(subject: string, body: string) {
   return { subject, text: body };
 }
 
+/**
+ * Records delivery outcomes read off the Resend dashboard.
+ *
+ * There is no delivery webhook in this application, so for this campaign the
+ * outcomes are reconciled by hand. Eight recipients is small enough that a
+ * person can read the dashboard and write down what happened; it is not a
+ * substitute for a webhook, and the package says so.
+ *
+ * Input is CSV, one recipient per line, header optional:
+ *
+ *     email,status,providerMessageId
+ *     someone@example.com,delivered,re_abc123
+ *     other@example.com,bounced,re_def456
+ *
+ * `status` must be `delivered` or `bounced`. Anything else is refused rather
+ * than guessed at — "sent", "ok" and "complained" all mean different things
+ * and none of them is a delivery.
+ */
+async function record(noticeId: string, path: string, apply: boolean) {
+  const scope = `notice:${noticeId}`;
+  const { readFileSync } = await import("node:fs");
+  const lines = readFileSync(path, "utf8").split("\n").map((l) => l.trim()).filter(Boolean);
+
+  const parsed: { email: string; status: Status; providerMessageId: string | null }[] = [];
+  const problems: string[] = [];
+  for (const [index, line] of lines.entries()) {
+    const cells = line.split(",").map((c) => c.trim());
+    if (index === 0 && cells[0]?.toLowerCase() === "email") continue; // header
+    const [email, status, providerMessageId] = cells;
+    if (!email || !status) {
+      problems.push(`line ${index + 1}: needs at least email,status`);
+      continue;
+    }
+    if (status !== "delivered" && status !== "bounced") {
+      problems.push(`line ${index + 1}: status "${status}" is not delivered or bounced`);
+      continue;
+    }
+    parsed.push({ email: email.toLowerCase(), status, providerMessageId: providerMessageId || null });
+  }
+
+  const known = new Map(
+    (await ledger(noticeId)).map((r) => [r.key, r]),
+  );
+  for (const row of parsed) {
+    if (!known.has(row.email)) {
+      problems.push(`${row.email}: no ledger entry — was this address ever sent to?`);
+    }
+  }
+
+  console.log(`\n  RECORDING OUTCOMES from ${path}`);
+  console.log(`    rows parsed     ${parsed.length}`);
+  console.log(`    delivered       ${parsed.filter((r) => r.status === "delivered").length}`);
+  console.log(`    bounced         ${parsed.filter((r) => r.status === "bounced").length}`);
+  if (problems.length) {
+    console.log(`\n    PROBLEMS (${problems.length}) — nothing is written until these are fixed:`);
+    for (const p2 of problems) console.log(`      ${p2}`);
+    process.exit(1);
+  }
+
+  if (!apply) {
+    console.log("\n    Dry run. Re-run with --apply to write these to the ledger.\n");
+    return;
+  }
+
+  for (const row of parsed) {
+    const before = known.get(row.email)!;
+    let prior: Record<string, unknown> = {};
+    try { prior = JSON.parse(before.result ?? "{}") as Record<string, unknown>; } catch { prior = {}; }
+    await db.idempotencyKey.update({
+      where: { scope_key: { scope, key: row.email } },
+      data: {
+        status: row.status,
+        result: JSON.stringify({
+          ...prior,
+          // Keep the acceptance time: the notice window is measured from it,
+          // and overwriting it here would silently move everyone's deadline.
+          providerMessageId: row.providerMessageId ?? prior.providerMessageId ?? null,
+          outcome: row.status,
+          outcomeRecordedAt: new Date().toISOString(),
+          outcomeSource: "resend dashboard, recorded by hand",
+        }),
+      },
+    });
+    console.log(`    ${row.status.padEnd(10)} ${mask(row.email)}  ${row.providerMessageId ?? "(no id)"}`);
+  }
+  console.log(`\n    Written. Reconcile with --notice=${noticeId} --reconcile\n`);
+}
+
 async function main() {
   const noticeId = arg("notice");
   if (!noticeId) {
@@ -125,6 +213,13 @@ async function main() {
   const reconcile = has("reconcile");
   const perSecond = Number(arg("rate") ?? DEFAULT_PER_SECOND);
   const max = arg("max") ? Number(arg("max")) : null;
+
+  const recordPath = arg("record");
+  if (recordPath) {
+    await record(noticeId, recordPath, apply);
+    await db.$disconnect();
+    return;
+  }
 
   const adapter = mailAdapterKind();
   const list = await recipients();
@@ -156,20 +251,27 @@ async function main() {
     console.log(`      failed at send             ${failed}   ${failed ? "<- not given notice" : ""}`);
     console.log(`      confirmed delivered        ${delivered}`);
     console.log(`      bounced                    ${bounced}`);
-    const unresolved = accepted - delivered - bounced;
-    console.log(`      unresolved                 ${unresolved}   (accepted, no delivery outcome known)`);
+    // `delivered` and `bounced` REPLACE `accepted` on the row, so the four
+    // statuses are disjoint and unresolved is simply whatever is still sitting
+    // at `accepted`. An earlier version subtracted, which would have counted
+    // the same recipient twice and under-reported unresolved to zero.
+    const unresolved = accepted;
+    console.log(`      unresolved                 ${unresolved}   (accepted, no delivery outcome recorded yet)`);
 
-    console.log("\n  WHY 'unresolved' IS THE WHOLE OF 'accepted' TODAY");
+    console.log("\n  WHERE 'delivered' AND 'bounced' COME FROM");
     console.log("    Nothing in this application receives delivery events from the mail");
     console.log("    provider. There is no webhook for delivered, bounced or complained —");
-    console.log("    the only provider webhook here is Stripe's. So 'accepted' means the");
-    console.log("    provider took the message, and nothing more.");
-    console.log("    To populate delivered and bounced, a provider webhook has to exist and");
-    console.log("    write back into this ledger. Until then, reporting 'accepted' as");
-    console.log("    'delivered' would make a notice obligation look discharged when it is");
-    console.log("    not, so this refuses to do it.");
+    console.log("    the only provider webhook here is Stripe's. So a send records only");
+    console.log("    'accepted': the provider took the message, and nothing more.");
+    console.log("    For this campaign the outcomes are reconciled BY HAND: read each");
+    console.log("    recipient's status and message id off the Resend dashboard, write");
+    console.log("    them into a CSV, and run --record. Eight recipients makes that");
+    console.log("    tractable; it is not a substitute for a webhook at any larger size.");
+    console.log("    Until a recipient is recorded, they stay unresolved — and unresolved");
+    console.log("    blocks activation, because 'the provider took it' is not 'they got it'.");
 
-    const arithmetic = notAttempted + accepted + failed === list.length;
+    const arithmetic =
+      notAttempted + accepted + failed + delivered + bounced === list.length;
     console.log(`\n    arithmetic checks out: ${arithmetic ? "yes" : "NO — investigate"}`);
 
     // ---- When activation becomes permissible -------------------------
@@ -197,21 +299,52 @@ async function main() {
       console.log(`    acceptances counted      ${window.count}`);
       console.log(`    earliest acceptance      ${window.earliest?.toISOString()}   (context only)`);
       console.log(`    latest acceptance        ${window.latest?.toISOString()}   <- the window runs from here`);
-      console.log(`    activation permissible   ${window.activationFrom?.toISOString()}`);
+      if (window.invalid > 0) {
+        console.log(`    unreadable timestamps    ${window.invalid}   <- blocks the check`);
+      }
+      // No date and no countdown when the window is blocked: there isn't one,
+      // and printing "undefined" or "Infinity day(s)" invites someone to read
+      // past it.
       console.log(
-        `    elapsed for everyone     ${window.elapsed ? "yes" : `no — ${window.daysRemaining} day(s) to wait`}`,
+        `    activation permissible   ${
+          window.activationFrom ? window.activationFrom.toISOString() : "cannot be determined"
+        }`,
       );
+      console.log(
+        `    elapsed for everyone     ${
+          window.blocked
+            ? "cannot be determined"
+            : window.elapsed
+              ? "yes"
+              : `no — ${window.daysRemaining} day(s) to wait`
+        }`,
+      );
+    }
+    if (window.blocked && window.count > 0) {
+      console.log(`    BLOCKED: ${window.blocked}`);
     }
 
     const blockers = [
       notAttempted > 0 ? `${notAttempted} never attempted` : null,
       failed > 0 ? `${failed} failed at send` : null,
-      !window.elapsed ? "the notice window has not elapsed for everyone" : null,
+      // Unresolved and bounced each need a person to look, not a rule to
+      // decide. A bounce means that recipient was never notified at all; an
+      // unresolved one means we cannot say either way.
+      unresolved > 0
+        ? `${unresolved} unresolved — accepted by the provider, delivery outcome unknown; reconcile with --record`
+        : null,
+      bounced > 0
+        ? `${bounced} bounced — those recipients have NOT been given notice; needs review`
+        : null,
+      window.blocked ? window.blocked : null,
+      !window.elapsed && !window.blocked
+        ? "the notice window has not elapsed for everyone"
+        : null,
     ].filter(Boolean);
     console.log("\n  ACTIVATION GATE");
     if (blockers.length === 0) {
-      console.log("    All three conditions met: every recipient attempted, none failed,");
-      console.log("    and the last person notified has had the full period.");
+      console.log("    Every recipient attempted, none failed, every one confirmed");
+      console.log("    delivered, and the last person notified has had the full period.");
     } else {
       console.log("    NOT PERMISSIBLE:");
       for (const b of blockers) console.log(`      - ${b}`);
