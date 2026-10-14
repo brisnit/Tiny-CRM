@@ -71,38 +71,82 @@ const PRODUCTION_FINGERPRINTS = new Map([
  * before any pattern.
  */
 const FIXTURE_RULES = [
+  // ---- Operator history -------------------------------------------------
+  //
+  // These rest on a DIFFERENT kind of evidence from the rules below, and the
+  // difference is worth keeping visible. Nothing in this repository mints
+  // these addresses: no script, no fixture, no seed. They exist because an
+  // operator created them during verification work, and the evidence is that
+  // person's own account of it, corroborated by the shape of the address.
+  //
+  // That is weaker than pointing at a line of code, so each one is matched
+  // exactly rather than by pattern, and anything merely resembling them is
+  // sent to AMBIGUOUS instead.
+  {
+    id: "operator-probe-domain",
+    evidence: "operator-history",
+    test: (e) => e.endsWith("@tinycrm-test.local"),
+    why:
+      "operator-created verification accounts. No code in this repository mints " +
+      "this domain — the nearest equivalents are perf-regression.ts and " +
+      "db-differences.ts, which both use @test.local — so this rests on the " +
+      "operator's account of the work, not on provenance in the tree. " +
+      ".local is a reserved name (RFC 6762) and cannot receive mail.",
+  },
+  {
+    id: "operator-plus-tag",
+    evidence: "operator-history",
+    test: (e) =>
+      ["brisnit+terms-check@gmail.com", "brisnit+readiness@gmail.com", "brisnit+rc@gmail.com"].includes(e),
+    why:
+      "plus-addressed tags on the owner's own address, created during terms, " +
+      "readiness and release-candidate verification. Gmail routes a plus tag to " +
+      "the same inbox, so these are the same person as brisnit@gmail.com, who " +
+      "is on the list in their own right — mailing the tags would mean four " +
+      "copies to one human. Matched exactly: any other brisnit+ tag goes to " +
+      "AMBIGUOUS rather than being swept up with them.",
+  },
+
+  // ---- Code provenance --------------------------------------------------
   {
     id: "seed-demo-owner",
+    evidence: "code-provenance",
     test: (e) => e === "owner@tinycrm.app",
     why: "created verbatim by prisma/seed/index.ts as the demo owner (Bris Whitaker, legacy_lifetime)",
   },
   {
     id: "seed-demo-free",
+    evidence: "code-provenance",
     test: (e) => e === "demo@tinycrm.app",
     why: "created verbatim by prisma/seed/index.ts as the free-plan demo account",
   },
   {
     id: "canary-local",
+    evidence: "code-provenance",
     test: (e) => e === "canary@localhost.test",
     why: "created by scripts/canary-local.ts for the local Outlook canary; refuses to run against anything but SQLite",
   },
   {
     id: "unit-fixture",
+    evidence: "code-provenance",
     test: (e) => e.endsWith("@test.local"),
     why: "tests/helpers/fixtures.ts mints <label>-<role>-<n>@test.local for every tenant it builds",
   },
   {
     id: "verify-seed",
+    evidence: "code-provenance",
     test: (e) => e.endsWith("@verify.local"),
     why: "prisma/seed/test-seed.ts mints <label>-<role>-<run>@verify.local",
   },
   {
     id: "reserved-test-tld",
+    evidence: "reserved-by-rfc",
     test: (e) => /@([a-z0-9-]+\.)*(test|invalid|localhost)$/.test(e),
     why: "RFC 2606 reserved TLD — cannot be registered, so no real person can receive mail here",
   },
   {
     id: "example-domain",
+    evidence: "reserved-by-rfc",
     test: (e) => /@([a-z0-9-]+\.)*example\.(com|net|org)$/.test(e),
     why: "RFC 2606 reserved example domain — reserved for documentation, never deliverable",
   },
@@ -118,26 +162,67 @@ function fingerprint(url) {
 
 const scrub = (t) => String(t).replace(/postgres(ql)?:\/\/\S+/g, "[connection string redacted]");
 
+/**
+ * A populated account is NOT evidence of a real person.
+ *
+ * An earlier version of this treated emptiness as the signal and, by
+ * implication, activity as reassurance. That is backwards for exactly the
+ * accounts that matter here: a performance probe creates a workspace and
+ * thousands of records, and a timezone probe signs in. Being busy is what a
+ * load test looks like.
+ *
+ * So the rules above run first and win regardless of how much data an account
+ * holds, and activity is never used to promote anything to INCLUDE. It is
+ * printed beside each account for a human to weigh, and nothing more.
+ */
 function classify(row) {
   const email = (row.email ?? "").trim().toLowerCase();
   for (const rule of FIXTURE_RULES) {
-    if (rule.test(email)) return { verdict: "EXCLUDE", rule: rule.id, why: rule.why };
+    if (rule.test(email)) {
+      return { verdict: "EXCLUDE", rule: rule.id, why: rule.why, evidence: rule.evidence };
+    }
   }
-  // Nothing in the code mints this address. Look for signs it is nonetheless
-  // not a person, and surface them rather than acting on them.
+
+  // A plus tag on an address that is itself on the list means one human would
+  // get several copies. Worth a look, never an automatic exclusion: a real
+  // customer may legitimately use plus-addressing to sign up.
+  const plus = /^([^+@]+)\+([^@]+)@(.+)$/.exec(email);
+  if (plus) {
+    return {
+      verdict: "AMBIGUOUS",
+      rule: "plus-tag-not-recognised",
+      evidence: "none",
+      why:
+        `plus-addressed as "${plus[2]}" on ${plus[1]}@${plus[3]}. Not one of the three ` +
+        `tags recorded as operator verification work, so it is not excluded — but if ` +
+        `${plus[1]}@${plus[3]} is also on the list, one person receives two copies.`,
+    };
+  }
+
+  // Nothing matched. Report what the account looks like WITHOUT drawing a
+  // conclusion from it in either direction.
   const signals = [];
   if (!row.last_seen_at) signals.push("never signed in");
   if (row.workspaces === 0) signals.push("owns no workspace");
   if (row.memberships === 0) signals.push("member of nothing");
   if (row.records === 0) signals.push("no CRM records");
-  if (signals.length >= 3) {
+  if (signals.length === 4) {
     return {
       verdict: "AMBIGUOUS",
-      rule: "no-provenance-no-activity",
-      why: `no code in this repository creates this address, but the account is empty: ${signals.join(", ")}`,
+      rule: "no-provenance-entirely-empty",
+      evidence: "none",
+      why:
+        `no rule matches this address and the account is entirely empty: ${signals.join(", ")}. ` +
+        `Emptiness is a reason to look, not a reason to exclude — a real person who ` +
+        `signed up and never returned looks exactly like this.`,
     };
   }
-  return { verdict: "INCLUDE", rule: "real", why: "a real address with no fixture provenance" };
+  return {
+    verdict: "INCLUDE",
+    rule: "real",
+    evidence: "none",
+    why: "no fixture rule matches this address",
+  };
 }
 
 async function main() {
@@ -185,17 +270,30 @@ async function main() {
     console.log(`    proposed EXCLUDE     ${String(buckets.EXCLUDE.length).padStart(3)}   fixtures, each with code provenance`);
     console.log(`    AMBIGUOUS            ${String(buckets.AMBIGUOUS.length).padStart(3)}   ${buckets.AMBIGUOUS.length ? "YOUR CALL — not excluded by this script" : ""}`);
 
-    console.log("\n  PROPOSED EXCLUSIONS, grouped by the code that creates them");
+    console.log("\n  PROPOSED EXCLUSIONS — the TEST-ACCOUNT REVIEW GROUP");
+    console.log("    Grouped by what the evidence actually is. 'code-provenance' points at");
+    console.log("    a line in this repository. 'operator-history' rests on the operator's");
+    console.log("    account of work they did, corroborated by the address shape — weaker,");
+    console.log("    and labelled so you can weigh it differently.");
     const byRule = new Map();
     for (const row of buckets.EXCLUDE) {
-      if (!byRule.has(row.rule)) byRule.set(row.rule, { why: row.why, rows: [] });
+      if (!byRule.has(row.rule)) byRule.set(row.rule, { why: row.why, evidence: row.evidence, rows: [] });
       byRule.get(row.rule).rows.push(row);
     }
     for (const [rule, group] of byRule) {
-      console.log(`\n    ${rule}  (${group.rows.length})`);
+      console.log(`\n    ${rule}  (${group.rows.length})   evidence: ${group.evidence}`);
       console.log(`      ${group.why}`);
-      for (const row of group.rows) console.log(`        ${row.email}`);
+      for (const row of group.rows) {
+        // Activity is printed, never acted on: a perf probe is busy by design.
+        const activity =
+          `${row.workspaces}w ${row.memberships}m ${row.records}r` +
+          `${row.last_seen_at ? " signed in" : " never signed in"}`;
+        console.log(`        ${row.email.padEnd(44)} ${activity}`);
+      }
     }
+    console.log("\n      Activity counts above are shown, not used. A populated account is");
+    console.log("      not evidence of a real person — a performance probe creates a");
+    console.log("      workspace and thousands of records, and a timezone probe signs in.");
 
     if (buckets.AMBIGUOUS.length) {
       console.log("\n  AMBIGUOUS — decide each of these yourself");
@@ -216,6 +314,11 @@ async function main() {
       ].filter(Boolean);
       console.log(`    ${row.email.padEnd(38)} ${row.plan.padEnd(16)} ${flags.join(", ")}`);
     }
+
+    console.log("\n  HELD IN unless you say otherwise");
+    console.log("    Any address on an ordinary consumer or business domain stays in the");
+    console.log("    recipient list unless you confirm it is a test. designbysmith@gmail.com");
+    console.log("    is in that position: no rule matches it, so it is a recipient.");
 
     const unverifiedIncluded = buckets.INCLUDE.filter((r) => !r.verified).length;
     console.log("\n  NOT USED AS GROUNDS FOR EXCLUSION");

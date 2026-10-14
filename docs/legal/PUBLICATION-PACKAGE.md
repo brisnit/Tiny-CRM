@@ -286,6 +286,61 @@ membership and no records, is reported as **AMBIGUOUS** with those signals
 listed — not excluded. Three weak signals are a reason for a person to look,
 not for a script to decide.
 
+### Revised after your review of the first run
+
+Three corrections, all from what you found:
+
+**All nine `tinycrm-test.local` accounts are in the test-account group**, not
+just the five perf-probe and tzprobe ones. The rule matches the domain, so
+every account on it is grouped regardless of what it contains.
+
+**Populated accounts are no longer treated as evidence of a real person.** An
+earlier version used emptiness as a signal, which implied the reverse — and
+that is backwards for exactly these accounts: a performance probe creates a
+workspace and thousands of records, and a timezone probe signs in. Being busy
+is what a load test looks like. Activity counts are now *printed beside* each
+account for you to weigh, and never used to promote anything to INCLUDE.
+
+**The three plus-tagged addresses are proposed for exclusion on
+operator-history evidence** — `brisnit+terms-check`, `brisnit+readiness`,
+`brisnit+rc`. Gmail routes a plus tag to the same inbox, so these are the same
+person as `brisnit@gmail.com`, who is on the list in their own right; mailing
+the tags would send one human four copies.
+
+### Two kinds of evidence, labelled apart
+
+This matters enough to show in the output rather than blur:
+
+| Class | What it means | Rules |
+| --- | --- | --- |
+| `code-provenance` | A line in this repository mints the address | the two `tinycrm.app` demo accounts, `canary-local`, `@test.local`, `@verify.local` |
+| `reserved-by-rfc` | The domain cannot be registered, so cannot receive mail | `.test` / `.invalid` / `.localhost`, `example.com/net/org` |
+| `operator-history` | **No code mints these.** They rest on your account of work you did, corroborated by the address shape | `tinycrm-test.local`, the three plus tags |
+
+I checked before writing those rules: nothing in the tree creates
+`tinycrm-test.local`, `perf-probe` or `tzprobe`. The nearest equivalents —
+`perf-regression.ts` and `db-differences.ts` — both use `@test.local`. So the
+third class is genuinely weaker than the first two, and saying so is the point
+of separating them.
+
+The plus-tag rule therefore matches the three addresses **exactly**. Any other
+`brisnit+` tag goes to AMBIGUOUS rather than being swept up, because a real
+customer may legitimately use plus-addressing to sign up.
+
+### designbysmith@gmail.com stays in
+
+No rule matches it, so it is a recipient. The output says so explicitly, under
+a heading that states the default: an address on an ordinary consumer or
+business domain stays in unless you confirm it is a test. It will not move
+without you saying so.
+
+### The rules are tested
+
+Sixteen addresses, including the ones that must **not** match: `brisnit@gmail.com`
+(the owner's real account), `brisnit+newsletter@gmail.com` (an unrecognised
+tag), `designbysmith@gmail.com`, and the two other real accounts. All sixteen
+behave as specified.
+
 ### Expected shape, to be confirmed by running it
 
 From your 17-on-test-domains figure, most of those should land under
