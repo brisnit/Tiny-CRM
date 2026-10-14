@@ -349,10 +349,17 @@ I wrote the rule from the shorthand in the request rather than from the
 addresses themselves, so `includes()` never matched and all three fell through
 to AMBIGUOUS. That is the safe direction to fail, and still wrong.
 
-Now a pinned pattern: the tag must be one of the three known names and the
-suffix exactly eight hex characters, the shape `randomUUID().slice(0, 8)`
-produces. `brisnit+rc-zzzzzzzz@gmail.com`, `brisnit+newsletter@gmail.com` and
-`brisnit+rc-6aac145f@outlook.com` all still stay in — tested.
+The first fix was a pattern — a known tag plus eight hex characters — and
+that was wrong in the other direction. A pattern in an exclusion rule is a
+standing instruction to drop future unknowns: it would have matched an address
+created tomorrow that nobody had confirmed.
+
+**It is now an exact allowlist of the three confirmed addresses**, suffixes
+included, and nothing else. A bare variant, the same tag with a different
+suffix, or a new tag of the same shape all go to AMBIGUOUS for review rather
+than being excluded automatically. A fourth test account will need confirming
+individually, which is the point rather than an inconvenience: the review loop
+is cheap, and dropping a real customer from a legal notice is not.
 
 **The header comment contradicted the classification.** It said every account
 "is matched against provenance the code actually creates" and listed only the

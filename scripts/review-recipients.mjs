@@ -110,27 +110,40 @@ const FIXTURE_RULES = [
   {
     id: "operator-plus-tag",
     evidence: "operator-history",
-    // The real addresses carry a run suffix — `terms-check-32ff0980`, not
-    // `terms-check`. The first version of this rule listed the bare tags and
-    // matched nothing, because it was written from a description of the
-    // addresses rather than from the addresses themselves. All three fell
-    // through to AMBIGUOUS, which is the safe direction to fail but still
-    // wrong.
-    //
-    // The tag is still pinned to the three known names, and the suffix must
-    // be exactly eight hex characters — the shape the verification scripts
-    // produce (`randomUUID().slice(0, 8)`). The suffix is optional so a bare
-    // variant is caught too. Anything else plus-addressed still goes to
-    // AMBIGUOUS.
-    test: (e) => /^brisnit\+(terms-check|readiness|rc)(-[0-9a-f]{8})?@gmail\.com$/.test(e),
+    /**
+     * An exact allowlist of three confirmed addresses. Not a pattern.
+     *
+     * This rule has now been wrong twice in opposite directions, and the
+     * second mistake is the instructive one.
+     *
+     * First it listed the bare tags and matched nothing, because it was
+     * written from a description of the addresses instead of the addresses.
+     * The fix was a pattern — tag from a known set, suffix of eight hex —
+     * which matched the three real ones and also, by construction, anything
+     * ELSE that happened to fit that shape. Including an address created
+     * tomorrow that nobody has confirmed is a test.
+     *
+     * A pattern in an exclusion rule is a standing instruction to drop
+     * future unknowns. These three were confirmed individually by the person
+     * who created them, so the rule records exactly those three and nothing
+     * else. A fourth will need confirming too, and that is the point rather
+     * than an inconvenience: the review loop is cheap and dropping a real
+     * customer from a legal notice is not.
+     */
+    test: (e) =>
+      new Set([
+        "brisnit+terms-check-32ff0980@gmail.com",
+        "brisnit+readiness-892dec8c@gmail.com",
+        "brisnit+rc-6aac145f@gmail.com",
+      ]).has(e),
     why:
-      "plus-addressed tags on the owner's own address, created during terms, " +
-      "readiness and release-candidate verification, each with a run suffix. " +
-      "Gmail routes a plus tag to the same inbox, so these are the same person " +
-      "as brisnit@gmail.com, who is on the list in their own right — mailing " +
-      "the tags would mean four copies to one human. The tag names are pinned " +
-      "and the suffix must be eight hex characters; any other brisnit+ tag " +
-      "goes to AMBIGUOUS rather than being swept up with them.",
+      "three confirmed operator verification accounts, listed by exact address " +
+      "including their run suffixes. Gmail routes a plus tag to the same inbox, " +
+      "so these are the same person as brisnit@gmail.com, who is on the list in " +
+      "their own right — mailing the tags would mean four copies to one human. " +
+      "Listed exactly rather than matched by pattern: a bare variant, a " +
+      "different suffix, or a new tag of the same shape all go to AMBIGUOUS for " +
+      "review rather than being excluded automatically.",
   },
 
   // ---- Code provenance --------------------------------------------------
@@ -220,8 +233,11 @@ function classify(row) {
       evidence: "none",
       why:
         `plus-addressed as "${plus[2]}" on ${plus[1]}@${plus[3]}. Not one of the three ` +
-        `tags recorded as operator verification work, so it is not excluded — but if ` +
-        `${plus[1]}@${plus[3]} is also on the list, one person receives two copies.`,
+        `exact addresses confirmed as operator verification accounts, so it is NOT ` +
+        `excluded — even if it resembles them. A bare variant of a known tag, a ` +
+        `different suffix, or a new tag all land here on purpose. If ` +
+        `${plus[1]}@${plus[3]} is also on the list, one person would receive two ` +
+        `copies, which is worth your decision rather than a rule's.`,
     };
   }
 
