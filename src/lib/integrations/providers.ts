@@ -87,8 +87,14 @@ export type ProviderConfig = {
  * `/organizations` with the `tid` recorded per connection rather than compared
  * against one expected value. That is a deliberate later change, not a default.
  */
-function microsoftAuthority(): string {
+/** `common` is not supported — see the note on MICROSOFT_TENANT_ID in env.ts. */
+export function microsoftTenantUsable(): boolean {
   const tenant = env.microsoftTenantId;
+  return !!tenant && tenant.toLowerCase() !== "common";
+}
+
+function microsoftAuthority(): string {
+  const tenant = microsoftTenantUsable() ? env.microsoftTenantId : undefined;
   if (!tenant) {
     // Not an assertion failure: with no tenant configured the Microsoft
     // connectors are unconfigured, and `isConfigured` below is what callers
@@ -159,7 +165,24 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     revokeUrl: GOOGLE_REVOKE,
     scopes: ["https://www.googleapis.com/auth/calendar.events.readonly"],
     pkce: true,
-    availability: "offered",
+    /**
+     * Blocked for launch, and the reason is ours rather than Google's.
+     *
+     * The import path is Microsoft Graph throughout: `sync/import.ts`
+     * consumes a `GraphMessage` and writes `provider: "outlook"`, and
+     * nothing in `sync/schedule.ts` or `sync/eligibility.ts` filters by
+     * vendor. A Google connection would complete its handshake and then be
+     * handed to the Graph importer with a Google token — a connection that
+     * looks established and imports nothing.
+     *
+     * Offering it was the defect. Blocking it is the one-line fix; building
+     * a Google importer is a separate piece of work and not in this scope.
+     */
+    availability: "blocked",
+    blockedReason:
+      "Google Calendar is not available yet. Tiny CRM's importer currently " +
+      "speaks only to Microsoft Graph, so a Google connection could be made " +
+      "and would then import nothing.",
   },
   gmail: {
     id: "gmail",
@@ -209,7 +232,7 @@ export function isOfferable(provider: ProviderConfig): boolean {
  */
 export function isConfigured(provider: ProviderConfig): boolean {
   if (provider.vendor === "microsoft") {
-    return Boolean(env.microsoftClientId && env.microsoftTenantId && env.microsoftClientSecret);
+    return Boolean(env.microsoftClientId && microsoftTenantUsable() && env.microsoftClientSecret);
   }
   return Boolean(env.googleClientId && env.googleClientSecret);
 }

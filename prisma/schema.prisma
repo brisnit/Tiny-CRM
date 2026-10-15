@@ -99,8 +99,8 @@ model User {
   notifications       Notification[]
   savedViews          SavedView[]
   integrations        Integration[]
-  ownedEmails         EmailMessage[]  @relation("EmailOwner")
-  ownedEvents         CalendarEvent[] @relation("EventOwner")
+  ownedEmails         EmailMessage[]        @relation("EmailOwner")
+  ownedEvents         CalendarEvent[]       @relation("EventOwner")
   aiMessages          AiMessage[]
   usage               UsageCounter[]
   auditEvents         AuditLog[]            @relation("AuditActor")
@@ -1374,15 +1374,15 @@ model Notification {
 // ---------------------------------------------------------------------------
 
 model Integration {
-  id           String    @id @default(cuid())
-  workspaceId  String
+  id                  String    @id @default(cuid())
+  workspaceId         String
   /// The connecting person. A connection belongs to them, not to the workspace:
   /// see the RLS policy, which scopes this table to `app_user_id()` rather than
   /// to workspace membership. A teammate must not be able to read somebody
   /// else's mailbox connection, let alone its credentials.
-  userId       String
+  userId              String
   /// gmail | outlook | google_calendar | outlook_calendar
-  provider     String
+  provider            String
   /// connected | disconnected | error | reauth_required | mock
   ///
   /// `mock` is the seeded demonstration data and means exactly that; it is
@@ -1390,29 +1390,39 @@ model Integration {
   /// `reauth_required` is distinct from `error`: the token is gone or the grant
   /// was revoked, so the remedy is the customer reconnecting rather than us
   /// retrying.
-  status       String    @default("disconnected")
-  accountEmail String?
-  scopes       String?
+  status              String    @default("disconnected")
+  accountEmail        String?
+  /**
+   * The Microsoft tenant that issued this connection's tokens.
+   * Recorded on a multi-tenant authority, where the `tid` claim is the only
+   * thing that says which organisation a token came from. Once recorded it
+   * is enforced: a later token for the same connection carrying a different
+   * tenant is refused rather than accepted as a re-consent. Null for Google
+   * and for connections made under a pinned single-tenant authority, where
+   * the configured tenant is the answer.
+   */
+  providerTenantId    String?
+  scopes              String?
   /// Encrypted at rest by src/lib/crypto.ts, purpose `integration-credentials`,
   /// before it ever reaches this column. Holds the access token, the refresh
   /// token and the grant's own metadata as one encrypted JSON document.
-  credentials  String?
+  credentials         String?
   /// When the access token expires, in clear, so a refresh can be scheduled
   /// without decrypting anything. Not a secret: a timestamp grants nothing.
-  tokenExpiresAt DateTime?
-  connectedAt  DateTime?
-  disconnectedAt DateTime?
-  lastSyncAt   DateTime?
-  syncCursor   String?
+  tokenExpiresAt      DateTime?
+  connectedAt         DateTime?
+  disconnectedAt      DateTime?
+  lastSyncAt          DateTime?
+  syncCursor          String?
   /// idle | backfilling | syncing
-  syncState    String    @default("idle")
+  syncState           String    @default("idle")
   /// Set when the bounded initial import has finished, so incremental sync
   /// knows it may rely on the cursor.
   backfillCompletedAt DateTime?
   /// How far back the import actually reached, which is not always as far as
   /// the window asks. Shown to the customer so "imported" never means more
   /// than it did.
-  importedThrough DateTime?
+  importedThrough     DateTime?
   /// True when the page cap stopped the backfill before it reached the end of
   /// the window.
   ///
@@ -1421,13 +1431,13 @@ model Integration {
   /// this says whether there is more we deliberately did not fetch. Silently
   /// skipping the remainder and calling the import finished is the failure
   /// this prevents.
-  backfillTruncated Boolean @default(false)
+  backfillTruncated   Boolean   @default(false)
   /// Pages fetched in the current backfill, against the cap.
-  pagesImported Int @default(0)
+  pagesImported       Int       @default(0)
   /// The last failure, as something a customer can act on. Never a provider
   /// response body, a token or a URL carrying one.
-  lastError    String?
-  lastErrorAt  DateTime?
+  lastError           String?
+  lastErrorAt         DateTime?
   /// Consecutive automatic recovery attempts since the last successful pass.
   ///
   /// A sync chain can stop without anything being wrong with the connection:
@@ -1442,7 +1452,7 @@ model Integration {
   /// not having a bad day; it needs a person. At the cap the scheduler stops
   /// and the interface says so, with something to click. Reset to zero by any
   /// pass that completes, and by the customer asking to retry.
-  recoveryAttempts Int @default(0)
+  recoveryAttempts    Int       @default(0)
   /// Bumped by every connect, disconnect and reconnect.
   ///
   /// This is how disconnecting stops work that is already queued. A sync job
@@ -1452,7 +1462,7 @@ model Integration {
   /// has already removed. Cancelling queue rows alone cannot achieve that — a
   /// claimed job is already running, and `DomainEvent` rows are not the only
   /// place a retry can live.
-  syncGeneration Int     @default(0)
+  syncGeneration      Int       @default(0)
 
   createdAt DateTime @default(now())
   /// `@default(now())` as well as `@updatedAt`, because this column is being
@@ -1516,18 +1526,18 @@ model EmailMessage {
   /// quietly reclassify imported mail as ordinary CRM data — and the one thing
   /// that must never happen to imported mail is becoming eligible for AI
   /// context by accident.
-  source    String  @default("seed")
+  source        String    @default("seed")
   /// The person whose mailbox this came from. Null for seeded data.
-  ownerUserId String?
+  ownerUserId   String?
   /// private | workspace
   ///
   /// Imported mail starts `private`: visible to `ownerUserId` alone, never to
   /// the rest of the workspace. Workspace membership is not consent to read a
   /// colleague's inbox. It becomes `workspace` only when that person
   /// deliberately shares the thread.
-  visibility String  @default("workspace")
-  sharedAt   DateTime?
-  sharedById String?
+  visibility    String    @default("workspace")
+  sharedAt      DateTime?
+  sharedById    String?
 
   createdAt DateTime @default(now())
 
@@ -1603,12 +1613,12 @@ model CalendarEvent {
   /// See the same fields on EmailMessage for why each of these exists.
   integrationId String?
   /// seed | imported — immutable provenance, not derived from integrationId.
-  source      String  @default("seed")
-  ownerUserId String?
+  source        String    @default("seed")
+  ownerUserId   String?
   /// private | workspace. Imported events start private to `ownerUserId`.
-  visibility  String  @default("workspace")
-  sharedAt    DateTime?
-  sharedById  String?
+  visibility    String    @default("workspace")
+  sharedAt      DateTime?
+  sharedById    String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

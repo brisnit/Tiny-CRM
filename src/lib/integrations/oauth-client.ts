@@ -146,6 +146,11 @@ export function validateIdTokenClaims(input: {
   claims: IdTokenClaims | null;
   /** The nonce sent in the authorisation request, where the vendor echoes it. */
   expectedNonce: string;
+  /**
+   * The tenant this connection has used before, on a multi-tenant authority.
+   * Null on a first connection; ignored when the authority is pinned.
+   */
+  expectedTenant?: string | null;
   now?: Date;
 }): void {
   const { provider, claims } = input;
@@ -230,22 +235,37 @@ export function validateIdTokenClaims(input: {
   }
 
   // --- Tenant and issuer --------------------------------------------------
-  assertTenant(provider, claims);
+  assertTenant(provider, claims, { expectedTenant: input.expectedTenant });
 }
 
 /**
- * Refuses a token that was not minted by the tenant we are configured for.
+ * Refuses a token whose issuing tenant is not the one this connection may use.
  *
- * The check this exists for: a single-tenant app on a tenant-specific
- * authority should only ever see its own tenant, so a `tid` that disagrees
- * means either a misconfiguration or something stranger, and in both cases
- * importing a stranger's mailbox is the wrong response to "the handshake
- * completed". `/common` would have left nothing to compare against, which is
- * the real reason it was the wrong authority.
+ * Two configurations, one rule each:
+ *
+ *   **Pinned** (MICROSOFT_TENANT_ID is a GUID). Every token's `tid` must
+ *   equal it. A disagreement means a misconfiguration or something stranger,
+ *   and importing a stranger's mailbox is the wrong response to "the
+ *   handshake completed".
+ *
+ *   **Multi-tenant** (`organizations`). There is no single expected value,
+ *   so the rule becomes per connection: whichever tenant issued the first
+ *   token is recorded, and every later token for that connection must carry
+ *   the same one. `expectedTenant` is that recorded value.
+ *
+ * What does NOT change between them: a token with no `tid` is always
+ * refused. Widening the authority must not widen this into "accept anything
+ * that completes" — the `tid` is the only thing in the response that says
+ * which organisation the mailbox belongs to, and a connection whose tenant
+ * is unknown is exactly the one not to import.
  *
  * Google issues no `tid`, and its issuer is fixed, so that is checked instead.
  */
-export function assertTenant(provider: ProviderConfig, claims: IdTokenClaims | null): void {
+export function assertTenant(
+  provider: ProviderConfig,
+  claims: IdTokenClaims | null,
+  options: { expectedTenant?: string | null } = {},
+): void {
   if (provider.vendor === "google") {
     const issuer = claims?.iss ?? "";
     if (issuer !== "https://accounts.google.com" && issuer !== "accounts.google.com") {
@@ -258,8 +278,13 @@ export function assertTenant(provider: ProviderConfig, claims: IdTokenClaims | n
     return;
   }
 
-  const expected = expectedMicrosoftTenant();
-  if (!expected) {
+  // Pinned: the configured GUID. Multi-tenant: whatever this connection
+  // recorded the first time, or nothing at all on a first connection.
+  const expected = env.microsoftMultiTenant
+    ? (options.expectedTenant ?? null)
+    : expectedMicrosoftTenant();
+
+  if (!expected && !env.microsoftMultiTenant) {
     throw new AppError("internal", "That connection is not available right now.", {
       internal: "MICROSOFT_TENANT_ID is not set, so the returned tenant cannot be validated",
     });
@@ -271,21 +296,25 @@ export function assertTenant(provider: ProviderConfig, claims: IdTokenClaims | n
       "the token response carried no id_token tid claim, so the tenant could not be validated",
     );
   }
-  if (claims.tid.toLowerCase() !== expected.toLowerCase()) {
+  if (expected && claims.tid.toLowerCase() !== expected.toLowerCase()) {
     throw new OAuthExchangeError(
       "That account belongs to a different organisation.",
       "tenant_mismatch",
-      `token tid ${claims.tid} is not the configured tenant ${expected}`,
+      `token tid ${claims.tid} is not the expected tenant ${expected}`,
     );
   }
-  // The issuer must name the same tenant. A `tid` claim alone could in
-  // principle be carried by a token from elsewhere; the issuer is what ties the
-  // document to the authority we asked.
-  if (claims.iss && !claims.iss.includes(expected)) {
+  // The issuer must name the tenant the token claims to come from. A `tid`
+  // alone could in principle be carried by a token from elsewhere; the issuer
+  // is what ties the document to the authority we asked. On a multi-tenant
+  // first connection there is no recorded tenant yet, so the token's own
+  // `tid` is what the issuer is checked against — which still catches a
+  // token whose two halves disagree.
+  const mustName = expected ?? claims.tid;
+  if (claims.iss && !claims.iss.includes(mustName)) {
     throw new OAuthExchangeError(
       "That connection could not be verified. Please try again.",
       "issuer_mismatch",
-      `token issuer ${claims.iss} does not name the configured tenant`,
+      `token issuer ${claims.iss} does not name tenant ${mustName}`,
     );
   }
 }

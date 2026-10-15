@@ -191,10 +191,29 @@ export async function completeConnection(input: {
     transport: input.transport,
   });
 
+  /**
+   * Looked up BEFORE the token is validated, because on a multi-tenant
+   * authority the validation needs to know which tenant this connection has
+   * used before. Validating first and checking the tenant afterwards would
+   * mean the window where a token from another organisation had already
+   * been accepted.
+   */
+  const existing = await db.integration.findUnique({
+    where: {
+      workspaceId_userId_provider: {
+        workspaceId: state.workspaceId,
+        userId: state.userId,
+        provider: input.provider.id,
+      },
+    },
+    select: { id: true, syncGeneration: true, providerTenantId: true },
+  });
+
   validateIdTokenClaims({
     provider: input.provider,
     claims: tokens.claims,
     expectedNonce: state.nonce,
+    expectedTenant: existing?.providerTenantId ?? null,
   });
 
   const missing = missingScopes(input.provider, tokens.scope);
@@ -214,20 +233,15 @@ export async function completeConnection(input: {
   }
 
   const accountEmail = accountEmailFrom(tokens.claims);
-  const existing = await db.integration.findUnique({
-    where: {
-      workspaceId_userId_provider: {
-        workspaceId: state.workspaceId,
-        userId: state.userId,
-        provider: input.provider.id,
-      },
-    },
-    select: { id: true, syncGeneration: true },
-  });
 
   const data = {
     status: "connected",
     accountEmail,
+    // Recorded on the first connection and never changed afterwards: the
+    // check above refuses a token from a different tenant, so reaching here
+    // means this is either the same tenant or the first one. Null for Google,
+    // which issues no `tid`.
+    providerTenantId: tokens.claims?.tid ?? existing?.providerTenantId ?? null,
     scopes: tokens.scope,
     credentials: sealTokens(tokens),
     tokenExpiresAt: tokens.expiresAt,

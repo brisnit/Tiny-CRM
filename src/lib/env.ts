@@ -188,13 +188,27 @@ export const env = {
    * simply unconfigured and the UI says so, rather than offering a Connect
    * button that dead-ends at a consent screen.
    *
-   * `microsoftTenantId` is **not** cosmetic and `common` is not a substitute.
-   * The canary registration is single-tenant, so the authority has to be the
-   * tenant-specific one — `common` would be refused for anyone outside the
-   * tenant (AADSTS50194) and, for anyone inside it, would mean we never stated
-   * which tenant we expected. It is also what the returned token's `tid` claim
-   * is checked against, so a token minted by a different tenant is rejected
-   * rather than trusted because the handshake completed.
+   * `microsoftTenantId` IS the authority segment, and it carries the single
+   * most consequential decision in this connector:
+   *
+   *   a GUID            pin to that one tenant. Every token's `tid` must
+   *                     equal it. This is the canary configuration.
+   *   "organizations"   any work or school tenant may connect. Each
+   *                     connection records the tenant that issued it, and
+   *                     thereafter must keep presenting the same one.
+   *
+   * It is deliberately the same string Microsoft puts in the authority URL,
+   * so there is one value to reason about rather than a flag that has to
+   * agree with a URL.
+   *
+   * `common` is NOT accepted. It admits personal Microsoft accounts
+   * alongside work ones, and a personal account's Graph surface differs
+   * enough that "connected" would not mean the same thing for the two. The
+   * value is validated below rather than passed through.
+   *
+   * Unset means the Microsoft connectors are unconfigured and the UI says
+   * so, rather than offering a Connect button that dead-ends at a consent
+   * screen.
    */
   /**
    * Google OAuth client, for the Gmail and Google Calendar connectors. Unset
@@ -206,6 +220,8 @@ export const env = {
 
   microsoftClientId: optional("MICROSOFT_CLIENT_ID"),
   microsoftTenantId: optional("MICROSOFT_TENANT_ID"),
+  /** True when any work/school tenant may connect. See the note above. */
+  microsoftMultiTenant: optional("MICROSOFT_TENANT_ID")?.toLowerCase() === "organizations",
   microsoftClientSecret: optional("MICROSOFT_CLIENT_SECRET"),
 
   logLevel: (optional("LOG_LEVEL") ?? (isProduction ? "info" : "debug")) as
@@ -486,6 +502,24 @@ export function productionWarnings(): string[] {
   }
 
   if (isProduction) {
+    if (env.microsoftTenantId && env.microsoftTenantId.toLowerCase() === "common") {
+      /**
+       * `common` admits personal Microsoft accounts alongside work ones, and
+       * a personal account's Graph surface differs enough that "connected"
+       * would not mean the same thing for the two.
+       *
+       * A warning here and not a boot failure: taking the whole site down
+       * over an integration setting is the mistake the APP_URL note above
+       * records. The connector itself treats `common` as unconfigured, so
+       * the effect is that Outlook is not offered — nobody reaches a consent
+       * screen that leads somewhere we cannot support.
+       */
+      warnings.push(
+        "MICROSOFT_TENANT_ID=common is not supported, so the Outlook connectors are " +
+          "switched off. Use a tenant GUID to pin to one organisation, or " +
+          "`organizations` for any work or school tenant.",
+      );
+    }
     if (!env.billingWebhookSecret) {
       warnings.push("BILLING_WEBHOOK_SECRET is not set — plan changes cannot be applied by a provider.");
     }
