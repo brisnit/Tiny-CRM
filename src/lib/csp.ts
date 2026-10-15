@@ -100,6 +100,20 @@ function storageOrigin(): string | null {
   }
 }
 
+/**
+ * The origins a Connect button's form submission is allowed to end up at.
+ *
+ * Deliberately a literal list here rather than derived from
+ * `src/lib/integrations/providers.ts`: that module is `server-only` and reads
+ * `env`, and this one is imported by the proxy (edge runtime) and by
+ * next.config.ts. A test compares the two instead, which catches drift without
+ * dragging a server module into the edge bundle.
+ */
+export const OAUTH_AUTHORIZE_ORIGINS = [
+  "https://login.microsoftonline.com",
+  "https://accounts.google.com",
+] as const;
+
 export function contentSecurityPolicy(nonce: string): string {
   return [
     "default-src 'self'",
@@ -131,7 +145,30 @@ export function contentSecurityPolicy(nonce: string): string {
     // actually configured: with `STORAGE_DRIVER` unset this is byte-for-byte
     // the policy that shipped before.
     `connect-src 'self'${storageOrigin() ? ` ${storageOrigin()}` : ""}`,
-    "form-action 'self'",
+    // ---------------------------------------------------------------------
+    // `form-action` has to name the OAuth authorisation servers.
+    //
+    // The Connect button is a form that POSTs to our own origin, and the route
+    // answers with a 303 to the provider's consent screen. `form-action`
+    // applies **across redirects**, so `'self'` alone permits the POST and then
+    // rejects the redirect — and the way that fails is the problem:
+    //
+    //   - the request never reaches the server, so there is nothing in any log;
+    //   - Chrome's console message names the *form's action URL*, which is
+    //     same-origin, so it reads as though a same-origin POST was refused;
+    //   - the page simply does nothing.
+    //
+    // Found by clicking the button in a real browser and then proving it with a
+    // second form that posted same-origin without redirecting, which was
+    // allowed. Reasoning about the policy would not have got there: the
+    // evidence pointed at the wrong URL.
+    //
+    // Two exact origins, never a wildcard, and no path — `form-action` matches
+    // on origin. `tests/unit/csp-oauth-origins.test.ts` asserts this list still
+    // covers every authorisation endpoint in PROVIDERS, so adding a connector
+    // without widening the policy fails rather than silently not working.
+    // ---------------------------------------------------------------------
+    `form-action 'self' ${OAUTH_AUTHORIZE_ORIGINS.join(" ")}`,
     "frame-ancestors 'none'",
     "frame-src 'none'",
     "object-src 'none'",

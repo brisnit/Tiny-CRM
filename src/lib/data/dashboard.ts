@@ -1,4 +1,5 @@
 import "server-only";
+import { visibleToUser } from "@/lib/integrations/visibility";
 import { POST_SUBMISSION_STATUSES, TERMINAL_SUBMISSION_STATUSES } from "@/lib/enums";
 
 import type { ReadScope } from "@/lib/auth/access";
@@ -147,7 +148,9 @@ export async function getDashboard(read: ReadScope, projectFocus: string | null)
         take: 12,
       }),
       db.calendarEvent.findMany({
-        where: { ...where, startAt: { gte: now, lte: in7 } },
+        // Imported events are private to their owner — see
+        // src/lib/integrations/visibility.ts.
+        where: { ...where, startAt: { gte: now, lte: in7 }, ...visibleToUser(read.userId) },
         select: {
           id: true, title: true, startAt: true, endAt: true, meetingUrl: true,
           contact: { select: { id: true, fullName: true } },

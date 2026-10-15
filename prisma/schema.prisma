@@ -99,6 +99,8 @@ model User {
   notifications       Notification[]
   savedViews          SavedView[]
   integrations        Integration[]
+  ownedEmails         EmailMessage[]        @relation("EmailOwner")
+  ownedEvents         CalendarEvent[]       @relation("EventOwner")
   aiMessages          AiMessage[]
   usage               UsageCounter[]
   auditEvents         AuditLog[]            @relation("AuditActor")
@@ -1372,25 +1374,112 @@ model Notification {
 // ---------------------------------------------------------------------------
 
 model Integration {
-  id           String    @id @default(cuid())
-  workspaceId  String
-  userId       String
+  id                  String    @id @default(cuid())
+  workspaceId         String
+  /// The connecting person. A connection belongs to them, not to the workspace:
+  /// see the RLS policy, which scopes this table to `app_user_id()` rather than
+  /// to workspace membership. A teammate must not be able to read somebody
+  /// else's mailbox connection, let alone its credentials.
+  userId              String
   /// gmail | outlook | google_calendar | outlook_calendar
-  provider     String
-  /// connected | disconnected | error | mock
-  status       String    @default("disconnected")
-  accountEmail String?
-  scopes       String?
-  /// Encrypted at rest by src/lib/crypto.ts before it ever reaches this column.
-  credentials  String?
-  connectedAt  DateTime?
-  lastSyncAt   DateTime?
-  syncCursor   String?
+  provider            String
+  /// connected | disconnected | error | reauth_required | mock
+  ///
+  /// `mock` is the seeded demonstration data and means exactly that; it is
+  /// never written by a real connection and the UI must not render it as one.
+  /// `reauth_required` is distinct from `error`: the token is gone or the grant
+  /// was revoked, so the remedy is the customer reconnecting rather than us
+  /// retrying.
+  status              String    @default("disconnected")
+  accountEmail        String?
+  /**
+   * The Microsoft tenant that issued this connection's tokens.
+   * Recorded on a multi-tenant authority, where the `tid` claim is the only
+   * thing that says which organisation a token came from. Once recorded it
+   * is enforced: a later token for the same connection carrying a different
+   * tenant is refused rather than accepted as a re-consent. Null for Google
+   * and for connections made under a pinned single-tenant authority, where
+   * the configured tenant is the answer.
+   */
+  providerTenantId    String?
+  scopes              String?
+  /// Encrypted at rest by src/lib/crypto.ts, purpose `integration-credentials`,
+  /// before it ever reaches this column. Holds the access token, the refresh
+  /// token and the grant's own metadata as one encrypted JSON document.
+  credentials         String?
+  /// When the access token expires, in clear, so a refresh can be scheduled
+  /// without decrypting anything. Not a secret: a timestamp grants nothing.
+  tokenExpiresAt      DateTime?
+  connectedAt         DateTime?
+  disconnectedAt      DateTime?
+  lastSyncAt          DateTime?
+  syncCursor          String?
+  /// idle | backfilling | syncing
+  syncState           String    @default("idle")
+  /// Set when the bounded initial import has finished, so incremental sync
+  /// knows it may rely on the cursor.
+  backfillCompletedAt DateTime?
+  /// How far back the import actually reached, which is not always as far as
+  /// the window asks. Shown to the customer so "imported" never means more
+  /// than it did.
+  importedThrough     DateTime?
+  /// True when the page cap stopped the backfill before it reached the end of
+  /// the window.
+  ///
+  /// A separate flag rather than an inference from `importedThrough`, because
+  /// the two answer different questions: that column says how far we got, and
+  /// this says whether there is more we deliberately did not fetch. Silently
+  /// skipping the remainder and calling the import finished is the failure
+  /// this prevents.
+  backfillTruncated   Boolean   @default(false)
+  /// Pages fetched in the current backfill, against the cap.
+  pagesImported       Int       @default(0)
+  /// The last failure, as something a customer can act on. Never a provider
+  /// response body, a token or a URL carrying one.
+  lastError           String?
+  lastErrorAt         DateTime?
+  /// Consecutive automatic recovery attempts since the last successful pass.
+  ///
+  /// A sync chain can stop without anything being wrong with the connection:
+  /// a job dead-letters after exhausting its attempts, or a worker dies
+  /// between marking the row `syncing` and running the page. The row is then
+  /// left mid-chain and `startIncremental` refuses anything that is not
+  /// `idle`, so nothing would ever schedule it again — a connection that has
+  /// silently stopped syncing while still reporting "Connected".
+  ///
+  /// The scheduler recovers those, and counts the attempts here so that
+  /// recovery is bounded. A connection that fails this many times in a row is
+  /// not having a bad day; it needs a person. At the cap the scheduler stops
+  /// and the interface says so, with something to click. Reset to zero by any
+  /// pass that completes, and by the customer asking to retry.
+  recoveryAttempts    Int       @default(0)
+  /// Bumped by every connect, disconnect and reconnect.
+  ///
+  /// This is how disconnecting stops work that is already queued. A sync job
+  /// carries the generation it was enqueued under and exits if it no longer
+  /// matches, so a job that was mid-flight, or sitting in the queue, or being
+  /// retried with backoff cannot keep importing into a connection the customer
+  /// has already removed. Cancelling queue rows alone cannot achieve that — a
+  /// claimed job is already running, and `DomainEvent` rows are not the only
+  /// place a retry can live.
+  syncGeneration      Int       @default(0)
+
+  createdAt DateTime @default(now())
+  /// `@default(now())` as well as `@updatedAt`, because this column is being
+  /// *added* to a table that already has rows. Prisma's `@updatedAt` is applied
+  /// client-side, so without a database default the generated migration adds a
+  /// NOT NULL column with no value for existing rows and fails — which the
+  /// first generated version of this migration did.
+  updatedAt DateTime @default(now()) @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  emails EmailMessage[]
+  events CalendarEvent[]
+
   @@unique([workspaceId, userId, provider])
+  @@index([status, tokenExpiresAt])
 }
 
 model EmailMessage {
@@ -1417,19 +1506,84 @@ model EmailMessage {
   dealId    String?
   projectId String?
 
+  /// Which connection imported this, or null for seeded demonstration data and
+  /// for rows whose connection has since been removed.
+  ///
+  /// `SetNull` rather than `Cascade` on purpose: removing a connection must not
+  /// silently delete a year of correspondence a customer has been filing
+  /// against deals.
+  ///
+  /// Note which operation this is about. A **disconnect** keeps the Integration
+  /// row and destroys only its credentials, so this link survives and the
+  /// message still names the mailbox it came from. `SetNull` fires only when
+  /// the Integration row is **deleted**. `source` below is what records
+  /// provenance in either case, which is why it is a column of its own.
+  integrationId String?
+  /// seed | imported
+  ///
+  /// Immutable provenance, and deliberately *not* derived from
+  /// `integrationId`. Disconnecting nulls the link, so a derived test would
+  /// quietly reclassify imported mail as ordinary CRM data — and the one thing
+  /// that must never happen to imported mail is becoming eligible for AI
+  /// context by accident.
+  source        String    @default("seed")
+  /// The person whose mailbox this came from. Null for seeded data.
+  ownerUserId   String?
+  /// private | workspace
+  ///
+  /// Imported mail starts `private`: visible to `ownerUserId` alone, never to
+  /// the rest of the workspace. Workspace membership is not consent to read a
+  /// colleague's inbox. It becomes `workspace` only when that person
+  /// deliberately shares the thread.
+  visibility    String    @default("workspace")
+  sharedAt      DateTime?
+  sharedById    String?
+
   createdAt DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  contact   Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  company   Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  deal      Deal?     @relation(fields: [dealId], references: [id], onDelete: SetNull)
-  project   Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  integration Integration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  owner       User?        @relation("EmailOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
-  @@unique([provider, externalId])
+  /// Scoped to the **owner** within the workspace, not to the workspace, and
+  /// certainly not globally.
+  ///
+  /// Three attempts, two of them wrong, so the reasoning is worth keeping:
+  ///
+  ///   1. `[provider, externalId]` — global across every tenant. The second
+  ///      *customer* to import a shared item hit 23505 and silently imported
+  ///      nothing.
+  ///   2. `[workspaceId, provider, externalId]` — the second *colleague* hit
+  ///      exactly the same wall. One Google Calendar event carries the same
+  ///      event id in every invitee's calendar, so two connected teammates
+  ///      invited to one meeting collide inside a single workspace. Proven:
+  ///      23505 on CalendarEvent_workspaceId_provider_externalId_key. Worse, an
+  ///      upsert on that key would have overwritten the first colleague's row
+  ///      and moved its ownership.
+  ///   3. `[workspaceId, ownerUserId, provider, externalId]` — each connected
+  ///      person gets their own privately-owned copy, re-syncing the same
+  ///      mailbox still de-duplicates, and ownership cannot be reassigned by an
+  ///      upsert because it is part of the key.
+  ///
+  /// `ownerUserId` rather than `integrationId` on purpose: disconnecting nulls
+  /// the connection link so a customer keeps what they filed, and keying on it
+  /// would let a reconnect import everything a second time.
+  ///
+  /// Seeded rows have a NULL `ownerUserId`, and NULLs are distinct in a
+  /// PostgreSQL unique index, so demonstration data neither de-duplicates
+  /// against itself nor collides with anything imported. That is correct for
+  /// data the seed writes exactly once.
+  @@unique([workspaceId, ownerUserId, provider, externalId])
   @@index([workspaceId, sentAt])
   @@index([threadId, sentAt])
   @@index([contactId, sentAt])
   @@index([workspaceId, needsReply])
+  @@index([integrationId, sentAt])
+  @@index([ownerUserId, sentAt])
 }
 
 model CalendarEvent {
@@ -1456,21 +1610,39 @@ model CalendarEvent {
   dealId    String?
   projectId String?
 
+  /// See the same fields on EmailMessage for why each of these exists.
+  integrationId String?
+  /// seed | imported — immutable provenance, not derived from integrationId.
+  source        String    @default("seed")
+  ownerUserId   String?
+  /// private | workspace. Imported events start private to `ownerUserId`.
+  visibility    String    @default("workspace")
+  sharedAt      DateTime?
+  sharedById    String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  organizer User?           @relation("EventOrganizer", fields: [organizerId], references: [id], onDelete: SetNull)
-  contact   Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  company   Company?        @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  deal      Deal?           @relation(fields: [dealId], references: [id], onDelete: SetNull)
-  project   Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  attendees EventAttendee[]
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  integration Integration?    @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  owner       User?           @relation("EventOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  organizer   User?           @relation("EventOrganizer", fields: [organizerId], references: [id], onDelete: SetNull)
+  contact     Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  company     Company?        @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal        Deal?           @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  project     Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  attendees   EventAttendee[]
 
-  @@unique([provider, externalId])
+  /// Per owner within the workspace — see the same constraint on EmailMessage
+  /// for why workspace-scoping alone was still wrong. This is the table where
+  /// it bites hardest: the same Google event id appears in every invitee's
+  /// calendar, so two connected colleagues at one meeting collided.
+  @@unique([workspaceId, ownerUserId, provider, externalId])
   @@index([workspaceId, startAt])
   @@index([projectId, startAt])
   @@index([contactId, startAt])
+  @@index([integrationId, startAt])
+  @@index([ownerUserId, startAt])
 }
 
 model EventAttendee {

@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { queueDepth, runJobs, sweep } from "@/lib/jobs";
 import { registerJobHandlers } from "@/lib/jobs/handlers";
+import { scheduleDueSyncs } from "@/lib/integrations/sync/schedule";
 import { log } from "@/lib/logger";
 
 /**
@@ -75,6 +76,19 @@ async function handle(request: Request): Promise<NextResponse> {
 
   registerJobHandlers();
 
+  // Queue before draining, so a connection that came due is synced on this
+  // tick rather than waiting for the next one. A scheduling failure must not
+  // stop the drain: the queue holds work from every other part of the
+  // application, and none of it should be held hostage by the mail importer.
+  let scheduled: { considered: number; queued: number; skipped: number } | undefined;
+  try {
+    scheduled = await scheduleDueSyncs();
+  } catch (error) {
+    log.error("could not schedule incremental syncs", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   const startedAt = Date.now();
   let processed = 0;
   let failed = 0;
@@ -117,6 +131,7 @@ async function handle(request: Request): Promise<NextResponse> {
     drained,
     durationMs: Date.now() - startedAt,
     queue: depth,
+    ...(scheduled ? { scheduled } : {}),
     ...(swept ? { swept } : {}),
   };
 

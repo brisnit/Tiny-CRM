@@ -6,81 +6,166 @@ import { Button } from "@/components/ui/button";
 import { requireActor, resolveReadScope } from "@/lib/auth/access";
 import { readScope } from "@/lib/scope";
 import { db } from "@/lib/db";
-import { timeAgo } from "@/lib/dates";
 import { scopedRead } from "@/lib/data/scoped";
+import { integrationsEnabled } from "@/lib/integrations/gate";
+import { isConfigured, isOfferable, PROVIDERS } from "@/lib/integrations/providers";
+import { CALLBACK_MESSAGES, summarise, type ConnectionView } from "@/lib/integrations/status";
+import { DisconnectControl } from "@/components/app/integrations/disconnect-control";
 
 export const metadata = { title: "Integrations" };
+export const dynamic = "force-dynamic";
 
-const PROVIDERS = [
-  { id: "gmail", name: "Gmail", icon: Mail, blurb: "Log email with contacts, associate threads with projects and deals, and flag what has gone unanswered." },
-  { id: "outlook", name: "Outlook", icon: Mail, blurb: "The same, for Microsoft 365 mailboxes." },
-  { id: "google_calendar", name: "Google Calendar", icon: Calendar, blurb: "Pull meetings in and attach them to the right contact, company and project." },
-  { id: "outlook_calendar", name: "Outlook Calendar", icon: Calendar, blurb: "The same, for Microsoft 365 calendars." },
-];
+const ICONS = { email: Mail, calendar: Calendar } as const;
 
-export default async function IntegrationSettings() {
+const TONES: Record<string, string | undefined> = {
+  connected:
+    "bg-emerald-50 text-emerald-800 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-900",
+  attention:
+    "bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-900",
+  demo: undefined,
+  none: undefined,
+};
+
+export default async function IntegrationSettings({
+  searchParams,
+}: {
+  searchParams: Promise<{ connection?: string }>;
+}) {
   const actor = await requireActor();
   const read = await resolveReadScope(await readScope());
+  const params = await searchParams;
+  const banner = params.connection ? CALLBACK_MESSAGES[params.connection] : undefined;
 
-  const connected = await scopedRead(read, () =>
-    db.integration.findMany({
+  // One workspace owns a connection, and it has to be an explicit one rather
+  // than "whichever is first". With a single workspace in scope that is
+  // unambiguous; with several, the connection belongs to the one being viewed.
+  const workspaceId = read.workspaceIds[0] ?? null;
+
+  const [connections, available] = await scopedRead(read, async () => [
+    await db.integration.findMany({
       where: { workspaceId: { in: read.workspaceIds }, userId: actor.identity.id },
-      select: { provider: true, status: true, accountEmail: true, lastSyncAt: true },
-      distinct: ["provider"],
+      select: {
+        provider: true, status: true, accountEmail: true, lastSyncAt: true,
+        syncState: true, backfillCompletedAt: true, lastError: true,
+        importedThrough: true, backfillTruncated: true, recoveryAttempts: true,
+      },
     }),
-  );
-  const byProvider = new Map(connected.map((c) => [c.provider, c]));
+    workspaceId ? await integrationsEnabled(workspaceId) : false,
+  ]);
 
-  const [emailCount, eventCount] = await scopedRead(read, () =>
-    Promise.all([
-      db.emailMessage.count({ where: { workspaceId: { in: read.workspaceIds } } }),
-      db.calendarEvent.count({ where: { workspaceId: { in: read.workspaceIds } } }),
-    ]),
+  const byProvider = new Map<string, ConnectionView>(
+    connections.map((c) => [c.provider, c as ConnectionView]),
   );
 
   return (
     <div className="space-y-5">
+      {banner ? (
+        <Panel>
+          <p
+            className={`p-4 text-[13px] leading-relaxed ${
+              banner.tone === "ok" ? "text-body" : "text-amber-800 dark:text-amber-300"
+            }`}
+          >
+            {banner.text}
+          </p>
+        </Panel>
+      ) : null}
+
       <Panel>
         <PanelHeader
           title="Email & calendar"
-          description="Currently running on seeded demo data"
+          description="Bring your messages and meetings into Tiny CRM. Read-only."
           icon={<Plug />}
         />
         <ul className="divide-y divide-hairline border-t border-hairline">
-          {PROVIDERS.map((provider) => {
-            const state = byProvider.get(provider.id);
+          {Object.values(PROVIDERS).map((provider) => {
+            const Icon = ICONS[provider.kind];
+            const state = summarise(byProvider.get(provider.id) ?? null);
+            const connection = byProvider.get(provider.id);
+            const offerable = isOfferable(provider);
+            const configured = isConfigured(provider);
+
             return (
               <li key={provider.id} className="flex flex-wrap items-start gap-3 px-4 py-3.5">
                 <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-sunken text-faint">
-                  <provider.icon className="size-4" />
+                  <Icon className="size-4" />
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-[13.5px] font-semibold text-body">{provider.name}</p>
-                    {state ? (
-                      <Badge
-                        tone={
-                          state.status === "connected"
-                            ? "bg-emerald-50 text-emerald-800 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-900"
-                            : undefined
-                        }
-                      >
-                        {state.status === "mock" ? "Demo data" : state.status}
-                      </Badge>
-                    ) : (
-                      <Badge>Not connected</Badge>
-                    )}
+                    <p className="text-[13.5px] font-semibold text-body">{provider.label}</p>
+                    <Badge tone={TONES[state.tone]}>{state.label}</Badge>
                   </div>
-                  <p className="mt-1 text-[12.5px] leading-relaxed text-muted">{provider.blurb}</p>
-                  {state?.accountEmail ? (
-                    <p className="mt-1 text-[11.5px] text-faint">
-                      {state.accountEmail} · last synced {timeAgo(state.lastSyncAt)}
+                  {connection?.accountEmail ? (
+                    <p className="mt-1 text-[11.5px] text-faint">{connection.accountEmail}</p>
+                  ) : null}
+                  {/*
+                    The second line exists so "Connected" cannot be read as
+                    "your mail is in here". See src/lib/integrations/status.ts.
+                  */}
+                  {state.importLine ? (
+                    <p className="mt-1 text-[12.5px] leading-relaxed text-muted">{state.importLine}</p>
+                  ) : (
+                    <p className="mt-1 text-[12.5px] leading-relaxed text-muted">{provider.blurb}</p>
+                  )}
+                  {state.problem ? (
+                    <p className="mt-1 text-[12px] leading-relaxed text-amber-800 dark:text-amber-300">
+                      {state.problem}
+                    </p>
+                  ) : null}
+                  {!offerable ? (
+                    <p className="mt-1 text-[12px] leading-relaxed text-faint">
+                      {provider.blockedReason}
                     </p>
                   ) : null}
                 </div>
-                <Button size="sm" variant="outline" disabled>
-                  {state ? "Reconnect" : "Connect"}
-                </Button>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  {state.canResume ? (
+                    <form method="post" action={`/api/integrations/${provider.vendor}/resume`}>
+                      <input type="hidden" name="provider" value={provider.id} />
+                      <Button size="sm" variant="outline" type="submit">
+                        Resume import
+                      </Button>
+                    </form>
+                  ) : null}
+                  {state.canRetrySync ? (
+                    <form method="post" action={`/api/integrations/${provider.vendor}/retry`}>
+                      <input type="hidden" name="provider" value={provider.id} />
+                      <Button size="sm" variant="outline" type="submit">
+                        Retry sync
+                      </Button>
+                    </form>
+                  ) : null}
+                  {state.canDisconnect ? (
+                    <DisconnectControl provider={provider.id} label={provider.label} />
+                  ) : null}
+                  {state.canConnect ? (
+                    offerable && configured && available ? (
+                      <form method="post" action={`/api/integrations/${provider.vendor}/start`}>
+                        <input type="hidden" name="provider" value={provider.id} />
+                        <input type="hidden" name="workspaceId" value={workspaceId ?? ""} />
+                        <Button size="sm" variant="outline" type="submit">
+                          {connection ? "Reconnect" : "Connect"}
+                        </Button>
+                      </form>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled
+                        title={
+                          !offerable
+                            ? "Awaiting the provider's review"
+                            : !configured
+                              ? "This environment has no credentials for that provider"
+                              : "Not switched on for this workspace"
+                        }
+                      >
+                        {offerable ? "Unavailable" : "Not yet available"}
+                      </Button>
+                    )
+                  ) : null}
+                </div>
               </li>
             );
           })}
@@ -88,22 +173,33 @@ export default async function IntegrationSettings() {
       </Panel>
 
       <Panel>
-        <PanelHeader title="How this is wired" description="What is real today, and what OAuth would add" />
+        <PanelHeader title="What connecting does" description="Read-only in this release" />
         <div className="space-y-3 border-t border-hairline p-4 text-[12.5px] leading-relaxed text-muted">
           <p>
-            The data model is already the real one. <strong className="font-semibold text-body">{emailCount}</strong>{" "}
-            messages and <strong className="font-semibold text-body">{eventCount}</strong> calendar events are
-            stored in the same tables a live sync would write to, linked to contacts, companies, deals and
-            projects, and driving the unanswered-thread detection and meeting panels you can see across the app.
+            Connecting brings your messages and meetings <strong className="font-semibold text-body">in</strong>.
+            Tiny does not send email, create events or change anything in your mailbox or calendar.
           </p>
           <p>
-            Both tables carry a unique <code className="rounded bg-sunken px-1 py-0.5 font-mono text-[11px]">(provider, externalId)</code>{" "}
-            constraint and the integration record holds a sync cursor, so a worker can upsert incrementally and
-            re-run safely. Credentials have their own encrypted column rather than sitting in the environment.
+            <strong className="font-semibold text-body">Connecting is not importing.</strong> Granting
+            access lets Tiny read; it does not move anything by itself. Each connection above says
+            whether anything has been imported yet, and nothing has until it says so.
           </p>
           <p>
-            What is missing is the OAuth handshake and the polling worker — the connect buttons above are
-            disabled because there is no client ID to hand them, not because the plumbing behind them is absent.
+            <strong className="font-semibold text-body">What you import stays yours.</strong> Imported
+            mail and meetings are visible to you alone, even to people who share this workspace.
+            There is currently no way to share one with your workspace, and attaching an item to a
+            contact does not change who can see it.
+          </p>
+          <p>
+            <strong className="font-semibold text-body">Imported mail is not sent to Tiny AI.</strong>{" "}
+            Connecting a mailbox is not permission to send your correspondence to a model provider, so
+            imported messages and meetings are excluded from the daily brief, from answers and from
+            everything else that leaves this server.
+          </p>
+          <p>
+            Disconnecting destroys the stored access immediately and stops any import that is queued or
+            already running. It asks what to do with anything already imported — nothing is deleted
+            unless you say so.
           </p>
         </div>
       </Panel>

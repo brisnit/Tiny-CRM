@@ -95,6 +95,9 @@ try {
   node(["scripts/apply-sql.mjs", "prisma/postgres/013_membership_write_integrity.sql"], { env });
   node(["scripts/apply-sql.mjs", "prisma/postgres/014_document_intelligence.sql"], { env });
   node(["scripts/apply-sql.mjs", "prisma/postgres/015_platform_admin_policies.sql"], { env });
+  node(["scripts/apply-sql.mjs", "prisma/postgres/016_integration_privacy.sql"], { env });
+  node(["scripts/apply-sql.mjs", "prisma/postgres/017_due_integrations.sql"], { env });
+  node(["scripts/apply-sql.mjs", "prisma/postgres/018_due_integrations_recovery.sql"], { env });
 
   // The RLS tests need a connection as the restricted role. When this script
   // manages the cluster it can provision one; against an external server the

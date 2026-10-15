@@ -1,4 +1,5 @@
 import "server-only";
+import { EXCLUDE_IMPORTED } from "@/lib/ai/imported-data";
 import { TERMINAL_SUBMISSION_STATUSES } from "@/lib/enums";
 
 import { db } from "@/lib/db";
@@ -153,7 +154,13 @@ export async function buildWorkspaceSnapshot(
           take: limit * 2,
         }),
         db.calendarEvent.findMany({
-          where: { ...where, startAt: { gte: now, lte: new Date(now.getTime() + 7 * 86_400_000) } },
+          // EXCLUDE_IMPORTED: a connected calendar is not consent to send
+          // meeting titles to a model provider. See src/lib/ai/imported-data.ts.
+          where: {
+            ...where,
+            ...EXCLUDE_IMPORTED,
+            startAt: { gte: now, lte: new Date(now.getTime() + 7 * 86_400_000) },
+          },
           select: {
             id: true, title: true, startAt: true, workspaceId: true,
             contact: { select: { fullName: true } }, project: { select: { name: true } },
@@ -162,7 +169,8 @@ export async function buildWorkspaceSnapshot(
           take: limit,
         }),
         db.emailMessage.findMany({
-          where: { ...where, needsReply: true },
+          // EXCLUDE_IMPORTED: subject and snippet are message content.
+          where: { ...where, ...EXCLUDE_IMPORTED, needsReply: true },
           select: {
             id: true, subject: true, snippet: true, sentAt: true, direction: true,
             workspaceId: true, contact: { select: { fullName: true } },

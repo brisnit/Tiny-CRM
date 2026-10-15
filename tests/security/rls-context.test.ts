@@ -108,6 +108,50 @@ const EXCEPTIONS: Record<string, string> = {
     "workspace and the owner is who pays for it. Reading the caller's plan " +
     "instead would refuse a Free member of a Pro workspace and admit a Pro " +
     "member of a Free one. Returns a boolean, never a row",
+  "src/lib/integrations/sync/eligibility.ts":
+    "syncEligibility calls assertTenantContext before anything else, and the " +
+    "context is the connection's own workspace — established by the job " +
+    "runner for a running pass, and by the scheduler or the retry route for a " +
+    "pass about to be queued. The WorkspaceMember read asks whether the " +
+    "connection's OWNER is still a member of the workspace the connection " +
+    "belongs to, which is a property of that workspace and is exactly what " +
+    "the context already names; the User read is the same owner's own row. " +
+    "Both return a boolean's worth of information and neither returns a row " +
+    "to a caller. Fails closed on an empty read, so a policy filtering either " +
+    "stops the sync rather than permitting it",
+
+  "src/lib/integrations/connections.ts":
+    "every export asserts a tenant context before touching Integration, " +
+    "EmailMessage or CalendarEvent: completeConnection through " +
+    "requireIntegrations(), and disconnectConnection/accessTokenFor/" +
+    "generationIsCurrent through assertTenantContext() directly. It does not " +
+    "open one, for the reason documents/retrieve.ts gives: the context belongs " +
+    "to the route or the job, which earned the workspace from the caller's own " +
+    "memberships, and a module that opens its own grants itself the scope it " +
+    "should be verifying. Writes are scoped to one Integration row by id, and " +
+    "the deletes are scoped to that row's integrationId",
+  "src/lib/integrations/sync/worker.ts":
+    "every export asserts a tenant context first. runSyncPage is called by the " +
+    "job runner, which establishes one from the event's own workspace and " +
+    "actor — the actor being the connecting user, which is what makes the " +
+    "Integration row readable at all under its owner-scoped policy. " +
+    "startBackfill and resumeBackfill are called from a route or an action " +
+    "that has already established the caller's context. The module does not " +
+    "open one of its own, for the reason documents/retrieve.ts gives: the " +
+    "context belongs to whoever earned the workspace. Writes are scoped to a " +
+    "single Integration row by id; the WorkspaceMember read resolves the " +
+    "owner's own record scope so a restricted member's mail is never linked " +
+    "to a contact they cannot see",
+  "src/lib/integrations/gate.ts":
+    "integrationsEntitled reads the workspace OWNER's plan, for exactly the " +
+    "reason documents/gate.ts does: the capability belongs to the workspace and " +
+    "the owner is who pays, so reading the caller's plan would refuse a Free " +
+    "member of a Pro workspace and admit a Pro member of a Free one. It is " +
+    "reached only through requireIntegrations/integrationsEnabled, both of which " +
+    "call assertTenantContext first and throw rather than read a workspace-scoped " +
+    "flag outside a context. Opening a context here would be wrong: the caller " +
+    "has earned the workspace from their own memberships, and a gate that " +
+    "establishes its own authority is not a gate. Returns a boolean, never a row",
   "src/lib/documents/read.ts":
     "every export begins with requireDocumentIntelligence(), which asserts a " +
     "tenant context before any read, for the same reason as ingest.ts",

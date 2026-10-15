@@ -1,5 +1,6 @@
 import "server-only";
 
+import { visibleToUser } from "@/lib/integrations/visibility";
 import type { ReadScope } from "@/lib/auth/access";
 import { meetsProjectTarget } from "@/lib/rfp-lifecycle";
 import { contains, db, isSearchable } from "@/lib/db";
@@ -232,11 +233,14 @@ export async function getProject(read: ReadScope, id: string) {
           orderBy: { createdAt: "desc" },
         },
         events: {
+          where: visibleToUser(read.userId),
           select: { id: true, title: true, startAt: true, meetingUrl: true },
           orderBy: { startAt: "desc" },
           take: 8,
         },
         emails: {
+          // See src/lib/integrations/visibility.ts — private to its owner.
+          where: visibleToUser(read.userId),
           select: { id: true, subject: true, snippet: true, sentAt: true, direction: true, needsReply: true },
           orderBy: { sentAt: "desc" },
           take: 6,

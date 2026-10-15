@@ -48,11 +48,38 @@ export const WORKER_ID = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8
 /** How long a claim is held before another worker may take the job. */
 const CLAIM_TTL_MS = 5 * 60_000;
 
+/**
+ * The jitter source, so a test can pin it.
+ *
+ * Deliberately the narrowest seam that makes the schedule observable: it
+ * replaces the *source of randomness*, not the backoff and not the clock, so
+ * the formula, the ceiling and the ±25% spread a test runs against are the
+ * production ones. `null` in production, where `Math.random` is used exactly as
+ * before; nothing outside a test ever sets it.
+ *
+ * It exists because the alternative is asserting against a jittered range, and
+ * a range wide enough never to flake is too wide to pin a schedule — an earlier
+ * version of the Retry-After test asserted `>= 3500ms` against a backoff
+ * spanning 3000–5000ms and failed roughly one run in four.
+ */
+let jitterForTests: (() => number) | null = null;
+
+/** Pins the backoff jitter for the duration of a test. `null` restores `Math.random`. */
+export function setBackoffJitterForTests(source: (() => number) | null): void {
+  jitterForTests = source;
+}
+
+/** Asserted by tests: no production path may leave a jitter source installed. */
+export function installedBackoffJitterForTests(): (() => number) | null {
+  return jitterForTests;
+}
+
 /** Backoff schedule, in milliseconds, by attempt number. */
-function backoffMs(attempt: number): number {
+export function backoffMs(attempt: number): number {
   const base = Math.min(2 ** (2 * attempt) * 1000, 15 * 60_000);
   // Jitter, so a hundred jobs that failed together do not all retry together.
-  return Math.round(base * (0.75 + Math.random() * 0.5));
+  const jitter = jitterForTests ? jitterForTests() : Math.random();
+  return Math.round(base * (0.75 + jitter * 0.5));
 }
 
 export type JobHandler = (job: {
@@ -275,7 +302,15 @@ async function handleFailure(
             status: "failed",
             claimedBy: null,
             claimedUntil: null,
-            availableAt: new Date(Date.now() + backoffMs(job.attempts)),
+            // The later of our backoff and anything the provider asked for,
+            // so a retry can be pushed out but never pulled in.
+            availableAt: new Date(
+              Date.now() +
+                Math.max(
+                  backoffMs(job.attempts),
+                  error instanceof RetryAfterError ? error.retryAfterMs : 0,
+                ),
+            ),
             lastError: message.slice(0, 500),
           },
     }),
@@ -313,6 +348,32 @@ async function handleFailure(
 }
 
 /** Marks a failure as not worth retrying. */
+/**
+ * Asks the runner not to retry before a given moment.
+ *
+ * The backoff schedule is 2s, 8s, 32s, 2m — fine for a transient fault and
+ * wrong for a provider that told us how long to wait. Microsoft Graph answers
+ * `429` with `Retry-After` in seconds, and retrying sooner is how an
+ * integration gets throttled harder rather than less.
+ *
+ * The runner takes the **later** of this and the ordinary backoff, so a
+ * handler can only ever push a retry further out, never pull it closer. A
+ * provider asking for 1 second does not get a retry in 1 second when our own
+ * backoff says 32.
+ *
+ * The attempt still counts. A throttle that outlasts `maxAttempts` therefore
+ * dead-letters rather than retrying forever, which is the right trade: silent
+ * infinite waiting is worse than a visible stop.
+ */
+export class RetryAfterError extends Error {
+  readonly retryAfterMs: number;
+  constructor(retryAfterMs: number, message: string) {
+    super(message);
+    this.name = "RetryAfterError";
+    this.retryAfterMs = Math.max(0, retryAfterMs);
+  }
+}
+
 export class PermanentJobError extends Error {
   constructor(message: string) {
     super(message);
