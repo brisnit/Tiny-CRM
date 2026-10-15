@@ -70,15 +70,12 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 
+import { fingerprint, PRODUCTION_FINGERPRINTS } from "./lib/db-fingerprint.mjs";
 import { promptHidden } from "./lib/prompt-hidden.mjs";
 
 const require = createRequire(import.meta.url);
 const { Client } = require("pg");
 
-const PRODUCTION_FINGERPRINTS = new Map([
-  ["18155d6dda02", "production, POOLED endpoint (what the app uses)"],
-  ["005bee3e08cc", "production, DIRECT endpoint"],
-]);
 
 /**
  * Provenance rules, each naming the code that mints the address.
@@ -192,14 +189,6 @@ const FIXTURE_RULES = [
     why: "RFC 2606 reserved example domain — reserved for documentation, never deliverable",
   },
 ];
-
-function fingerprint(url) {
-  const parsed = new URL(url);
-  return createHash("sha256")
-    .update(`${parsed.hostname}/${parsed.pathname.replace(/^\//, "")}`)
-    .digest("hex")
-    .slice(0, 12);
-}
 
 const scrub = (t) => String(t).replace(/postgres(ql)?:\/\/\S+/g, "[connection string redacted]");
 
