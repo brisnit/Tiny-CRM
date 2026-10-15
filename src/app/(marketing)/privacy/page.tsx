@@ -36,8 +36,8 @@ export default function PrivacyPage() {
         <strong className="text-body">
           Parts of this notice change on {integrationsEffectiveDate()}.
         </strong>{" "}
-        The sections about email and calendar connections are marked below and do not apply
-        until then. Everything else on this page, including the subprocessor list, is in
+        The sections about Outlook mail and calendar connections are marked below and do not
+        apply until then. Everything else on this page, including the subprocessor list, is in
         force now.
       </PendingChangeBanner>
 
@@ -111,8 +111,9 @@ export default function PrivacyPage() {
           <li>Your password in any readable form.</li>
         </ul>
         <p>
-          <strong>Email and calendar you choose to connect.</strong> If you connect a mailbox
-          or calendar, Tiny CRM reads and stores:
+          <strong>Email and calendar you choose to connect.</strong> Tiny CRM can connect to
+          <strong> Outlook mail and Outlook Calendar</strong>; no other mail or calendar
+          provider is supported. If you connect one, Tiny CRM reads and stores:
         </p>
         <ul className="list-disc space-y-1 pl-5">
           <li>
@@ -549,8 +550,8 @@ export default function PrivacyPage() {
         </p>
         <p>
           <strong>Connecting is optional and reversible.</strong> Nothing is imported unless you
-          connect a mailbox or calendar yourself, and disconnecting is available at any time in
-          Settings &rarr; Integrations.
+          connect Outlook mail or Outlook Calendar yourself, and disconnecting is available at any
+          time in Settings &rarr; Integrations.
         </p>
         <TakesEffect on={integrationsEffectiveDate()} />
       </Section>

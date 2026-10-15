@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { INTEGRATIONS_EFFECTIVE_ON, LEGAL_EFFECTIVE_ON } from "../../src/lib/legal";
 
 /**
- * The 20 October publication, pinned.
+ * The 15 October publication, pinned.
  *
  * The page carries two kinds of change at once and they must not be
  * presented the same way: integration sections that are published but NOT
@@ -16,12 +16,12 @@ import { INTEGRATIONS_EFFECTIVE_ON, LEGAL_EFFECTIVE_ON } from "../../src/lib/leg
  */
 const PAGE = readFileSync("src/app/(marketing)/privacy/page.tsx", "utf8");
 
-describe("the privacy notice as published on 20 October", () => {
+describe("the privacy notice as published on 15 October", () => {
   test("the notice in force is not re-dated by the pending change", () => {
     // Re-dating the whole document would move every recorded acceptance to a
     // version string no page ever displayed.
     assert.equal(LEGAL_EFFECTIVE_ON, "2026-10-05");
-    assert.equal(INTEGRATIONS_EFFECTIVE_ON, "2026-11-23");
+    assert.equal(INTEGRATIONS_EFFECTIVE_ON, "2026-11-16");
     assert.match(PAGE, /effectiveOn=\{legalEffectiveDate\(\)\}/);
   });
 
@@ -33,7 +33,7 @@ describe("the privacy notice as published on 20 October", () => {
   test("the Sentry row is NOT marked as taking effect later", () => {
     /**
      * The failure this exists to prevent. Sentry has received error reports
-     * throughout; a "takes effect 23 November" marker on that row would
+     * throughout; a "takes effect 16 November" marker on that row would
      * assert that the processing starts then, which is the opposite of a
      * correction and worse than the omission being corrected.
      */
@@ -47,11 +47,29 @@ describe("the privacy notice as published on 20 October", () => {
 
   test("the banner says what is in force, not only what is pending", () => {
     const banner = PAGE.slice(PAGE.indexOf("<PendingChangeBanner>"), PAGE.indexOf("</PendingChangeBanner>"));
-    assert.match(banner, /do not apply\s+until then/);
+    // Whitespace-flexible: JSX re-wraps prose, and an assertion that depends
+    // on where a line happens to break tests the formatter, not the copy.
+    assert.match(banner, /do not\s+apply\s+until then/);
     assert.match(
       banner,
       /including the subprocessor list, is in\s+force now/,
       "without this clause the Sentry row reads as pending too",
+    );
+  });
+
+  test("the launch scope is named as Outlook, not 'a mailbox'", () => {
+    /**
+     * Only Outlook mail and calendar work. Gmail is blocked on Google's
+     * restricted-scope rules and Google Calendar because the importer
+     * speaks only Graph, so copy saying "connect a mailbox or calendar"
+     * promises a product that does not exist.
+     */
+    assert.match(PAGE, /Outlook mail and Outlook Calendar/);
+    assert.match(PAGE, /no other mail or calendar\s+provider is supported/);
+    assert.doesNotMatch(
+      PAGE,
+      /connect a mailbox\s+or calendar, Tiny CRM reads/,
+      "the generic wording is back",
     );
   });
 

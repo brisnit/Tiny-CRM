@@ -73,16 +73,16 @@ export type NoticeWindow = {
  *   1. Every recipient has had their 30 days (`noticeWindow`).
  *   2. The published effective date has arrived.
  *
- * The second is not implied by the first. Notice sent on 20 October gives a
- * 30-day window that closes on 19 November, but the page tells customers
- * the sections take effect on 23 November. Activating on the 19th would
+ * The second is not implied by the first. Notice sent on 15 October gives a
+ * 30-day window that closes on 14 November, but the page tells customers
+ * the sections take effect on 16 November. Activating on the 14th would
  * satisfy the notice commitment and still contradict the published text —
- * turning the feature on four days before the document says it exists.
+ * turning the feature on two days before the document says it exists.
  *
- * The 34-day gap was chosen so a slipped send could not eat into the
+ * The 32-day gap was chosen so a slipped send could not eat into the
  * notice period. It has this second consequence by construction, and the
  * gate has to know about it, because "the checks passed" is exactly the
- * argument someone will make on the 19th.
+ * argument someone will make on the 14th.
  */
 export type ActivationVerdict = {
   permitted: boolean;

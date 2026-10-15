@@ -101,7 +101,7 @@ export function PendingChangeBanner({ children }: { children: React.ReactNode })
 export function TakesEffect({ on }: { on: string }) {
   return (
     <p className="mt-3 rounded-md border-l-2 border-hairline bg-subtle/30 py-2 pl-3 text-[12.5px] italic leading-relaxed text-faint">
-      This section takes effect on {on}. Until then, email and calendar
+      This section takes effect on {on}. Until then, Outlook mail and calendar
       connections are not available to customers.
     </p>
   );
