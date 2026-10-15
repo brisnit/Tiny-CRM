@@ -1,5 +1,7 @@
-import { LegalPage, Section } from "@/components/marketing/legal";
-import { legalEffectiveDate } from "@/lib/legal";
+import {
+  CorrectionNote, LegalPage, PendingChangeBanner, Section, TakesEffect,
+} from "@/components/marketing/legal";
+import { integrationsEffectiveDate, legalEffectiveDate } from "@/lib/legal";
 
 export const metadata = {
   title: "Privacy",
@@ -30,6 +32,15 @@ export const metadata = {
 export default function PrivacyPage() {
   return (
     <LegalPage title="Privacy notice" effectiveOn={legalEffectiveDate()}>
+      <PendingChangeBanner>
+        <strong className="text-body">
+          Parts of this notice change on {integrationsEffectiveDate()}.
+        </strong>{" "}
+        The sections about Outlook mail and calendar connections are marked below and do not
+        apply until then. Everything else on this page, including the subprocessor list, is in
+        force now.
+      </PendingChangeBanner>
+
       <Section id="what-this-is" heading="1. What Tiny CRM is, and why that shapes this notice">
         <p>
           Tiny CRM stores information about your contacts, companies, deals, projects and notes.
@@ -99,6 +110,30 @@ export default function PrivacyPage() {
           </li>
           <li>Your password in any readable form.</li>
         </ul>
+        <p>
+          <strong>Email and calendar you choose to connect.</strong> Tiny CRM can connect to
+          <strong> Outlook mail and Outlook Calendar</strong>; no other mail or calendar
+          provider is supported. If you connect one, Tiny CRM reads and stores:
+        </p>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            <strong>For each message:</strong> the provider&rsquo;s message and conversation
+            identifiers, the subject line, a short preview of the body, the sender&rsquo;s
+            address and display name, the recipients&rsquo; addresses and display names, the
+            time it was received, and whether it was read.
+          </li>
+          <li>
+            <strong>For each meeting:</strong> the provider&rsquo;s event identifier, the title,
+            a short preview of the description, the location, the online-meeting link, the
+            start and end times, and whether it is an all-day event.
+          </li>
+        </ul>
+        <p>
+          Message bodies are not stored. Only the preview the provider returns &mdash; typically
+          the first couple of lines. Attachments are not read or stored. Meeting attendee lists
+          are read in order to match a meeting to an existing contact, and are not stored.
+        </p>
+        <TakesEffect on={integrationsEffectiveDate()} />
       </Section>
 
       <Section id="cookies" heading="3. Cookies">
@@ -130,6 +165,14 @@ export default function PrivacyPage() {
           We do not use your CRM content to train machine-learning models, or sell or share it for
           advertising. AI-provider handling is described in section 6 below.
         </p>
+        <p>
+          <strong>To show your correspondence beside the records it concerns.</strong> A connected
+          mailbox or calendar is read so that messages and meetings appear against the contact
+          they involve. Tiny CRM matches an item to a contact only when exactly one contact in
+          your workspace has a matching email address. Anything it cannot match that way is still
+          imported and still private to you; it simply is not shown against a record.
+        </p>
+        <TakesEffect on={integrationsEffectiveDate()} />
       </Section>
 
       <Section id="where" heading="5. Where data goes">
@@ -179,16 +222,47 @@ export default function PrivacyPage() {
                   Provider operates internationally; no country-only residency guarantee
                 </td>
               </tr>
-              <tr>
+              <tr className="border-b border-hairline/60">
                 <td className="py-2 pr-4 text-body">Resend</td>
                 <td className="py-2 pr-4">
                   Transactional email only — verification, password reset, invitations
                 </td>
                 <td className="py-2">United States (storage)</td>
               </tr>
+              <tr>
+                <td className="py-2 pr-4 text-body">Sentry</td>
+                <td className="py-2 pr-4">
+                  Error reports, assembled from a fixed list of fields: the type and message of a
+                  fault, a filtered stack trace, the request identifier, the route path, and the
+                  identifiers of the user and workspace.
+                </td>
+                <td className="py-2">
+                  United States — our Sentry organisation&rsquo;s Data Storage Region
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
+        <CorrectionNote>
+          <strong className="text-body">Added as a correction.</strong> Sentry has received error
+          reports throughout; this row should have been here already.
+        </CorrectionNote>
+        <p>
+          <strong>Error reports are deliberately narrow.</strong> We do not use Sentry&rsquo;s
+          automatic instrumentation, which would otherwise capture request bodies, local variables
+          and a trail of recent activity. We send a fixed set of fields assembled by hand: what
+          went wrong, where in the code, which request, and which account. Your records, notes,
+          documents and credentials are not among those fields, so they are not attached to a
+          report.
+        </p>
+        <p>
+          The message and stack trace that are sent are written by the software, not by you, and
+          they are filtered before they leave to remove database rows quoted by an error, email
+          addresses, and anything shaped like a credential. Search terms are removed from the
+          route, because a search term is the name of somebody you were looking for. Filtering
+          reduces what an error message can disclose; it is a control we apply rather than a
+          guarantee about every possible fault.
+        </p>
         <p>
           Resend delivers through <strong>Amazon SES</strong>, which is Resend&apos;s own
           subprocessor rather than a service we contract with directly. Transactional email carries
@@ -218,6 +292,22 @@ export default function PrivacyPage() {
           before uploading personal data, so we can determine whether we can support your
           requirements.
         </p>
+        <p>
+          <strong>Microsoft, when you connect Outlook.</strong> Connecting sends you to Microsoft
+          to sign in and approve the access, and Tiny CRM then exchanges and periodically refreshes
+          an access token with Microsoft&rsquo;s servers. Each time it reads your mailbox or
+          calendar it makes a request to Microsoft Graph carrying that token and the terms of the
+          request &mdash; the date range it is asking about and the list of fields it wants back.
+        </p>
+        <p>
+          So traffic does flow to Microsoft, and it is worth being plain about what it is: requests
+          for your own data, sent to your own provider, using an authorisation you granted. Those
+          requests do not carry your Tiny CRM records, notes, files or contacts.{" "}
+          <strong>The access is read-only.</strong> Tiny CRM asks for permission to read mail and
+          read calendars; it asks for no permission to send, reply, create, modify or delete
+          anything in your mailbox or calendar, and holds no ability to do so.
+        </p>
+        <TakesEffect on={integrationsEffectiveDate()} />
       </Section>
 
       <Section id="ai" heading="6. Artificial intelligence">
@@ -265,6 +355,19 @@ export default function PrivacyPage() {
           policies, not a guarantee by Artifact Digital LLC. Disable workspace AI if you do not want
           workspace content sent to a model provider.
         </p>
+        <p>
+          <strong>
+            Imported mail and meetings are never included in a request sent to an AI model
+            provider
+          </strong>
+          , whatever a workspace&rsquo;s AI setting is. Connecting a mailbox lets Tiny CRM show
+          your correspondence inside the CRM; it is not consent to send that correspondence to
+          Anthropic, and those are treated as separate decisions. Imported items are excluded from
+          the daily brief, from answers, and from the recommendations the service generates &mdash;
+          the three features that build a request to a model provider. Demonstration data seeded
+          into a new workspace is not imported correspondence and is not covered by this exclusion.
+        </p>
+        <TakesEffect on={integrationsEffectiveDate()} />
       </Section>
 
       <Section id="security" heading="7. Security">
@@ -295,6 +398,16 @@ export default function PrivacyPage() {
           investigation progresses. We will comply with any applicable notification deadlines and
           obligations.
         </p>
+        <p>
+          <strong>
+            The access token and the refresh token are both encrypted before they are stored.
+          </strong>{" "}
+          They are held together as a single encrypted record, with a key derived separately from
+          the keys used for anything else, and neither is written to logs. If that stored record
+          becomes unreadable, the connection stops importing, destroys it, and asks you to
+          reconnect rather than retrying.
+        </p>
+        <TakesEffect on={integrationsEffectiveDate()} />
       </Section>
 
       <Section id="retention" heading="8. Retention">
@@ -373,6 +486,33 @@ export default function PrivacyPage() {
           Application recovery is separate: records remain in Trash until permanently removed, and
           scheduled workspace deletion can be cancelled during its seven-day grace period.
         </p>
+        <p>
+          <strong>Disconnecting a mailbox or calendar.</strong> Disconnecting immediately destroys
+          the access token and the refresh token Tiny CRM holds, so Tiny CRM stops syncing and
+          cannot read your mailbox or calendar again.
+        </p>
+        <p>
+          Disconnecting here does not remove the authorisation you granted at Microsoft. Microsoft
+          provides no way for us to revoke it on your behalf, so if you want the permission itself
+          withdrawn, remove Tiny CRM from the connected applications in your Microsoft account.
+        </p>
+        <p>You are asked what to do with what has already been imported:</p>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            <strong>Keep it</strong> (the default): imported messages and meetings stay in your
+            CRM, still visible only to you, and remain attached to any record they were filed
+            against.
+          </li>
+          <li>
+            <strong>Delete it:</strong> every message and meeting imported through that connection
+            is deleted. Items from other sources are unaffected.
+          </li>
+        </ul>
+        <p>
+          Deleting your account or workspace removes imported items with everything else, as
+          described above.
+        </p>
+        <TakesEffect on={integrationsEffectiveDate()} />
       </Section>
 
       <Section id="choices" heading="9. Your choices">
@@ -408,6 +548,12 @@ export default function PrivacyPage() {
           the product; requests can be sent to the email above. Some information may remain in
           backups or be retained for lawful purposes, as described in section 8.
         </p>
+        <p>
+          <strong>Connecting is optional and reversible.</strong> Nothing is imported unless you
+          connect Outlook mail or Outlook Calendar yourself, and disconnecting is available at any
+          time in Settings &rarr; Integrations.
+        </p>
+        <TakesEffect on={integrationsEffectiveDate()} />
       </Section>
 
       <Section id="not-claimed" heading="10. What is deliberately not claimed">

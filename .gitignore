@@ -85,3 +85,6 @@ browser-test.db-*
 
 # Throwaway database for scripts/docqa-model-check.mjs
 .docqa-check.db
+
+# Recipient snapshots: hashes and masked addresses, still not repo material.
+*recipient-snapshot*.json

@@ -30,6 +30,39 @@
 export const LEGAL_EFFECTIVE_ON = "2026-10-05";
 
 /**
+ * When the email and calendar sections of the privacy notice take effect.
+ *
+ * Separate from LEGAL_EFFECTIVE_ON, and deliberately so. The notice in force
+ * today is unchanged and stays authoritative until this date; what publishes
+ * on 15 October is the *current* notice plus a set of clearly marked future
+ * sections. Folding the two into one constant would re-date the whole
+ * document and, with it, every acceptance recorded against it.
+ *
+ * The 30-day commitment in § 12 runs from the day each customer is emailed,
+ * not from publication. This date is 32 days after the send so a slipped
+ * send does not quietly eat into the period — see
+ * src/lib/legal/notice-window.ts, which computes the real gate from the
+ * latest acceptance rather than from this constant.
+ *
+ * It is a display date. It does not enable anything: customer integrations
+ * stay behind their own flags, and turning them on is gated on the notice
+ * window and the delivery reconciliation, not on the calendar reaching this
+ * day.
+ */
+export const INTEGRATIONS_EFFECTIVE_ON = "2026-11-16";
+
+/** "16 November 2026", for the page. UTC-parsed, as above. */
+export function integrationsEffectiveDate(): string {
+  const [year, month, day] = INTEGRATIONS_EFFECTIVE_ON.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/**
  * The version recorded on `User.termsAcceptedVersion`.
  *
  * Same value as the effective date, by design — see above. Kept as its own export

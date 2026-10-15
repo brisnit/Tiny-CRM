@@ -210,13 +210,36 @@ class HttpAdapter implements MailAdapter {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Which adapter a given configuration selects, as a pure function.
+ *
+ * Exported so a preflight can ask "would this configuration reach the real
+ * provider?" without importing the module for its side effect — the adapter
+ * below is chosen once at load from whatever the environment happened to
+ * hold. A check that reimplemented this rule would be a copy, and a copy
+ * answers for itself rather than for the code that runs.
+ */
+export function adapterKindFor(
+  providerUrl: string | undefined,
+  providerToken: string | undefined,
+  options: { production: boolean; configured?: string },
+): MailResult["adapter"] {
+  if (providerUrl && providerToken) return "http";
+  if (!options.production && options.configured !== "log") return "sink";
+  return "log";
+}
+
 function selectAdapter(): MailAdapter {
-  if (env.mailProviderUrl && env.mailProviderToken) {
-    return new HttpAdapter(env.mailProviderUrl, env.mailProviderToken, env.mailFrom);
+  const kind = adapterKindFor(env.mailProviderUrl, env.mailProviderToken, {
+    production: isProduction,
+    configured: env.mailAdapter,
+  });
+  if (kind === "http") {
+    // Narrowed by adapterKindFor: both are present when it returns "http".
+    return new HttpAdapter(env.mailProviderUrl!, env.mailProviderToken!, env.mailFrom);
   }
   // The sink is never reachable in production, whatever MAIL_ADAPTER says.
-  if (!isProduction && env.mailAdapter !== "log") return new SinkAdapter();
-  return new LogAdapter();
+  return kind === "sink" ? new SinkAdapter() : new LogAdapter();
 }
 
 const globalForMail = globalThis as unknown as { mailAdapter?: MailAdapter };
