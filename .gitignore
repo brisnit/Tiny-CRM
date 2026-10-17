@@ -85,3 +85,9 @@ browser-test.db-*
 
 # Throwaway database for scripts/docqa-model-check.mjs
 .docqa-check.db
+
+# Generated review PDFs: rebuilt by scripts/build-review-pdf.mjs, never committed.
+Tiny-CRM-privacy-drafts-for-review.pdf
+
+# Recipient snapshots: hashes and masked addresses, still not repo material.
+*recipient-snapshot*.json
